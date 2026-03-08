@@ -1,0 +1,25 @@
+includes("cuda-ext.lua")
+
+add_rules("plugin.compile_commands.autoupdate", {outputdir = ".vscode"})
+add_rules("mode.debug", "mode.release")
+
+target("cuda-exp")
+    add_rules("cuda")
+    set_toolchains("clang-nvptxex")
+
+    set_kind("shared")
+    set_filename("dism_C.cpython-312-x86_64-linux-gnu.so")
+    --add_files("src/easts4w.cu", "src/einterface.cpp")
+    --add_files("src/kittens2.cu")
+    add_files("src/*.cpp", "src/*.cu")
+    --add_files("src/*.cu")
+    add_includedirs("include", "/home/cicuvc/miniconda3/envs/blkw/lib/python3.12/site-packages/torch/include/torch/csrc/api/include", "/home/cicuvc/miniconda3/envs/blkw/lib/python3.12/site-packages/torch/include", "/home/cicuvc/miniconda3/envs/blkw/include/python3.12/", "/usr/local/cuda/include")
+    add_linkdirs("/home/cicuvc/miniconda3/envs/blkw/lib/python3.12/site-packages/torch/lib/","/home/cicuvc/miniconda3/envs/blkw/lib/")
+    add_cuflags("-std=c++2c", "-O3", "-fPIC", "-Wno-unknown-cuda-version")
+    add_cxxflags("-std=c++2c","-Wall", "-Wno-unused-private-field", "-Wno-unused-local-typedef", "-Wno-unused-variable", "-fPIC")
+    add_links("python3.12","stdc++", "m", "torch", "c10", "torch_cpu", "torch_cuda", "c10_cuda", "torch_python")
+    --add_links("gtest", "stdc++", "m")
+
+    -- add_cugencodes("native")
+    add_culdflags("-shared")
+    add_cugencodes("sm_120a") 
