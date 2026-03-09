@@ -2,6 +2,11 @@
 #include <pybind11/pybind11.h>
 #include <torch/csrc/utils/pybind.h>
 
+
+
+extern void invokeTestTma(void *ptr, size_t b, size_t s, size_t h, int ib, int is, int ih, int ic);
+
+
 namespace{
 
 struct BaselineNoPEAttnStateImpl {};
@@ -33,6 +38,10 @@ struct BaselineNoPEAttnState {
 
 PYBIND11_MODULE(dism_C, m) {
     m.doc() = "Suffix matching discrete attention acceleration kernels";
+
+    m.def("test_tma", [](at::Tensor tt, int ib, int is, int ih, int ic){
+        invokeTestTma(tt.data_ptr(), tt.size(0), tt.size(1), tt.size(2), ib, is, ih, ic);
+    });
 
     auto clz_baseline_nope_state = py::class_<BaselineNoPEAttnState>(m, "BaselineNoPEAttnState");
     BaselineNoPEAttnState::registerType(clz_baseline_nope_state);

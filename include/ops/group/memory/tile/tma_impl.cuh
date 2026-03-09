@@ -50,6 +50,14 @@ __device__ inline void group<GW>::tma::store_async(const GL &dst, const ST &src,
     }
 }
 
+template <int GW>
+template <int AXIS, ducks::tma::wrapper::all ST, ducks::gl::all GL, ducks::coord::tile COORD>
+__device__ inline void group<GW>::tma::store_async(const GL &dst, const ST &src, const COORD &idx) {
+    if (laneid() == 0) {
+        ::kittens::tma::store_async<AXIS, cache_policy::NORMAL, ST, GL, COORD>(dst, src, idx);
+    }
+}
+
 /*template<int axis, cache_policy policy, ducks::st::all ST, ducks::pgl::all
 PGL, ducks::coord::tile COORD>
 __device__ inline void store_async(const PGL &dst, const ST &src, const COORD

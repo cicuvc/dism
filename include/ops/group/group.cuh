@@ -153,6 +153,9 @@ struct group {
         template <ducks::tma::wrapper::all ST, ducks::gl::all GL, ducks::coord::tile COORD = coord<typename ST::T_>>
         __device__ static inline void store_async(const GL &dst, const ST &src, const COORD &idx);
 
+        template <int axis, ducks::tma::wrapper::all ST, ducks::gl::all GL, ducks::coord::tile COORD = coord<typename ST::T_>>
+        __device__ static inline void store_async(const GL &dst, const ST &src, const COORD &idx);
+
         template <int axis, cache_policy policy, ducks::st::all ST, ducks::gl::all GL,
                   ducks::coord::tile COORD = coord<ST>>
         __device__ static inline void store_add_async(const GL &dst, const ST &src, const COORD &idx);

@@ -92,7 +92,7 @@ struct descriptor_dict {
     __host__ descriptor_dict() {}
     template <typename T>
     __host__ descriptor_dict(T _, int b, int d, int r, int c) {}
-    __host__ __device__ descriptor_dict(const descriptor_dict &other) {}
+    __host__ __device__ descriptor_dict(const descriptor_dict &other) = default;
 #if defined(KITTENS_FEATURE_TMA)
     template <typename T, int U>
     __device__ const CUtensorMap *get() const {
