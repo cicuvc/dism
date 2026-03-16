@@ -82,9 +82,9 @@ struct group<GW>::emulated_wgmma {
                                      typename B::T>); // A and B must match type.
 
         rt<typename B::T, B::height * 16, B::width * 16> b_reg;
-        load(b_reg, b);
+        warp::load(b_reg, b);
 
-        wmma::mma_ABt(d, a, b_reg, accumulate ? d : D{0.f});
+        warp::wmma::mma_ABt(d, a, b_reg, accumulate ? d : D{0.f});
     }
     template <ducks::rt::row_layout D, ducks::rt::row_layout A, ducks::st_descriptor::input B>
     __device__ static inline void mm_ABt(D &d, const A &a, const B &b) {

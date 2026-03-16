@@ -25,11 +25,11 @@ def prepare_offsets(seqlens: torch.Tensor, Q_BLOCK: int, VH_BLOCK: int) -> tuple
 
 if __name__ == "__main__":
     torch.set_default_device('cuda:0')
-    torch.set_printoptions(threshold=100000, linewidth=100000)
+    torch.set_printoptions(threshold=100000, linewidth=100000, sci_mode = False)
     #seqlen = torch.tensor([4096, 4096, 4096, 4096], dtype = torch.int)
     #q_offsets, vh_offsets, size = prepare_offsets(seqlen, 256, 64)
     #print(torch.arange(0, q_offsets.shape[-1]) * 256 + q_offsets, vh_offsets, size)
     M = torch.zeros((1, 128, 2, 32), dtype = torch.bfloat16)
-    dism_C.test_tma(M, 0, 29, 1, 0)
+    dism_C.test_tma(M, 0, 1, 0, 0)
 
     print(M.view(128, -1))

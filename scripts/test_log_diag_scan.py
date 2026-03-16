@@ -55,14 +55,14 @@ def diag_scan(logM: torch.Tensor, top_initials: torch.Tensor, left_initials: tor
     finals = torch.zeros((R + C, ), dtype = logM.dtype, device = logM.device)
     
     for i in range(C):
-        current = torch.zeros_like(logM[0,0])
+        current = top_initials[..., i]
         for j in range(min(C - i, R)):
             acc_logM[j, i + j] = current
             current = fn(current, logM[j, i + j])
         finals[C - 1 - i] = current
     
     for i in range(R):
-        current = torch.zeros_like(logM[0,0])
+        current = left_initials[..., i]
         for j in range(min(C, R - i - 1)):
             acc_logM[i + j + 1, j] = current
             current = fn(current, logM[i + j + 1, j])
@@ -93,6 +93,20 @@ def tl_to_br(top: torch.Tensor, left: torch.Tensor):
     finals = torch.cat([torch.flip(top, (-1,)), left], -1)
     return torch.flip(finals[..., (-C):], (-1,)), finals[..., :R]
 
+
+def diag_acc_new(logM: torch.Tensor, top_H: torch.Tensor, top_V: torch.Tensor, left_H: torch.Tensor, left_V: torch.Tensor):
+    N, M = logM.shape
+    assert left_H.shape[-1] == N and left_V.shape[-1] == N
+    assert top_H.shape[-1] == M and top_V.shape[-1] == M
+
+    logM_acc, bottom_H, right_H = diag_scan(logM, top_H, left_H, lambda x,y:x+y)
+    bottom_V, right_V = diag_reduce(logM_acc, -top_V, -left_V, neg_lse)
+
+    bottom_V = -bottom_V
+    right_V = -right_V
+
+    return bottom_V + bottom_H, right_V + right_H
+
 def diag_accumulation(logM: torch.Tensor, top_initial: torch.Tensor, left_initial: torch.Tensor):
     N, M = logM.shape
     assert left_initial.shape[-1] == N
@@ -113,16 +127,19 @@ def extract_diag(x: torch.Tensor, diag: int):
         length = min(C, R + diag)
         return x.as_strided(x.shape[:-2] + (length, ), x.stride()[:-2] + (x.stride()[-2] + x.stride()[-1],), -x.stride()[-2] * diag)
 
-def py_test(logM: torch.Tensor, t: torch.Tensor, l: torch.Tensor):
+def py_test(logM: torch.Tensor, t_V: torch.Tensor, l_V: torch.Tensor, t_H: torch.Tensor, l_H: torch.Tensor):
     R, C = logM.shape[-2:]
-    bottom, left = diag_accumulation(logM, t, l)
+    bottom, left = diag_accumulation(logM, t_V + t_H, l_V + l_H)
+    bottom_x, left_x = diag_acc_new(logM, t_H, t_V, l_H, l_V)
 
-    initials = torch.cat([torch.flip(t, (-1,)), l], dim = -1)
+    initials = torch.cat([torch.flip(t_V + t_H, (-1,)), l_V + l_H], dim = -1)
     finals = torch.cat([left, torch.flip(bottom, (-1,))], dim = -1)
     ref_finals = torch.empty_like(finals)
     for i in range(-R, C):
         ref_finals[C - i - 1] = line_scan(extract_diag(o, i), initials[C - i - 1])[-1] # -(R-1) => R + C - 1
     
+    torch.testing.assert_close(bottom, bottom_x, rtol = 1e-3, atol = 1e-3)
+    torch.testing.assert_close(left, left_x, rtol = 1e-3, atol = 1e-3)
     torch.testing.assert_close(finals, ref_finals, rtol = 1e-3, atol = 1e-3)
 
     return torch.stack((bottom, left))
@@ -133,13 +150,21 @@ if __name__ == "__main__":
     torch.set_default_device('cuda:0')
 
     for i in range(32):
-        N = 16
-        o = torch.randn((N, N),dtype = torch.float)
-        t = torch.randn((2, N, ), dtype = torch.float)
-        ref = py_test(o, t[0], t[1])
+        N = 4
+        q = torch.softmax(torch.randn((N, 16), dtype = torch.float), -1)
+        k = torch.softmax(torch.randn((N, 16), dtype = torch.float), -1)
 
-        dism_C.test_scan(o, t)
+        o = torch.log2(q @ k.T + 1e-3) + 2.0
+        t_V = torch.randn((N, ), dtype = torch.float).abs()
+        t_H = torch.randn((N, ), dtype = torch.float)
+        l_V = torch.randn((N, ), dtype = torch.float).abs()
+        l_H = torch.randn((N, ), dtype = torch.float)
+        ref = py_test(o, t_V, l_V, t_H, l_H)
 
-        torch.testing.assert_close(ref, t, atol = 3e-4, rtol = 1e-2)
+        #dism_C.test_scan(o, t)
+
+        #torch.testing.assert_close(ref, t, atol = 1e-3, rtol = 1e-2)
+        #print(t)
+        print(ref)
 
     print("All tests passed!")

@@ -149,7 +149,7 @@ __device__ static inline void load_async_atom(uint32_t dst_ptr, uint64_t tma_ptr
     uint32_t mbar_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&bar));
 
     if constexpr (policy == cache_policy::NORMAL) {
-        asm volatile("cp.async.bulk.tensor.5d.shared::cluster.global.tile."
+        asm volatile("cp.async.bulk.tensor.5d.shared::cta.global.tile."
                      "mbarrier::complete_tx::bytes"
                      " [%0], [%1, {%3, %4, %5, %6, %7}], [%2];"
                      :
@@ -157,7 +157,7 @@ __device__ static inline void load_async_atom(uint32_t dst_ptr, uint64_t tma_ptr
                        "r"(tma_coords.z), "r"(tma_coords.w)
                      : "memory");
     } else {
-        asm volatile("cp.async.bulk.tensor.5d.shared::cluster.global.tile."
+        asm volatile("cp.async.bulk.tensor.5d.shared::cta.global.tile."
                      "mbarrier::complete_tx::bytes.L2::cache_hint"
                      " [%0], [%1, {%3, %4, %5, %6, %7}], [%2], %8;"
                      :

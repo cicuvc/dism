@@ -30,7 +30,7 @@ __device__ static inline void expect_bytes(semaphore &bar, uint32_t bytes) {
     void const *const ptr = &bar;
     uint32_t bar_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(ptr));
 
-    asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;\n" ::"r"(bar_ptr), "r"(bytes));
+    asm volatile("mbarrier.expect_tx.shared::cta.b64 [%0], %1;\n" ::"r"(bar_ptr), "r"(bytes));
 }
 /**
  * @brief Sets the number of bytes expected at the semaphore.
@@ -140,7 +140,7 @@ __device__ static inline void expect_bytes(semaphore &bar, uint32_t bytes, int d
     uint32_t neighbor_mbar_addr;
     asm volatile("mapa.shared::cluster.u32  %0, %1, %2;\n" : "=r"(neighbor_mbar_addr) : "r"(mbar_addr), "r"(dst_cta));
 
-    asm volatile("mbarrier.arrive.expect_tx.shared::cluster.b64 _, [%0], %1;\n" ::"r"(neighbor_mbar_addr), "r"(bytes));
+    asm volatile("mbarrier.expect_tx.shared::cluster.b64 [%0], %1;\n" ::"r"(neighbor_mbar_addr), "r"(bytes));
 }
 /**
  * @brief Sets the number of bytes expected at the semaphore.

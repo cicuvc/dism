@@ -92,7 +92,7 @@ struct descriptor_dict {
     __host__ descriptor_dict() {}
     template <typename T>
     __host__ descriptor_dict(T _, int b, int d, int r, int c) {}
-    __host__ __device__ descriptor_dict(const descriptor_dict &other) = default;
+    //__host__ __device__ descriptor_dict(const descriptor_dict &other) = default;
 #if defined(KITTENS_FEATURE_TMA)
     template <typename T, int U>
     __device__ const CUtensorMap *get() const {
@@ -100,7 +100,7 @@ struct descriptor_dict {
                       "SKILL ISSUE: Requested a TMA descriptor for a type not "
                       "initialized in the global layout.");
     }
-    __host__ inline const void collect_tmaps(std::vector<CUtensorMap *> &dst) {}
+    __host__ inline void collect_tmaps(std::vector<CUtensorMap *> &dst) {}
 #endif
 };
 
@@ -124,8 +124,6 @@ struct descriptor_dict<_T, Args...> {
                                                                                                       b, d, r, c);
         }
     }
-    __host__ __device__ inline descriptor_dict(const descriptor_dict &other)
-        : tma_desc(other.tma_desc), other_descs(other.other_descs) {}
     template <typename U, int axis>
     __device__ inline const CUtensorMap *get() const {
         if constexpr (std::is_same_v<typename DESC::T, U> && DESC::axis == axis) {
@@ -135,7 +133,7 @@ struct descriptor_dict<_T, Args...> {
         }
     }
 
-    __host__ inline const void collect_tmaps(std::vector<CUtensorMap *> &dst) {
+    __host__ inline void collect_tmaps(std::vector<CUtensorMap *> &dst) {
         dst.push_back(&tma_desc);
         other_descs.collect_tmaps(dst);
     }
@@ -210,7 +208,7 @@ struct gl {
     __device__ inline const CUtensorMap *get_tma() const {
         return tma_descs.template get<U, axis>();
     }
-    __host__ inline const void collect_tmaps(std::vector<CUtensorMap *> &dst) { tma_descs.collect_tmaps(dst); }
+    __host__ inline void collect_tmaps(std::vector<CUtensorMap *> &dst) { tma_descs.collect_tmaps(dst); }
 #endif
     __device__ inline T &
     operator[](const coord<ducks::default_type> &idx) const { // yes I am abusing the const qualifier here a bit.

@@ -8,3 +8,5 @@ build/
 
 backup
 .vscode
+
+__pycache__/

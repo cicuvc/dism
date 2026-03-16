@@ -1,8 +1,10 @@
 #include <utility>
+#include <ct_math.hpp>
 #define KITTENS_RTX_BLACKWELL
 // We use emulated wgmma mode in RTX Blackwell in development
-#include <dism_baseline_nope.hpp>
 #include <kittens.cuh>
+#include <diag_scan.cuh>
+#include <dism_baseline_nope.hpp>
 
 namespace kt = kittens;
 
@@ -132,6 +134,236 @@ struct TmaWarpgroupStrided {
     }
 };
 
+template<int N_GROUPS>
+struct OrderedBarrier{
+    kt::semaphore (&Barriers)[N_GROUPS];
+    uint32_t Phase;
+
+    __device__ OrderedBarrier(kt::shared_allocator<>& allocator, int stage_warps, int group_idx) : Barriers(allocator.allocate<kt::semaphore, N_GROUPS>()), Phase(group_idx == 0){
+        if(kt::warpid() == 0) {
+            #pragma unroll
+            for(int i = 0; i < N_GROUPS; i++) kt::init_semaphore(Barriers[i], stage_warps);
+        }
+    }
+    __device__ void wait(uint32_t self_idx){
+        kt::warp::wait(Barriers[self_idx], Phase);
+        Phase ^= 1;
+    }
+    __device__ void yield(uint32_t self_idx){
+        kt::warp::arrive(Barriers[(self_idx + 1) % N_GROUPS]);
+    }
+};
+
+template<>
+struct OrderedBarrier<2>{
+    kt::semaphore (&Barrier);
+
+    __device__ OrderedBarrier(kt::shared_allocator<>& allocator, int stage_warps, int group_idx) : Barrier(allocator.allocate<kt::semaphore>()){
+        if(kt::warpid() == 0) {
+            kt::init_semaphore(Barrier, stage_warps);
+        }
+    }
+    __device__ void wait(uint32_t self_idx){
+        kt::warp::wait(Barrier, self_idx ^ 1);
+    }
+    __device__ void yield(uint32_t self_idx){
+        kt::warp::arrive(Barrier);
+    }
+};
+
+template<int N_STAGES, typename TLayout>
+struct MbarrierCommPipeline{
+    kt::semaphore (&IssueBarriers)[N_STAGES];
+    kt::semaphore (&CompleteBarriers)[N_STAGES];
+    TLayout (&LayoutStorage)[N_STAGES];
+    uint32_t PhaseState;
+    uint32_t RecvSlot, SendSlot;
+
+    struct ProducerHandle{
+        TLayout& LayoutRef;
+        MbarrierCommPipeline& PipelineRef;
+        kt::semaphore& IssueBarrier;
+
+        __device__ TLayout* operator->() const { return &LayoutRef; }
+
+        __device__ kt::semaphore& getBarrier() const { return IssueBarrier; }
+
+        __device__ void submit(){
+            PipelineRef.PhaseState ^= 1u << (PipelineRef.SendSlot);
+            PipelineRef.SendSlot = (PipelineRef.SendSlot + 1) % N_STAGES;
+            PipelineRef.RecvSlot = (PipelineRef.RecvSlot + 1) % N_STAGES;
+        }
+        __device__ void submitAndTrigger(){
+            submit(), kt::warp::arrive(IssueBarrier);
+        }
+    };
+
+    struct ConsumerHandle {
+        TLayout& LayoutRef;
+        MbarrierCommPipeline& PipelineRef;
+
+        __device__ TLayout* operator->() const { return &LayoutRef; }
+
+        __device__ void release(){
+            kt::warp::arrive(PipelineRef.CompleteBarriers[PipelineRef.SendSlot]);
+            PipelineRef.SendSlot = (PipelineRef.SendSlot + 1) % N_STAGES;
+        }
+    };
+
+    template<int CWG>
+    __device__ MbarrierCommPipeline(kt::shared_allocator<>& alloc, TLayout (&layoutStorage_)[N_STAGES], int recvWarps, int sendWarps)
+    : IssueBarriers(alloc.template allocate<kt::semaphore, N_STAGES>())
+    , CompleteBarriers(alloc.template allocate<kt::semaphore, N_STAGES>())
+    , LayoutStorage(layoutStorage_), PhaseState((1u << N_STAGES) - 1){
+        if(kt::warpid() == 0){
+            #pragma unroll
+            for(int i = 0; i < N_STAGES; i++){
+                kt::init_semaphore(IssueBarriers[i], sendWarps);
+                kt::init_semaphore(CompleteBarriers[i], recvWarps);
+            }
+        }
+    }
+    
+    __device__ void setup(uint32_t writeSlot = 0, uint32_t produceSlot = 0){
+        RecvSlot = writeSlot, SendSlot = produceSlot;
+    }
+
+    __device__ ProducerHandle openSendBuffer(){
+        kt::warp::wait(CompleteBarriers[SendSlot], (PhaseState >> (SendSlot)) & 1);
+        return { LayoutStorage[SendSlot], *this, IssueBarriers[RecvSlot] };
+    }
+
+    __device__ ConsumerHandle receiveBlock(){
+        kt::warp::wait(IssueBarriers[RecvSlot], (PhaseState >> (RecvSlot + 16)) & 1);
+        
+        PhaseState ^= 1u << (RecvSlot + 16);
+        ConsumerHandle handle { LayoutStorage[RecvSlot], *this };
+        RecvSlot = (RecvSlot + 1) % N_STAGES;
+        return handle;
+    }
+};
+template<int N_STAGES, typename TLayout>
+MbarrierCommPipeline(kt::shared_allocator<>&, TLayout (&layoutStorage_)[N_STAGES], int, int) -> MbarrierCommPipeline<N_STAGES, TLayout>;
+
+
+
+template<int WARPS, bool INIT, int... ENDS_IDX>
+struct CommEndInfo{
+    static constexpr bool INITIAL = INIT;
+    
+    static constexpr int N_WARPS = WARPS * sizeof...(ENDS_IDX);
+    static constexpr int LOG2_WARPS = __builtin_ffs(N_WARPS) - 1;
+    static constexpr int ENDS[]  = {ENDS_IDX...};
+
+    static_assert(N_WARPS == (1 << LOG2_WARPS), "Warp number must be power of 2");
+
+    static constexpr bool hasEnd(int end_idx) {
+        for(int i = 0; i < (int)sizeof...(ENDS_IDX); i++) if(ENDS[i] == end_idx) return true;
+        return false;
+    }
+};
+
+template<bool INIT, int... ENDIDX>
+constexpr CommEndInfo<1, INIT, ENDIDX...> ProducerWarp = {};
+
+template<bool INIT, int... ENDIDX>
+constexpr CommEndInfo<4, INIT, ENDIDX...> ConsumerWarpGroup = {};
+
+template<typename... Ts>
+struct CommEndCollection{
+    static constexpr int MAX_BITS = std::max({Ts::LOG2_WARPS...});
+    inline static constexpr int findEnd(int end_idx){
+        bool masks[] = {Ts::hasEnd(end_idx)...};
+        for(int i = 0; i < (int)sizeof...(Ts); i++){
+            if(masks[i]) return i;
+        }
+        return -1;
+    }
+    static constexpr int getWarpBits(int end_idx){
+        int warps[] = {Ts::LOG2_WARPS...};
+        return warps[findEnd(end_idx)];
+    }
+    static constexpr bool isInitial(int end_idx){
+        return ((Ts::hasEnd(end_idx) && Ts::INITIAL) || ...);
+    }
+};
+
+
+template<int N_BUFFERS, int N_ENDS, typename TLayout, typename... Ts>
+struct MbarrierMultiEndSwitcher{
+    kt::semaphore (&Barriers)[N_ENDS][N_BUFFERS];
+    TLayout (&LayoutStorage)[N_BUFFERS];
+    uint32_t PhaseState;
+    uint32_t Slot, CurrIdx, ArriveCount;
+    CommEndCollection<Ts...> EndDesc;
+
+    __forceinline__ __device__ MbarrierMultiEndSwitcher(kt::shared_allocator<>& alloc, TLayout (&layoutStorage_)[N_BUFFERS], uint32_t role_idx, Ts... ends)
+    : Barriers(alloc.template allocate<kt::semaphore, N_ENDS, N_BUFFERS>())
+    , LayoutStorage(layoutStorage_), PhaseState(0), Slot(0) {
+        static_assert(sizeof...(Ts) == N_ENDS, "The number of communication ends mismatches!");
+        
+
+        uint32_t wait_count = 1u << EndDesc.MAX_BITS;
+
+        CurrIdx = EndDesc.findEnd(role_idx);
+        ArriveCount = 1u << (EndDesc.MAX_BITS - EndDesc.getWarpBits(role_idx));
+
+        PhaseState = EndDesc.isInitial(role_idx) ? ((1u << N_BUFFERS) - 1) : 0;
+        if(kt::warpid() == 0){
+            #pragma unroll
+            for(int i = 0; i < N_BUFFERS; i++){
+                #pragma unroll
+                for(int j = 0; j < N_ENDS; j++){
+                    kt::init_semaphore(Barriers[j][i], wait_count);
+                }
+            }
+        }
+    }
+
+    __forceinline__ __device__ void setup(uint32_t slot = 0){Slot = slot;}
+
+    struct Handle{
+        MbarrierMultiEndSwitcher& PipeRef;
+        uint32_t SlotIdx, NextEnd;
+
+        __forceinline__ __device__ TLayout* operator->() const { return &PipeRef.LayoutStorage[SlotIdx]; }
+
+        __forceinline__ __device__ kt::semaphore& getBarrier() const { return PipeRef.Barriers[PipeRef.EndDesc.findEnd(NextEnd)][SlotIdx]; }
+
+        __forceinline__ __device__ void submitToNextAndTrigger(bool next_slot = true){
+            PipeRef.PhaseState ^= 1u << (PipeRef.Slot);
+            if(next_slot) PipeRef.Slot = (PipeRef.Slot + 1) % N_BUFFERS;
+            kt::warp::arrive(getBarrier(), PipeRef.ArriveCount);
+        }
+        __forceinline__ __device__ int getArrivalCount() const {
+            return PipeRef.ArriveCount;
+        }
+    };
+
+    __forceinline__ __device__ Handle waitBuffer(uint32_t next_end){
+        kt::warp::wait(Barriers[CurrIdx][Slot], (PhaseState >> (Slot)) & 1);
+        return { *this, Slot, next_end };
+    }
+};
+
+template<int N_BUFFERS, typename TLayout, typename... Ts>
+MbarrierMultiEndSwitcher(kt::shared_allocator<>& alloc, TLayout (&layoutStorage_)[N_BUFFERS], uint32_t role_idx, Ts... endWarps) -> MbarrierMultiEndSwitcher<N_BUFFERS, sizeof...(Ts), TLayout, Ts...>;
+
+
+
+struct TmaExtension{
+    template<bool COMMIT = false, kt::ducks::gl::all GL, kt::ducks::sv::all SV, typename COORD = kt::coord<SV>>
+    __forceinline__ __device__ static void storeAsync(GL& dst, const SV& src, COORD idx){
+        constexpr uint32_t transfer_size = SV::length * sizeof(typename SV::dtype);
+        typename GL::dtype *dst_ptr = (typename GL::dtype*)&dst[(idx.template unit_coord<-1, 3>())];
+        uint32_t src_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&src.data[0]));
+        
+        asm volatile("cp.async.bulk.global.shared::cta.bulk_group [%0], [%1], %2;\n"::"l"(dst_ptr),"r"(src_ptr),"n"(transfer_size));
+        if constexpr(COMMIT) asm volatile("cp.async.bulk.commit_group;\n");
+    }
+};
+
+
 } // namespace details
 
 namespace baseline::preprocess {
@@ -140,76 +372,337 @@ struct PreprocessKernelSm90Config {
     int HeadDim, QkDim;
     int QBlockSize, KBlockSize;
     int NStages;
-    float QkEps;
+    float QkEps, QkBias, QkLogOffset;
 
     static constexpr int WARPGROUPS = 2;
-    int WarpQSize, WarpKSize, SkipRows;
+    static constexpr int N_STORE_STAGES = 2;
+    static constexpr int K_PREFETCH_SIZE = 1;
+    int WarpQSize, WarpKSize, SkipRows, VHAtomSize;
 
     constexpr PreprocessKernelSm90Config(int headDim_, int qkDim_, int qBlockSize_, int kBlockSize_, int nStage_, float qkEps_){
         HeadDim = headDim_, QkDim = qkDim_;
         QBlockSize = qBlockSize_, KBlockSize = kBlockSize_;
         NStages = nStage_;
         QkEps = qkEps_;
+        QkBias = util::log2f(1 - QkEps * QkDim);
+        QkLogOffset = QkEps / (1 - QkEps * QkDim);
 
         WarpQSize = (qBlockSize_ / WARPGROUPS / kt::WARPGROUP_WARPS);
         WarpKSize = kBlockSize_;
         SkipRows = qBlockSize_ / kt::WARPGROUP_WARPS;
+        VHAtomSize = QBlockSize * kt::WARPGROUP_WARPS;
     }
 };
 
 namespace sm90 {
 
-static constexpr PreprocessKernelSm90Config DEFAULT_CONFIG = {32, 32, 128, 32, 2, 0.4f};
+static constexpr PreprocessKernelSm90Config DEFAULT_CONFIG = {64, 64, 128, 64, 3, 1e-3f};
+
+
+
+template<typename TGlobals>
+struct NonVarlenScheduler{
+    std::pair<uint32_t, uint32_t> operator()(const TGlobals& args, uint32_t i_iter) const {
+        return std::make_pair(0, 0);
+    }
+};
+
+template<PreprocessKernelSm90Config CONFIG>
+union LoadSharedMemoryLayouts{
+    struct DefaultLayout {
+        kt::st_hf<CONFIG.WarpKSize, CONFIG.QkDim> KBuffer;
+    } Default[CONFIG.NStages];
+    struct PrefetchLayout {
+        DefaultLayout PreflightK[CONFIG.K_PREFETCH_SIZE];
+        details::TmaWarpgroupStrided<kt::st_hf<CONFIG.WarpQSize * kt::WARPGROUP_WARPS, CONFIG.QkDim>, CONFIG.SkipRows> QBuffer[CONFIG.WARPGROUPS];
+    } Prefetch[1];
+};
+
+template<PreprocessKernelSm90Config CONFIG>
+struct StoreSharedMemoryLayout{
+    kt::sv_fl<CONFIG.VHAtomSize> VBuffer;
+    kt::sv_fl<CONFIG.VHAtomSize> HBuffer;
+};
 
 template <PreprocessKernelSm90Config CONFIG = DEFAULT_CONFIG>
 struct Globals {
     // Input layout: [B, N, H, C]/[1, N, H, C]
     static constexpr auto C = CONFIG;
-    kt::gl<kt::bf16, -1, -1, -1, C.QkDim> Q;
-    kt::gl<kt::bf16, -1, -1, -1, C.QkDim> K;
-    kt::gl<kt::bf16, -1, -1, -1, C.HeadDim> V;
+    kt::gl<kt::half, -1, -1, -1, C.QkDim, details::TmaWarpgroupStrided<kt::st_hf<CONFIG.WarpQSize * kt::WARPGROUP_WARPS, CONFIG.QkDim>, CONFIG.SkipRows>> Q;
+    kt::gl<kt::half, -1, -1, -1, C.QkDim, kt::tma::descriptor<kt::st_hf<CONFIG.WarpKSize, CONFIG.QkDim>, 1>> K;
     kt::gl<float, 1, 1, 1, -1> RcpTau;
 
-    kt::gl<kt::half, -1, -1, -1, C.QkDim> QSoft;
-    kt::gl<kt::half, -1, -1, -1, C.QkDim> KSoft;
-
-    kt::gl<float, -1, -1, -1, C.WarpKSize> VBuffer;
-    kt::gl<float, -1, -1, -1, C.WarpKSize> HBuffer;
-
-    uint64_t *QOffset, *VHOffset;
+    kt::gl<float, -1, -1, -1, C.QBlockSize * kt::WARPGROUP_WARPS> VBuffer; 
+    kt::gl<float, -1, -1, -1, C.QBlockSize * kt::WARPGROUP_WARPS> HBuffer;
 };
 
-template<typename TGlobals>
-struct NonVarlenScheduler{
-    static std::pair<uint32_t, uint32_t> operator()(const TGlobals& args, uint32_t i_iter){
+// Scheduler for non-varlen attention
+template<PreprocessKernelSm90Config CONFIG>
+struct FixedLengthScheduler{
+    struct TaskInfo{
+        int Batch, QStart, KStart, Head;
+        int KBlocks, VHStart;
+    };
 
-        return std::make_pair(0, 0);
+    int CurrentTaskIdx, Batch, SeqlenQBlocks, Head;
+
+    __device__ FixedLengthScheduler(const Globals<CONFIG>& args){
+        CurrentTaskIdx = blockIdx.x;
+        Batch = args.Q.batch();
+        SeqlenQBlocks = (args.Q.depth() + CONFIG.QBlockSize - 1) / CONFIG.QBlockSize; 
+        Head = args.Q.rows();
+    }
+
+    __device__ bool getNextTask(TaskInfo& out){ 
+        auto Idx = CurrentTaskIdx;
+        auto Total = SeqlenQBlocks * Batch * Head;
+        if(Idx >= Total) return false;
+        out.Batch = Idx / (Head * SeqlenQBlocks);
+        Idx -= out.Batch * (Head * SeqlenQBlocks);
+        out.Head = Idx / SeqlenQBlocks;
+        Idx -= out.Head * SeqlenQBlocks;
+        out.QStart = CONFIG.QBlockSize * Idx;
+        out.VHStart = Idx * (Idx + 1) / 2;
+        out.KStart = 0;
+        out.KBlocks = (out.QStart + CONFIG.QBlockSize + CONFIG.KBlockSize - 1) / CONFIG.KBlockSize;
+
+        CurrentTaskIdx += gridDim.x;
+        return true; 
     }
 };
 
-template <PreprocessKernelSm90Config CONFIG = DEFAULT_CONFIG>
-static __global__ void kernel(const __grid_constant__ Globals<CONFIG> args) {
+struct Log2Map{
+    template<typename T>
+    __forceinline__ __device__ static T op(T x);
+};
+
+template<>
+__forceinline__ __device__ float Log2Map::op(float x){
+    float y;
+    asm volatile(
+        "lg2.approx.ftz.f32 %0, %1;\n":
+        "=f"(y):"f"(x));
+    return y;
+}
+
+template<>
+__forceinline__ __device__ float2 Log2Map::op(float2 x){
+    float2 y;
+    asm volatile(
+        "lg2.approx.ftz.f32 %0, %2;\n"
+        "lg2.approx.ftz.f32 %1, %3;\n":
+        "=f"(y.x),"=f"(y.y):"f"(x.x),"f"(x.y));
+    return y;
+}
+
+struct Fp32Add{
+    __forceinline__ __device__ static float op(float x, float y) { return x + y; }
+};
+
+template<bool USE_APPROX = true>
+struct NegLseOpSlow{
+    __forceinline__ __device__ static float op(float x, float y) {
+        // This approximately calculates -log2(exp2(-x)+exp2(-y)) safely.
+        // out = -log2(1+exp2(-|x-y|)) + min(x,y)
+        // Trivial approach: use MUFU to calculate exp2(-|x-y|), and 3 order polynomial to fit -log2(1+x) in (0,1]
+        // Here: let -log2(1+exp2(x)) = -exp2(f(max(LIMIT, x)) + x), so f(x) = log2(log2(1+exp2(max(LIMIT, x)))) - x
+        // and fit log2(log2(1+exp2(t))) in (LIMIT, 0]. Fit error of polynomial and cut-off error can be reduced by 
+        // the small derivative of exp2 at negative interval.
+        // SASS code:
+        // FADD DIFF, X, -Y
+        // FMNMX.MIN MI, X, Y
+        // FMNMX.MAX P, -|DIFF|, -5.f
+        // FFMA X1, P, -0.004380030100270f, -0.056839571752722f
+        // FFMA X2, P, X1, -0.278691685310180f
+        // FFMA LOGS, P, X2, -|DIFF|
+        // MUFU.EX2 RES, LOGS
+        // FADD OUT, MI, -RES
+        float nabs = -abs(x - y), mi = min(x, y); 
+
+        if constexpr(USE_APPROX){
+            float p = max(nabs, -4.3125f); 
+            float logs = nabs + p * (-2.793604998770852221e-01f + p * (-5.756650101889571047e-02f + p * (-4.553042169205498771e-03f))), res;
+            asm volatile("ex2.approx.ftz.f32 %0, %1;\n":"=f"(res): "f"(logs));
+            return mi - res;
+        } else {
+            return log1p(exp2(nabs)) * -1.4426950408889634f + mi;
+        }
+    }
+};
+
+
+static __launch_bounds__(320, 1) __global__ void kernel(const __grid_constant__ Globals<DEFAULT_CONFIG> args) {
+    constexpr PreprocessKernelSm90Config CONFIG = DEFAULT_CONFIG;
+    using Scheduler = FixedLengthScheduler<CONFIG>;
     using wg = kt::warpgroup;
 
+    constexpr float INF = 9999.f;
+    constexpr int K_BLOCK_PREFLIGHT_SIZE = 1;
     constexpr int N_CONSUMER_WARPS = CONFIG.WARPGROUPS * kt::WARPGROUP_WARPS;
 
-    extern int shmem[];
-    kt::shared_allocator<> allocator{shmem};
+    extern __shared__ int shmem[];
+    kt::shared_allocator<> alloc{shmem};
+    LoadSharedMemoryLayouts<CONFIG> &load_layouts = alloc.template allocate<LoadSharedMemoryLayouts<CONFIG>>();
+    StoreSharedMemoryLayout<CONFIG> (&vh_layouts)[CONFIG.N_STORE_STAGES] = alloc.template allocate<StoreSharedMemoryLayout<CONFIG>, 2>();
 
-    if(kt::warpid() == N_CONSUMER_WARPS){ // producer groups
+    uint32_t wgid = kt::warpgroup::groupid();
+    constexpr uint32_t CONSUMER_A = 0, CONSUMER_B = 1, PRODUCER = 2;
+    constexpr uint32_t PRODUCER_LOAD = 0, PRODUCER_STORE = 1;
 
+    details::MbarrierMultiEndSwitcher k_load_pipe( alloc, load_layouts.Default, wgid, details::ProducerWarp<true, PRODUCER>, details::ConsumerWarpGroup<false, CONSUMER_A, CONSUMER_B>);
+    details::MbarrierMultiEndSwitcher prefetch_load_pipe( alloc, load_layouts.Prefetch, wgid, details::ProducerWarp<true, PRODUCER>, details::ConsumerWarpGroup<false, CONSUMER_A, CONSUMER_B>);
+    details::MbarrierMultiEndSwitcher vh_store_pipe( alloc, vh_layouts, wgid, details::ConsumerWarpGroup<true, CONSUMER_A>, details::ConsumerWarpGroup<false, CONSUMER_B>, details::ProducerWarp<false, PRODUCER>);
+
+    Scheduler scheduler(args);
+    typename Scheduler::TaskInfo task;
+
+    constexpr int QK_BLOCK_RATIO = CONFIG.QBlockSize / CONFIG.KBlockSize;
+
+    if(kt::warpid() == 0){
+        #pragma unroll
+        for(int i = 0; i < CONFIG.N_STORE_STAGES; i++){
+            kt::warp::sv_maps::zero(vh_layouts[i].HBuffer);
+            kt::warp::sv_maps::pos_infty(vh_layouts[i].VBuffer);
+        }
+    }
+    __syncthreads();
+
+
+    if(wgid == PRODUCER){ // producer groups
+        while(scheduler.getNextTask(task)){
+            if(kt::warpgroup::warpid() == PRODUCER_LOAD){ // loader
+                //kt::print_utils::print("Task info: cta = %u, batch = %u, head = %u, n_kblocks = %u, vh_start = %u, qstart = %u\n", blockIdx.x, task.Batch, task.Head, task.KBlocks, task.VHStart, task.QStart);
+                // first load Q and first K block
+                prefetch_load_pipe.setup();
+                auto prefetch_packet = prefetch_load_pipe.waitBuffer(CONSUMER_A); // just to match details::ConsumerWarpGroup<false, CONSUMER_A, CONSUMER_B>
+                ([&]<size_t... IDX_Q, size_t... IDX_K>(std::index_sequence<IDX_Q...>, std::index_sequence<IDX_K...>){
+                    kt::warp::tma::expect(prefetch_packet.getBarrier(), prefetch_packet->PreflightK[IDX_K]..., prefetch_packet->QBuffer[IDX_Q]...);
+                    (kt::warp::tma::load_async<1, kt::cache_policy::NORMAL>(prefetch_packet->QBuffer[IDX_Q], args.Q, { task.Batch, task.QStart + int(IDX_Q * CONFIG.WarpQSize), task.Head, 0}, prefetch_packet.getBarrier()), ...);
+                    (kt::warp::tma::load_async<1, kt::cache_policy::NORMAL>(prefetch_packet->PreflightK[IDX_K].KBuffer, args.K, { task.Batch, task.KStart + int(IDX_K), task.Head, 0}, prefetch_packet.getBarrier()), ...); // NOTE: AXIS MAY NOT CORRECT!!!
+                })(std::make_index_sequence<CONFIG.WARPGROUPS>{}, std::make_index_sequence<CONFIG.K_PREFETCH_SIZE>{});
+                
+                prefetch_packet.submitToNextAndTrigger();
+                    
+                prefetch_load_pipe.waitBuffer(CONSUMER_A); // wait for Q is consumed and switch layout
+                
+
+                k_load_pipe.setup(); 
+
+                #pragma unroll
+                for(int i = 0; i < CONFIG.K_PREFETCH_SIZE; i++) k_load_pipe.waitBuffer(CONSUMER_A).submitToNextAndTrigger(); // already loaded
+                
+                #pragma unroll 1
+                for(int iter = CONFIG.K_PREFETCH_SIZE; iter < task.KBlocks; iter++){
+                    auto load_packet = k_load_pipe.waitBuffer(CONSUMER_A);
+                    //kt::print_utils::print("Producer emit load %u (slot = %u)\n", iter, load_packet.SlotIdx);
+                    kt::warp::tma::expect(load_packet.getBarrier(), load_packet->KBuffer);
+                    kt::warp::tma::load_async<1, kt::cache_policy::NORMAL>(load_packet->KBuffer, args.K, { task.Batch, task.KStart + iter, task.Head, 0}, load_packet.getBarrier()); // NOTE: AXIS AND OFFSET IS INCORRECT
+                    load_packet.submitToNextAndTrigger(); 
+                }
+            } else if(kt::warpgroup::warpid() == PRODUCER_STORE){ // store warp
+                vh_store_pipe.setup();
+                #pragma unroll 1
+                for(int iter = 0; iter < (task.KBlocks + QK_BLOCK_RATIO - 1) / QK_BLOCK_RATIO; iter++){
+                    auto store_packet = vh_store_pipe.waitBuffer(CONSUMER_A);
+                    //kt::print_utils::print("Producer save iter = %u\n", iter);
+                    details::TmaExtension::storeAsync(args.VBuffer, store_packet->VBuffer, { task.Batch, task.Head, task.VHStart, 0}); // TODO: Add coord calculation
+                    details::TmaExtension::storeAsync(args.HBuffer, store_packet->HBuffer, { task.Batch, task.Head, task.VHStart, 0}); 
+                    kt::tma::store_commit_group();
+                    kt::tma::store_async_read_wait();
+
+                    kt::warp::sv_maps::zero(store_packet->HBuffer);
+                    kt::warp::sv_maps::pos_infty(store_packet->VBuffer);
+
+                    store_packet.submitToNextAndTrigger();
+
+                    task.VHStart++;
+                }
+            }
+            kt::group<10>::sync(15);
+        }
+    } else {
+        using TBState = diagscan::ScanTbState<CONFIG.WarpKSize, diagscan::details::DownVec>;
+        using LRState = diagscan::ScanLrState<CONFIG.WarpQSize, diagscan::details::DownVec>;
+        
+        uint32_t warpid = kt::warpgroup::warpid();
+
+        while(scheduler.getNextTask(task)){
+            uint32_t consumer_idx = wg::groupid();
+            float rtau = args.RcpTau.raw_ptr[task.Head] + CONFIG.QkBias;
+
+            prefetch_load_pipe.setup();
+            auto init_block = prefetch_load_pipe.waitBuffer(PRODUCER);
+            //kt::print_utils_group<4>::print("Consumer %u get Q tile\n", wgid);
+            kt::rt_hf<CONFIG.WarpQSize, CONFIG.QkDim> q_tile;
+            kt::rt_fl<CONFIG.WarpQSize, CONFIG.WarpKSize> acc;
+            kt::warpgroup::load(q_tile, init_block->QBuffer[consumer_idx].data);
+            
+            init_block.submitToNextAndTrigger();
+
+            k_load_pipe.setup();
+            vh_store_pipe.setup();
+
+            LRState left_H = 0.f, left_neg_V = INF;
+            
+            #pragma unroll 1
+            for(int iter = 0; iter < task.KBlocks; iter++){
+                acc = CONFIG.QkLogOffset;
+                auto k_packet = k_load_pipe.waitBuffer(PRODUCER);
+                //kt::print_utils_group<4>::print("Consumer %u MMA start for iter = %u\n", wgid, iter);
+                
+                wg::emulated_wgmma::mma_ABt(acc, q_tile, k_packet->KBuffer);
+                wg::emulated_wgmma::mma_async_wait();
+
+                //kt::print_utils_group<4>::print("Consumer %u MMA end for iter = %u\n", wgid, iter);
+                k_packet.submitToNextAndTrigger();
+
+                // New formula:
+                // H_new, Acc = diag_scan<fadd>(H_last, +logM)
+                // V_new = - diag_reduce<neg_lse>(-V_last, Acc)
+                // Example: log M1M2M3 = H_last, -log(1/1+1/M1+1/M1M2) = V_last
+                // 
+                
+                // Barrier for pingpong schedule
+                bool should_save = (iter % QK_BLOCK_RATIO == QK_BLOCK_RATIO - 1) || (iter == task.KBlocks - 1); // indicate if we should writeback V/H buffers
+                
+                TBState top_H, top_neg_V;
+                auto state_packet = vh_store_pipe.waitBuffer((should_save && wgid == CONFIG.WARPGROUPS - 1) ? PRODUCER : ((wgid + 1) % CONFIG.WARPGROUPS));
+                //kt::print_utils_group<4>::print("Consumer %u get vh buffer for iter = %u, should_save = %u\n", wgid, iter, should_save);
+                
+                kt::warp::rt_maps::unary_map<Log2Map>(acc, acc);
+                acc += rtau;
+
+
+                auto& v_buffer_slice = state_packet->VBuffer.subvec<CONFIG.WarpKSize>((iter % QK_BLOCK_RATIO) + warpid * QK_BLOCK_RATIO);
+                auto& h_buffer_slice = state_packet->HBuffer.subvec<CONFIG.WarpKSize>((iter % QK_BLOCK_RATIO) + warpid * QK_BLOCK_RATIO);
+
+                
+                
+                top_H.load(h_buffer_slice); // TODO: Match the size!!!
+                top_neg_V.load(v_buffer_slice);
+                auto add_init = diagscan::DiagScanHelpers::makeState<diagscan::details::Input, diagscan::details::DownVec>(left_H, top_H);
+                auto acc_state = diagscan::DiagScanHelpers::diagScanRef<Fp32Add, 0.f>(acc, add_init);
+                acc_state.TbState.store(h_buffer_slice);
+
+                left_H = acc_state.LrState;
+
+                auto red_init = diagscan::DiagScanHelpers::makeState<diagscan::details::Input, diagscan::details::DownVec>(left_neg_V, top_neg_V);
+                auto res = diagscan::DiagScanHelpers::diagReduce<NegLseOpSlow<true>, INF, diagscan::details::DownVec, diagscan::details::Output>(acc, red_init);
+                left_neg_V = res.LrState;
+
+                res.TbState.store(v_buffer_slice);
+
+                //kt::print_utils_group<4>::print(h_buffer_slice);
+                //kt::print_utils_group<4>::print(v_buffer_slice);
+                state_packet.submitToNextAndTrigger(should_save); 
+
+            }
+
+            kt::group<10>::sync(15);
+        }
     }
 }
 
-static __global__ void testTmaKernel(const __grid_constant__ kt::gl<kt::bf16, -1, -1, -1, 32, details::TmaWarpgroupStrided<kt::st_bf<64, 32>, 32>> gm, int b, int s, int h, int c){
-    __shared__ details::TmaWarpgroupStrided<kt::st_bf<64, 32>, 32> buffer;
-    kt::warp::st_maps::one(buffer.data);
-
-    kt::warp::tma::store_async<1>(gm, buffer, { b, s, h, c });
-    kt::warp::tma::store_async_wait();
-
-    __syncthreads();
-}
 
 
 
@@ -218,6 +711,36 @@ static __global__ void testTmaKernel(const __grid_constant__ kt::gl<kt::bf16, -1
 
 } // namespace
 
-extern void invokeTestTma(void *ptr, size_t b, size_t s, size_t h, int ib, int is, int ih, int ic){
-    baseline::preprocess::sm90::testTmaKernel<<<1, 32>>>({(kt::bf16*)ptr, b, s, h, 0}, ib, is, ih, ic);
+template <int N_HEADDIM, int N_KEYDIM>
+void BaselineNoPEAttnStateImpl<N_HEADDIM, N_KEYDIM>::invokeFwdPreprocess(const FwdPreprocessArgs& args){
+    using baseline::preprocess::sm90::DEFAULT_CONFIG;
+    using Globals = baseline::preprocess::sm90::Globals<DEFAULT_CONFIG>;
+
+    dim3 grid(170); // single CTA for test
+    dim3 block(kt::WARPGROUP_THREADS * DEFAULT_CONFIG.WARPGROUPS + kt::WARP_THREADS * 2);
+    auto shape = getVHBufferShape(args.Batch, args.Head, args.Seqlen);
+
+    size_t shared_memory = 49152;
+
+    baseline::preprocess::sm90::kernel<<<grid, block, shared_memory>>>(Globals{
+        { args.Q, args.Batch, args.Seqlen, args.Head, N_KEYDIM },
+        { args.K, args.Batch, args.Seqlen, args.Head, N_KEYDIM },
+        { args.RcpTau, 0, 0, 0, args.Head },
+        { args.VBuffer, shape[0], shape[1], shape[2], 0 },
+        { args.HBuffer, shape[0], shape[1], shape[2], 0 }
+    });
+
+    //cudaDeviceSynchronize();
+    //printf("Preproess kernel exit status: %s\n", cudaGetErrorString(cudaGetLastError()));
 }
+
+template <int N_HEADDIM, int N_KEYDIM>
+std::array<size_t, 4> BaselineNoPEAttnStateImpl<N_HEADDIM, N_KEYDIM>::getVHBufferShape(size_t batch, size_t head, size_t seqlen){
+    constexpr int QBlockSize = baseline::preprocess::sm90::DEFAULT_CONFIG.QBlockSize;
+    constexpr int VHAtomSize = baseline::preprocess::sm90::DEFAULT_CONFIG.VHAtomSize;
+    size_t q_blocks = (seqlen + QBlockSize - 1) / QBlockSize;
+    size_t vh_elems = (q_blocks + 1) * q_blocks / 2;
+    return {batch, head, vh_elems, VHAtomSize};
+}
+
+template struct BaselineNoPEAttnStateImpl<baseline::preprocess::sm90::DEFAULT_CONFIG.HeadDim, baseline::preprocess::sm90::DEFAULT_CONFIG.QkDim>;

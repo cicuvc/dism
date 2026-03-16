@@ -105,9 +105,10 @@ __device__ inline bool group<GW>::sv_maps::hasnan(const SV &src) {
 template <int GW>
 template <typename op, ducks::sv::all T>
 __device__ inline void group<GW>::sv_maps::unary_op(T &dst, const T &src) {
+    uint32_t tid = laneid();
 #pragma unroll
-    for (auto cur = laneid(); cur < T::length; cur += GROUP_THREADS) {
-        dst[cur] = op::template op<typename T::dtype>(src[cur]);
+    for (auto cur = 0; cur + tid < T::length; cur += GROUP_THREADS) {
+        dst[cur + tid] = op::template op<typename T::dtype>(src[cur + tid]);
     }
 }
 /**

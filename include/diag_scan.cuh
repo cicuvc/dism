@@ -118,6 +118,13 @@ struct ScanState {
             result.Data[i] = Data[i] - rhs.Data[i];
         return result;
     }
+    __device__ ScanState operator-() const{
+        ScanState result;
+#pragma unroll
+        for (int i = 0; i < N / 8; i++)
+            result.Data[i] = -Data[i];
+        return result;
+    }
 
     __device__ void print() const { kt::print_utils::print(reinterpret_cast<const float (&)[N / 8][1]>(Data)); }
 };
@@ -129,7 +136,7 @@ struct ScanLrState : ScanState<N, Dir> {
     __device__ ScanLrState(float zero) : ScanState<N, Dir>{zero} {}
 
     template <size_t DN>
-    __device__ void store(kt::sv_fl<DN> &dst, int dst_offset = 0) {
+    __forceinline__ __device__ void store(kt::sv_fl<DN> &dst, int dst_offset = 0) {
         static_assert(DN >= N, "Space of destination vector is not large enough");
 
         uint32_t ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&dst.data[dst_offset]));
@@ -185,7 +192,7 @@ struct ScanLrState : ScanState<N, Dir> {
     }
 
     template <size_t DN>
-    __device__ void load(kt::sv_fl<DN> &dst, int dst_offset = 0) {
+    __forceinline__ __device__ void load(kt::sv_fl<DN> &dst, int dst_offset = 0) {
         static_assert(DN >= N, "Space of destination vector is not large enough");
         uint32_t ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&dst.data[dst_offset]));
 
@@ -284,7 +291,7 @@ struct ScanTbState : ScanState<N, Dir> {
     __device__ ScanTbState(float zero) : ScanState<N, Dir>{zero} {}
 
     template <size_t DN>
-    __device__ void store(kt::sv_fl<DN> &dst, int dst_offset = 0) {
+    __forceinline__ __device__ void store(kt::sv_fl<DN> &dst, int dst_offset = 0) {
         static_assert(DN >= N, "Space of destination vector is not large enough");
         uint32_t ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&dst.data[dst_offset]));
 
@@ -336,7 +343,7 @@ struct ScanTbState : ScanState<N, Dir> {
     }
 
     template <size_t DN>
-    __device__ void load(kt::sv_fl<DN> &dst, int dst_offset = 0) {
+    __forceinline__ __device__ void load(kt::sv_fl<DN> &dst, int dst_offset = 0) {
         uint32_t ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&dst.data[dst_offset]));
 
         uint32_t tid = threadIdx.x & 0x1f;
@@ -444,20 +451,20 @@ struct DiagScanState {
         DiagScanState result{{0.f}, {0.f}};
         if constexpr (!(Dir::value ^ ResultType::value)) {
 #pragma unroll
-            for (int i = 0; i < COL_UNITS; i++) {
+            for (auto i = 0u; i < COL_UNITS; i++) {
                 result.TbState.Data[COL_UNITS - i - 1] = udata[i][0];
             }
 #pragma unroll
-            for (int i = 0; i < ROW_UNITS; i++) {
+            for (auto i = 0u; i < ROW_UNITS; i++) {
                 result.LrState.Data[i] = udata[COL_UNITS + i][0];
             }
         } else {
 #pragma unroll
-            for (int i = 0; i < ROW_UNITS; i++) {
+            for (auto i = 0u; i < ROW_UNITS; i++) {
                 result.LrState.Data[i] = udata[i][0];
             }
 #pragma unroll
-            for (int i = 0; i < COL_UNITS; i++) {
+            for (auto i = 0u; i < COL_UNITS; i++) {
                 result.TbState.Data[COL_UNITS - 1 - i] = udata[ROW_UNITS + i][0];
             }
         }
@@ -467,20 +474,20 @@ struct DiagScanState {
     __device__ void toUdata(float (&udata)[ROW_UNITS + COL_UNITS][1]) const {
         if constexpr (!(Dir::value ^ ResultType::value)) {
 #pragma unroll
-            for (int i = 0; i < COL_UNITS; i++) {
+            for (auto i = 0u; i < COL_UNITS; i++) {
                 udata[i][0] = TbState.Data[COL_UNITS - i - 1];
             }
 #pragma unroll
-            for (int i = 0; i < ROW_UNITS; i++) {
+            for (auto i = 0u; i < ROW_UNITS; i++) {
                 udata[COL_UNITS + i][0] = LrState.Data[i];
             }
         } else {
 #pragma unroll
-            for (int i = 0; i < ROW_UNITS; i++) {
+            for (auto i = 0u; i < ROW_UNITS; i++) {
                 udata[i][0] = LrState.Data[i];
             }
 #pragma unroll
-            for (int i = 0; i < COL_UNITS; i++) {
+            for (auto i = 0u; i < COL_UNITS; i++) {
                 udata[ROW_UNITS + i][0] = TbState.Data[COL_UNITS - 1 - i];
             }
         }
@@ -533,11 +540,11 @@ struct ScanUtils {
         do {
             float remote_vals[row_units + col_units];
 #pragma unroll
-            for (int i = 0; i < row_units + col_units; i++) {
+            for (auto i = 0u; i < row_units + col_units; i++) {
                 remote_vals[i] = __shfl_sync(~0u, udata[i][0], (tidr3 - 2 * tidm4) * 4 + 27, 32);
             }
 #pragma unroll
-            for (int i = 0; i < row_units + col_units; i++) {
+            for (auto i = 0u; i < row_units + col_units; i++) {
                 float sink;
                 details::SelIntrinsics::selWrite(tidr3 - 2 * tidm4 - 1 <= 0, udata[i][0],
                                                    i == 0 ? sink : udata[i - 1][0], remote_vals[i]);
@@ -1365,7 +1372,7 @@ struct DiagScanHelpers {
         } while (0);
 
         if constexpr (DEBUG)
-            kt::print_utils::print_utils::print(data);
+            kt::print_utils::print(data);
 
         details::copyData(dst, data);
         return makeState<details::Output, details::DownVec, SKIP_FIX>(lr_state, tb_state);
