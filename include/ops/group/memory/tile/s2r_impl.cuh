@@ -8,7 +8,7 @@ namespace ducks = kittens::ducks;
 template <int GW>
 template <ducks::rt::all RT, ducks::st::all ST>
 __device__ inline void group<GW>::load(RT &dst, const ST &src) {
-    constexpr int height = ST::height;
+    constexpr int height = (ST::rows / kittens::TILE_ROW_DIM<typename ST::dtype>);
     constexpr int warp_height = RT::height;
     static_assert(height % GROUP_WARPS == 0, "Group load / store requires tile height to be a multiple of "
                                              "GROUP_WARPS.");
@@ -141,7 +141,7 @@ __device__ inline void group<GW>::load(RT &dst, const ST &src) {
 template <int GW>
 template <ducks::st::all ST, ducks::rt::all RT>
 __device__ inline void group<GW>::store(ST &dst, const RT &src) {
-    constexpr int height = ST::height;
+    constexpr int height = (ST::rows / kittens::TILE_ROW_DIM<typename ST::dtype>);
     constexpr int warp_height = RT::height;
     static_assert(height % GROUP_WARPS == 0, "Group load / store requires tile height to be a multiple of "
                                              "GROUP_WARPS.");

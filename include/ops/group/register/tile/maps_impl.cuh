@@ -217,7 +217,7 @@ __device__ inline bool group<GW>::rt_maps::hasnan(const RT &src) {
  */
 template <int GW>
 template <typename op, ducks::rt::all T>
-__device__ inline void group<GW>::rt_maps::unary_map(T &dst, const T &src) {
+__device__ __forceinline__ void group<GW>::rt_maps::unary_map(T &dst, const T &src) {
 #pragma unroll
     for (int i = 0; i < dst.height; i++) {
 #pragma unroll

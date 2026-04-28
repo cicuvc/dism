@@ -14,7 +14,7 @@ function get_cugencodes(target)
     return cugencodes
 end
 function make_dev_compile_args(v, objfile, sourcefile, target)
-    local device_compile_args = {"--cuda-device-only", "-c", "-o", objfile, sourcefile, string.format("--cuda-gpu-arch=%s", v)}
+    local device_compile_args = {"--cuda-device-only", "-c", "-o", objfile, sourcefile, string.format("--cuda-gpu-arch=%s", v), "-v"}
     
     for j, vf in pairs(target:get("cuflags")) do
         if not (vf == "-G") then

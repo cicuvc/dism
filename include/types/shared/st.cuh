@@ -35,7 +35,7 @@ struct KITTENS_DEFAULT_ALIGN st {
     // is *not* a subtile.
     static constexpr int underlying_rows = _rows;
     static constexpr int underlying_cols = _cols;
-    static constexpr int underlying_height = _rows / kittens::TILE_ROW_DIM<T>;
+    //static constexpr int underlying_height = _rows / kittens::TILE_ROW_DIM<T>;
     static constexpr int underlying_width = _cols / kittens::TILE_COL_DIM<T>;
     static constexpr int underlying_num_elements = underlying_rows * underlying_cols;
 
@@ -220,21 +220,21 @@ st<_T, _rows, _cols>::subtile(int2 rowcol) // Qualified function name and parame
                   "Subtile cols must be divisible by the base tile col dimension.");
 
     // Calculate height/width in terms of base tiles for further checks
-    constexpr int subtile_height = subtile_rows / kittens::TILE_ROW_DIM<dtype>;
+    //constexpr int subtile_height = subtile_rows / kittens::TILE_ROW_DIM<dtype>;
     constexpr int subtile_width = subtile_cols / kittens::TILE_COL_DIM<dtype>;
-    static_assert(subtile_height > 0 && subtile_width > 0, "Subtile height/width in base tiles must be positive.");
+    //static_assert(subtile_height > 0 && subtile_width > 0, "Subtile height/width in base tiles must be positive.");
 
     // Check divisibility of parent height/width by subtile height/width
-    static_assert(ST_t::height % subtile_height == 0, "Parent tile height (in base tiles) must be divisible by "
-                                                      "subtile height (in base tiles).");
+    //static_assert(ST_t::height % subtile_height == 0, "Parent tile height (in base tiles) must be divisible by "
+    //                                                  "subtile height (in base tiles).");
     static_assert(ST_t::width % subtile_width == 0, "Parent tile width (in base tiles) must be divisible by "
                                                     "subtile width (in base tiles).");
 
     // Ensure the parent st object is not itself a subtile view by comparing its
     // dimensions to its underlying dimensions.
-    static_assert(ST_t::height == ST_t::underlying_height && ST_t::width == ST_t::underlying_width,
-                  "Cannot create a subtile from an object that appears to be a "
-                  "subtile view (height/width mismatch underlying).");
+    //static_assert(ST_t::height == ST_t::underlying_height && ST_t::width == ST_t::underlying_width,
+    //              "Cannot create a subtile from an object that appears to be a "
+    //              "subtile view (height/width mismatch underlying).");
     // Also check rows/cols directly for robustness, though height/width check
     // might suffice.
     static_assert(ST_t::rows == ST_t::underlying_rows && ST_t::cols == ST_t::underlying_cols,

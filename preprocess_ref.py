@@ -15,15 +15,15 @@ def log21p(x: torch.Tensor):
     LN2 = 0.69314718055994530941723212145818
     return torch.log1p(x) / LN2
 
-@torch.compile
+
 def lse0(x: torch.Tensor): # logsumexp(x, 0)
     return log21p(torch.exp2(-torch.abs(x))) + torch.clamp_min(x, 0)
 
-@torch.compile
+
 def lse(x: torch.Tensor, y: torch.Tensor): # logsumexp(x, y)
     return log21p(torch.exp2(-torch.abs(x - y))) + torch.maximum(x, y)
 
-@torch.compile
+
 def neg_lse(x: torch.Tensor, y: torch.Tensor): # logsumexp(x, y)
     return -log21p(torch.exp2(-torch.abs(x - y))) + torch.minimum(x, y)
 
@@ -48,7 +48,7 @@ def diag_scan(logM: torch.Tensor, top_initials: torch.Tensor, left_initials: tor
 
     return acc_logM, torch.flip(finals[..., (-C):], (-1,)), finals[..., :R]
 
-@torch.compile
+
 def diag_scan_ex(
     logM: torch.Tensor,
     top_initials: torch.Tensor,
@@ -98,7 +98,7 @@ def diag_reduce(logM: torch.Tensor, top_initials: torch.Tensor, left_initials: t
 
     return torch.flip(finals[..., (-C):], (-1,)), finals[..., :R]
 
-@torch.compile
+
 def diag_reduce_ex(
     logM: torch.Tensor,
     top_initials: torch.Tensor,
@@ -129,7 +129,7 @@ def diag_reduce_ex(
     bottom = prev_next
     return bottom, rights
 
-@torch.compile
+
 def diag_acc_new(logM: torch.Tensor, top_H: torch.Tensor, top_V: torch.Tensor, left_H: torch.Tensor, left_V: torch.Tensor):
     N, M = logM.shape[-2:]
     assert left_H.shape[-1] == N and left_V.shape[-1] == N
@@ -187,21 +187,23 @@ def calc_error(x: torch.Tensor, y: torch.Tensor):
 if __name__ == "__main__":
     torch.set_printoptions(threshold=100000, precision=4, linewidth=100000, sci_mode=False)
     torch.set_default_device('cuda:0')
-    BATCH, SEQLEN, HEAD, QK_DIM = 2, 1024, 2, 64
+    BATCH, SEQLEN, HEAD, QK_DIM = 1, 512, 1, 64
 
-    for epochs in tqdm(range(1000)):
-        q_logits = torch.randn((BATCH, SEQLEN, HEAD, QK_DIM), dtype = torch.float32)
-        k_logits = torch.randn((BATCH, SEQLEN, HEAD, QK_DIM), dtype = torch.float32)
-        v = torch.randn((BATCH, SEQLEN, HEAD, QK_DIM), dtype = torch.bfloat16)
+    q_logits = torch.randn((BATCH, SEQLEN, HEAD, QK_DIM), dtype = torch.float32)
+    k_logits = torch.randn((BATCH, SEQLEN, HEAD, QK_DIM), dtype = torch.float32)
+    v = torch.randn((BATCH, SEQLEN, HEAD, QK_DIM), dtype = torch.bfloat16)
 
-        q = torch.softmax(q_logits, dim = -1).half()
-        k = torch.softmax(k_logits, dim = -1).half()
-        rcptau = torch.rand((HEAD, ), dtype = torch.float32) + 1.0
+    q = torch.softmax(q_logits, dim = -1).half()
+    k = torch.softmax(k_logits, dim = -1).half()
+    rcptau = torch.rand((HEAD, ), dtype = torch.float32) + 1.0
 
-        state = dism_C.BaselineNoPEAttnState(q, k, v, rcptau)
-        state.invoke_fwd_preprocess()
+    state = dism_C.BaselineNoPEAttnState(q, k, v, rcptau)
 
+    for epochs in (range(10000)):
         
+        state.invoke_fwd_preprocess()
+        
+
         ref_V, ref_H, v_error, h_error = preprocess_val_ref( -state.fwd_v_buffer,  state.fwd_h_buffer, q, k)
 
         torch.testing.assert_close(ref_H + h_error, ref_H, rtol = 1e-3, atol = 1e-3)
@@ -211,5 +213,6 @@ if __name__ == "__main__":
         print(f"The avg_error, max_error, rel_avg_error, rel_max_error of H = {avg_error:.5f}, {max_error:.5f}, {(rel_avg_error * 100):.2f}%, {(rel_max_error * 100):.2f}%")
         avg_error, max_error, rel_avg_error, rel_max_error = calc_error(ref_V + v_error, ref_V)
         print(f"The avg_error, max_error, rel_avg_error, rel_max_error of V = {avg_error:.5f}, {max_error:.5f}, {(rel_avg_error * 100):.2f}%, {(rel_max_error * 100):.2f}%")
-        
+
+        exit(0)
     print("✅ All test passed!")

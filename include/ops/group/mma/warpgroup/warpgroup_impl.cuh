@@ -387,10 +387,10 @@ __device__ inline void group<GW>::wgmma::mma_ABt(D &d, const A &a, const B &b) {
     for (int m = 0; m < M_DIV_4; m++) {
         rt<T_D, TILE_ROW_DIM<T_D>, TILE_COL_DIM<T_D> * N, ducks::rt_layout::row> &d_ref =
             group<1>::rt_conversions::subtile_inplace<TILE_ROW_DIM<T_AB>>(d, m);
-        base::rt_st(d_ref, a.tiles[m][0], b_desc.chunk_descriptor(0), accumulate);
+        base::template rt_st<1,accumulate?1:0>(d_ref, a.tiles[m][0], b_desc.chunk_descriptor(0));
 #pragma unroll
         for (int k = 1; k < K; k++) {
-            base::rt_st(d_ref, a.tiles[m][k], b_desc.chunk_descriptor(k), 1);
+            base::template rt_st<1,1>(d_ref, a.tiles[m][k], b_desc.chunk_descriptor(k));
         }
     }
     mma_commit_group(); // commit the group of these WGMMA calls.

@@ -531,6 +531,159 @@ struct NegLseOpSlow{
 };
 
 
+namespace experimental{
+    using namespace diagscan;
+    namespace details = diagscan::details;
+    
+    template <typename AssocOp, float ZERO, details::vec_direction Dir, details::scan_result ResultType,
+              details::scan_result InitResultType = details::Input, bool DEBUG = false, int ROWS, int COLS>
+    static __forceinline__ __device__ DiagScanState<ROWS, COLS, Dir, ResultType>
+    diagReduce(const kt::rt_fl<ROWS, COLS> &dst,
+                const DiagScanState<ROWS, COLS, Dir, InitResultType> &init = {{ZERO}, {ZERO}}) {
+        constexpr int row_units = ROWS / 8;
+        constexpr int col_units = COLS / 8;
+
+        // This procedure performs parallel reduction along diagonal lines of
+        // tiles in standard MMA layout. Results are returned as a pair
+        uint32_t tid = threadIdx.x & 0x1f;
+        uint32_t tidr3 = tid >> 2;
+        uint32_t tidm4 = tid & 0x3;
+        bool pred3 = tidm4 == 3;
+        bool pred1 = tidm4 & 1;
+
+        float2 data[row_units + 1][col_units];
+        float udata_x[row_units + col_units][1];
+        float udata_y[row_units + col_units][1];
+        if constexpr (Dir::value)
+            details::invCopyData<row_units + 1, ZERO>(data, dst);
+        else
+            details::copyData<row_units + 1, ZERO>(data, dst);
+
+        init.toUdata(Dir::value ? udata_x : udata_y);
+
+        // propagation
+        DiagScanHelpers::staticFor<row_units + col_units>([&](auto diagC) {
+            constexpr int diag = decltype(diagC)::value;
+
+            constexpr int irow0 = DiagScanHelpers::CT_MAX_V<0, row_units - diag>;
+            constexpr int icol0 = DiagScanHelpers::CT_MAX_V<0, diag - row_units>;
+            constexpr int Len = DiagScanHelpers::CT_MIN_V<(row_units + 1) - irow0, col_units - icol0>;
+
+            constexpr int slot = (row_units + col_units - 1 - diag);
+
+            float2 current = Dir::value ? float2{(!tidm4) ? udata_x[slot][0] : ZERO, ZERO}
+                                        : float2{ZERO, pred3 ? udata_y[slot][0] : ZERO};
+
+            current.x = [x = current.x]<int... KS>(std::integer_sequence<int, KS...>, auto &d) {
+                return details::batchOp<AssocOp>(x, (d[irow0 + KS][icol0 + KS].x)...);
+            }(std::make_integer_sequence<int, Len>{}, data);
+
+            current.y = [y = current.y]<int... KS>(std::integer_sequence<int, KS...>, auto &d) {
+                return details::batchOp<AssocOp>(y, (d[irow0 + KS][icol0 + KS].y)...);
+            }(std::make_integer_sequence<int, Len>{}, data);
+
+            udata_x[slot][0] = current.x;
+            udata_y[slot][0] = current.y;
+        });
+
+        // x2 sync
+        do {
+            float new_vals[row_units + col_units];
+            if constexpr (Dir::value) {
+#pragma unroll
+                for (int i = 0; i < row_units + col_units; i++) {
+                    float local_val = ((tidr3 == 7) ? (i > 0 ? udata_x[i - 1][0] : ZERO) : udata_x[i][0]);
+                    new_vals[i] = details::binOp<AssocOp>(__shfl_sync(~0u, udata_y[i][0], (tid + 4), 32), local_val);
+                }
+
+#pragma unroll
+                for (int i = 0; i < row_units + col_units; i++) {
+                    float sink;
+                    details::SelIntrinsics::selWrite((tidr3 == 7), (i > 0 ? udata_x[i - 1][0] : sink), udata_x[i][0],
+                                                       new_vals[i]);
+                }
+#pragma unroll
+                for (int i = 0; i < row_units + col_units; i++)
+                    udata_y[i][0] = udata_x[i][0];
+            } else {
+#pragma unroll
+                for (int i = 0; i < row_units + col_units; i++) {
+                    float local_val =
+                        ((tidr3 < 1) ? (i < row_units + col_units - 1 ? udata_y[i + 1][0] : ZERO) : udata_y[i][0]);
+                    new_vals[i] = details::binOp<AssocOp>(__shfl_sync(~0u, udata_x[i][0], (tid - 4), 32), local_val);
+                }
+
+#pragma unroll
+                for (int i = 0; i < row_units + col_units; i++) {
+                    float sink;
+                    details::SelIntrinsics::selWrite((tidr3 < 1),
+                                                       (i < row_units + col_units - 1 ? udata_y[i + 1][0] : sink),
+                                                       udata_y[i][0], new_vals[i]);
+                }
+            }
+        } while (0);
+
+        // x4 sync
+        do {
+            float new_vals[row_units + col_units];
+#pragma unroll
+            for (int i = 0; i < row_units + col_units; i++) {
+                float local_val =
+                    (pred1 && (tidr3 < 2) ? (i < row_units + col_units - 1 ? udata_y[i + 1][0] : ZERO) : udata_y[i][0]);
+                new_vals[i] = details::binOp<AssocOp>(
+                    __shfl_xor_sync(~0u, local_val, (tid ^ (tid >> 3)) & 0x1 ? 25 : 9, 32), local_val);
+            }
+#pragma unroll
+            for (int i = 0; i < row_units + col_units; i++) {
+                float sink;
+                details::SelIntrinsics::selWrite(pred1 && (tidr3 < 2),
+                                                   (i < row_units + col_units - 1 ? udata_y[i + 1][0] : sink),
+                                                   udata_y[i][0], new_vals[i]);
+            }
+        } while (0);
+
+        // x8 down-scan
+        do {
+            float new_vals[row_units + col_units];
+            if constexpr (Dir::value) {
+#pragma unroll
+                for (int i = 0; i < row_units + col_units; i++) {
+                    float local_val = ((tidr3 >> 1) < (tidm4))
+                                          ? (i != row_units + col_units - 1 ? udata_y[i + 1][0] : ZERO)
+                                          : udata_y[i][0];
+                    float remote_val = __shfl_sync(~0u, local_val, tidm4 == 1 ? (tid + 9) : (tid ^ 18), 32);
+                    new_vals[i] = details::binOp<AssocOp>(remote_val, local_val);
+                }
+#pragma unroll
+                for (int i = 0; i < row_units + col_units; i++) {
+                    float sink;
+                    details::SelIntrinsics::selWrite(((tidr3 >> 1) < (tidm4)),
+                                                       (i != row_units + col_units - 1 ? udata_y[i + 1][0] : sink),
+                                                       udata_y[i][0], new_vals[i]);
+                }
+
+            } else {
+#pragma unroll
+                for (int i = 0; i < row_units + col_units; i++) {
+                    float local_val = ((tidr3 >> 1) > (tidm4)) ? (i > 0 ? udata_y[i - 1][0] : ZERO) : udata_y[i][0];
+                    float remote_val = __shfl_sync(~0u, local_val, tidm4 == 2 ? (tid - 9) : tid ^ 18, 32);
+                    new_vals[i] = details::binOp<AssocOp>(remote_val, local_val);
+                }
+#pragma unroll
+                for (int i = 0; i < row_units + col_units; i++) {
+                    float sink;
+                    details::SelIntrinsics::selWrite(((tidr3 >> 1) > (tidm4)), (i > 0 ? udata_y[i - 1][0] : sink),
+                                                       udata_y[i][0], new_vals[i]);
+                }
+            }
+
+        } while (0);
+
+        return DiagScanState<ROWS, COLS, Dir, ResultType>::fromUdata(udata_y);
+    }
+}
+
+
 static __launch_bounds__(320, 1) __global__ void kernel(const __grid_constant__ Globals<DEFAULT_CONFIG> args) {
     constexpr PreprocessKernelSm90Config CONFIG = DEFAULT_CONFIG;
     using Scheduler = FixedLengthScheduler<CONFIG>;
@@ -543,7 +696,7 @@ static __launch_bounds__(320, 1) __global__ void kernel(const __grid_constant__ 
     extern __shared__ int shmem[];
     kt::shared_allocator<> alloc{shmem};
     LoadSharedMemoryLayouts<CONFIG> &load_layouts = alloc.template allocate<LoadSharedMemoryLayouts<CONFIG>>();
-    StoreSharedMemoryLayout<CONFIG> (&vh_layouts)[CONFIG.N_STORE_STAGES] = alloc.template allocate<StoreSharedMemoryLayout<CONFIG>, 2>();
+    StoreSharedMemoryLayout<CONFIG> (&vh_layouts)[CONFIG.N_STORE_STAGES] = alloc.template allocate<StoreSharedMemoryLayout<CONFIG>, CONFIG.N_STORE_STAGES>();
 
     uint32_t wgid = kt::warpgroup::groupid();
     constexpr uint32_t CONSUMER_A = 0, CONSUMER_B = 1, PRODUCER = 2;
@@ -618,7 +771,7 @@ static __launch_bounds__(320, 1) __global__ void kernel(const __grid_constant__ 
                     task.VHStart++;
                 }
             }
-            kt::group<10>::sync(15);
+            //kt::group<10>::sync(15);
         }
     } else {
         using TBState = diagscan::ScanTbState<CONFIG.WarpKSize, diagscan::details::DownVec>;
@@ -646,12 +799,11 @@ static __launch_bounds__(320, 1) __global__ void kernel(const __grid_constant__ 
             
             #pragma unroll 1
             for(int iter = 0; iter < task.KBlocks; iter++){
-                acc = CONFIG.QkLogOffset;
                 auto k_packet = k_load_pipe.waitBuffer(PRODUCER);
                 //kt::print_utils_group<4>::print("Consumer %u MMA start for iter = %u\n", wgid, iter);
                 
-                wg::emulated_wgmma::mma_ABt(acc, q_tile, k_packet->KBuffer);
-                wg::emulated_wgmma::mma_async_wait();
+                wg::emulated_wgmma::mm_ABt(acc, q_tile, k_packet->KBuffer);
+                //wg::emulated_wgmma::mma_async_wait();
 
                 //kt::print_utils_group<4>::print("Consumer %u MMA end for iter = %u\n", wgid, iter);
                 k_packet.submitToNextAndTrigger();
@@ -669,7 +821,7 @@ static __launch_bounds__(320, 1) __global__ void kernel(const __grid_constant__ 
                 auto state_packet = vh_store_pipe.waitBuffer((should_save && wgid == CONFIG.WARPGROUPS - 1) ? PRODUCER : ((wgid + 1) % CONFIG.WARPGROUPS));
                 //kt::print_utils_group<4>::print("Consumer %u get vh buffer for iter = %u, should_save = %u\n", wgid, iter, should_save);
                 
-                kt::warp::rt_maps::unary_map<Log2Map>(acc, acc);
+                kt::warp::rt_maps::unary_map<Log2Map>(acc, acc + CONFIG.QkLogOffset);
                 acc += rtau;
 
 
@@ -687,7 +839,7 @@ static __launch_bounds__(320, 1) __global__ void kernel(const __grid_constant__ 
                 left_H = acc_state.LrState;
 
                 auto red_init = diagscan::DiagScanHelpers::makeState<diagscan::details::Input, diagscan::details::DownVec>(left_neg_V, top_neg_V);
-                auto res = diagscan::DiagScanHelpers::diagReduce<NegLseOpSlow<true>, INF, diagscan::details::DownVec, diagscan::details::Output>(acc, red_init);
+                auto res = experimental::diagReduce<NegLseOpSlow<true>, INF, diagscan::details::DownVec, diagscan::details::Output>(acc, red_init);
                 left_neg_V = res.LrState;
 
                 res.TbState.store(v_buffer_slice);
@@ -698,7 +850,7 @@ static __launch_bounds__(320, 1) __global__ void kernel(const __grid_constant__ 
 
             }
 
-            kt::group<10>::sync(15);
+            //kt::group<10>::sync(15);
         }
     }
 }

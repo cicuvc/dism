@@ -18,7 +18,7 @@ CheckOptions:
   - key:             readability-identifier-naming.EnumCase
     value:           CamelCase
   - key:             readability-identifier-naming.FunctionCase
-    value:           camelBack
+    value:           snake_case
   # Exclude from scanning as this is an exported symbol used for fuzzing
   # throughout the code base.
   - key:             readability-identifier-naming.FunctionIgnoredRegexp
@@ -30,13 +30,13 @@ CheckOptions:
   - key:             readability-identifier-naming.ValueTemplateParameterCase
     value:           UPPER_CASE
   - key:             readability-identifier-naming.MemberCase
-    value:           CamelCase
+    value:           snake_case
   - key:             readability-identifier-naming.ParameterCase
-    value:           camelCase
+    value:           snake_case
   - key:             readability-identifier-naming.UnionCase
-    value:           CamelCase
+    value:           snake_case
   - key:             readability-identifier-naming.VariableCase
-    value:           camelCase
+    value:           snake_case
   - key:             readability-identifier-naming.IgnoreMainLikeFunctions
     value:           1
   - key:             readability-redundant-member-init.IgnoreBaseInCopyConstructors

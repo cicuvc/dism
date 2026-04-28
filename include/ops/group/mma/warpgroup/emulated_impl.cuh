@@ -29,11 +29,11 @@ struct group<GW>::emulated_wgmma {
         static_assert(D::height == M_DIV_4); // output register is correctly sized
         constexpr int N = B::width;
         constexpr int K = A::width;
-        static_assert(B::height == K); // K dimension must match
+        static_assert((B::rows / kittens::TILE_ROW_DIM<typename B::dtype>) == K); // K dimension must match
         static_assert(std::is_same_v<typename A::T,
                                      typename B::T>); // A and B must match type.
 
-        rt<typename B::T, B::height * 16, B::width * 16, ducks::rt_layout::col> b_reg;
+        rt<typename B::T, (B::rows / kittens::TILE_ROW_DIM<typename B::dtype>) * 16, B::width * 16, ducks::rt_layout::col> b_reg;
         load(b_reg, b);
 
         wmma::mma_AB(d, a, b_reg, accumulate ? d : D{0.f});
@@ -52,12 +52,12 @@ struct group<GW>::emulated_wgmma {
         static_assert(D::height == 1); // output register is correctly sized
         constexpr int N = B::width;
         constexpr int K = A::width;
-        static_assert(B::height == K); // K dimension must match
+        static_assert((B::rows / kittens::TILE_ROW_DIM<typename B::dtype>) == K); // K dimension must match
         static_assert(std::is_same_v<typename A::T,
                                      typename B::T>); // A and B must match type.
 
         rt<typename A::T, A::height * 4, A::width * 16> a_reg;
-        rt<typename B::T, B::height * 16, B::width * 16, ducks::rt_layout::col> b_reg;
+        rt<typename B::T, (B::rows / kittens::TILE_ROW_DIM<typename B::dtype>) * 16, B::width * 16, ducks::rt_layout::col> b_reg;
         load(a_reg, a);
         load(b_reg, b);
 
@@ -75,13 +75,13 @@ struct group<GW>::emulated_wgmma {
         KITTENS_CHECK_WARPGROUP
         constexpr int M_DIV_4 = A::height;
         static_assert(D::height == M_DIV_4); // output register is correctly sized
-        constexpr int N = B::height;
+        constexpr int N = (B::rows / kittens::TILE_ROW_DIM<typename B::dtype>);
         constexpr int K = A::width;
         static_assert(B::width == K); // K dimension must match
         static_assert(std::is_same_v<typename A::T,
                                      typename B::T>); // A and B must match type.
 
-        rt<typename B::T, B::height * 16, B::width * 16> b_reg;
+        rt<typename B::T, (B::rows / kittens::TILE_ROW_DIM<typename B::dtype>) * 16, B::width * 16> b_reg;
         warp::load(b_reg, b);
 
         warp::wmma::mma_ABt(d, a, b_reg, accumulate ? d : D{0.f});
@@ -98,14 +98,14 @@ struct group<GW>::emulated_wgmma {
         constexpr int M = A::height;
         static_assert(M == 4);
         static_assert(D::height == 1); // output register is correctly sized
-        constexpr int N = B::height;
+        constexpr int N = (B::rows / kittens::TILE_ROW_DIM<typename B::dtype>);
         constexpr int K = A::width;
         static_assert(B::width == K); // K dimension must match
         static_assert(std::is_same_v<typename A::T,
                                      typename B::T>); // A and B must match type.
 
         rt<typename A::T, A::height * 4, A::width * 16> a_reg;
-        rt<typename B::T, B::height * 16, B::width * 16> b_reg;
+        rt<typename B::T, (B::rows / kittens::TILE_ROW_DIM<typename B::dtype>) * 16, B::width * 16> b_reg;
         load(a_reg, a);
         load(b_reg, b);
 
@@ -125,12 +125,12 @@ struct group<GW>::emulated_wgmma {
         static_assert(D::height == 1); // output register is correctly sized
         constexpr int N = B::width;
         constexpr int K = A::height;
-        static_assert(B::height == K); // K dimension must match
+        static_assert((B::rows / kittens::TILE_ROW_DIM<typename B::dtype>) == K); // K dimension must match
         static_assert(std::is_same_v<typename A::T,
                                      typename B::T>); // A and B must match type.
 
         rt<typename A::T, A::height * 16, A::width * 4, ducks::rt_layout::col> a_reg;
-        rt<typename B::T, B::height * 16, B::width * 16, ducks::rt_layout::col> b_reg;
+        rt<typename B::T, (B::rows / kittens::TILE_ROW_DIM<typename B::dtype>) * 16, B::width * 16, ducks::rt_layout::col> b_reg;
         load(a_reg, a);
         load(b_reg, b);
 
@@ -148,14 +148,14 @@ struct group<GW>::emulated_wgmma {
         constexpr int M = A::width;
         static_assert(M == 4);
         static_assert(D::height == 1); // output register is correctly sized
-        constexpr int N = B::height;
+        constexpr int N = (B::rows / kittens::TILE_ROW_DIM<typename B::dtype>);
         constexpr int K = A::height;
         static_assert(B::width == K); // K dimension must match
         static_assert(std::is_same_v<typename A::T,
                                      typename B::T>); // A and B must match type.
 
         rt<typename A::T, A::height * 16, A::width * 4, ducks::rt_layout::col> a_reg;
-        rt<typename B::T, B::height * 16, B::width * 16, ducks::rt_layout::row> b_reg;
+        rt<typename B::T, (B::rows / kittens::TILE_ROW_DIM<typename B::dtype>) * 16, B::width * 16, ducks::rt_layout::row> b_reg;
         load(a_reg, a);
         load(b_reg, b);
 

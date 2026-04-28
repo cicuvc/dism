@@ -6,6 +6,8 @@
 
 #include <dism_baseline_nope.hpp>
 
+extern void invokeTMA(void *buffer, size_t batch, size_t seq, size_t head, int b, int s, int n);
+
 namespace{
 
 
@@ -33,7 +35,7 @@ struct BaselineNoPEAttnState {
             assert(k_shape.at(3) == QkDim);
             assert(RcpTau.at(0) == Head);
 
-            if(QkDim == 64 && HeadDim == 64){
+            if(QkDim != 64 || HeadDim != 64){
                 throw std::runtime_error("Currently only headdim = 64 are supported");
             }
 
@@ -71,6 +73,10 @@ PYBIND11_MODULE(dism_C, m) {
 
     auto clz_baseline_nope_state = py::class_<BaselineNoPEAttnState>(m, "BaselineNoPEAttnState");
     BaselineNoPEAttnState::registerType(clz_baseline_nope_state);
+
+    m.def("testTMA", [](at::Tensor data, int b, int s, int h){
+        invokeTMA(data.data_ptr(), data.size(0), data.size(1), data.size(2), b, s, h);
+    });
 }
 
 } // namespace
