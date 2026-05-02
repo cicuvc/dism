@@ -637,8 +637,8 @@ struct GlobalsFwd {
     static constexpr auto C = CONFIG;
     kt::gl<kt::half, -1, -1, -1, C.qk_dim, details::TmaWarpgroupStrided<kt::st_hf<64, CONFIG.qk_dim>, CONFIG.getCheckpointSize()>> Q;
     kt::gl<kt::half, -1, -1, -1, C.qk_dim, details::TmaColumnGrouped<kt::half, C.warp_k_size, C.qk_dim>> K;
-    kt::gl<kt::bf16, -1, -1, -1, C.head_dim, details::TmaColumnGrouped<kt::bf16, C.warp_k_size, C.qk_dim>> V;
-    kt::gl<kt::bf16, -1, -1, -1, C.head_dim, details::TmaWarpgroupStrided<kt::st_bf<64, CONFIG.qk_dim>, CONFIG.getCheckpointSize()>> O;
+    kt::gl<kt::bf16, -1, -1, -1, C.head_dim, details::TmaColumnGrouped<kt::bf16, C.warp_k_size, C.head_dim>> V;
+    kt::gl<kt::bf16, -1, -1, -1, C.head_dim, details::TmaWarpgroupStrided<kt::st_bf<64, CONFIG.head_dim>, CONFIG.getCheckpointSize()>> O;
     kt::gl<float, 1, 1, 1, -1> RcpTau;
 
     kt::gl<float, -1, -1, -1, C.warp_k_size> VBuffer; 
@@ -708,12 +708,12 @@ template<PreprocessKernelSm90Config CONFIG>
 union FwdLoadSharedMemoryLayouts{
     struct DefaultLayout {
         details::TmaColumnGrouped<kt::half, CONFIG.warp_k_size, CONFIG.qk_dim> k_buffer;
-        details::TmaColumnGrouped<kt::bf16, CONFIG.warp_k_size, CONFIG.qk_dim> v_buffer;
+        details::TmaColumnGrouped<kt::bf16, CONFIG.warp_k_size, CONFIG.head_dim> v_buffer;
     } Default[CONFIG.k_stages];
     struct PrefetchLayout {
         DefaultLayout preflight_kv[CONFIG.K_PREFETCH_SIZE];
         details::TmaWarpgroupStrided<kt::st_hf<CONFIG.warp_q_size * 4, CONFIG.qk_dim>, CONFIG.getSkipSize()> q_buffer[CONFIG.WARPGROUPS];
-        details::TmaWarpgroupStrided<kt::st_bf<CONFIG.warp_q_size * 4, CONFIG.qk_dim>, CONFIG.getSkipSize()> in_buffer[CONFIG.WARPGROUPS];
+        details::TmaWarpgroupStrided<kt::st_bf<CONFIG.warp_q_size * 4, CONFIG.head_dim>, CONFIG.getSkipSize()> in_buffer[CONFIG.WARPGROUPS];
     } Prefetch[1];
     kt::st_bf<CONFIG.warp_q_size, CONFIG.head_dim> out_buffer[CONFIG.WARPGROUPS * kt::WARPGROUP_WARPS];
 };
@@ -1055,18 +1055,21 @@ static __launch_bounds__(256+128,1) __global__ void fwd_kernel(const __grid_cons
                 acc_front = acc_front + rtau;
                 auto scan_buffer = sxdiag::TightMMABuffer<float, CONFIG.warp_q_size, CONFIG.warp_k_size>::from_rt(acc_front);
                 
+                // for better register allocation schedule
+                make_causal(acc_front, task.QIdx, i * (CONFIG.warp_k_size / 8), -INFINITY);
+
                 auto u = scan_buffer.expand(std::get<0>(ZERO));
                 auto v = u.with_padding(std::get<1>(ZERO));
 
                 sxdiag::ScanTile<CONFIG.warp_q_size, CONFIG.warp_k_size, float, float> tile(u, v);
-                
+
                 auto red_res = tile.diagScanOrReduce<false, true, MainOp>(sxdiag::StatePair<CONFIG.warp_q_size, CONFIG.warp_k_size, float, float>::from(lr_state, tb_state));
 
                 auto v_scan = std::get<1>(tile.buffers).fold_to_rt();
                 kt::warp::rt_maps::unary_map<details::ops::Logsumexp1Approx>(v_scan, v_scan);
                 v_scan += acc_front;
 
-                make_causal(v_scan, task.QIdx, i * (CONFIG.warp_k_size / 8), -INFINITY);
+                
                 //if(wgid == 0 && warpid == 0) sxdiag::TightMMABuffer<float, CONFIG.warp_q_size, CONFIG.warp_k_size>::from_rt(v_scan).print_tile();
 
                 lr_state = red_res.lr;
