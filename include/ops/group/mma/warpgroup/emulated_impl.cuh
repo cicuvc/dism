@@ -33,10 +33,10 @@ struct group<GW>::emulated_wgmma {
         static_assert(std::is_same_v<typename A::T,
                                      typename B::T>); // A and B must match type.
 
-        rt<typename B::T, (B::rows / kittens::TILE_ROW_DIM<typename B::dtype>) * 16, B::width * 16, ducks::rt_layout::col> b_reg;
-        load(b_reg, b);
+        rt<typename B::T, B::height * 16, B::width * 16, ducks::rt_layout::col> b_reg;
+        warp::load(b_reg, b);
 
-        wmma::mma_AB(d, a, b_reg, accumulate ? d : D{0.f});
+        warp::wmma::mma_AB(d, a, b_reg, accumulate ? d : D{0.f});
     }
     template <ducks::rt::row_layout D, ducks::rt::row_layout A, ducks::st_descriptor::input B>
     __device__ static inline void mm_AB(D &d, const A &a, const B &b) {

@@ -221,42 +221,42 @@ __device__ static inline void operator/=(T &lhs, const V &col_values) {
 template <ducks::rv::all T, typename U>
 __device__ static inline T operator+(const T &lhs, const U &rhs) {
     T dst;
-    warp::rt_maps::add(dst, lhs, rhs);
+    warp::rv_maps::add(dst, lhs, rhs);
     return dst;
 }
 template <ducks::rv::all T, typename U>
 __device__ static inline void operator+=(T &lhs, const U &rhs) {
-    warp::rt_maps::add(lhs, lhs, rhs);
+    warp::rv_maps::add(lhs, lhs, rhs);
 }
 template <ducks::rv::all T, typename U>
 __device__ static inline T operator-(const T &lhs, const U &rhs) {
     T dst;
-    warp::rt_maps::sub(dst, lhs, rhs);
+    warp::rv_maps::sub(dst, lhs, rhs);
     return dst;
 }
 template <ducks::rv::all T, typename U>
 __device__ static inline void operator-=(T &lhs, const U &rhs) {
-    warp::rt_maps::sub(lhs, lhs, rhs);
+    warp::rv_maps::sub(lhs, lhs, rhs);
 }
 template <ducks::rv::all T, typename U>
 __device__ static inline T operator*(const T &lhs, const U &rhs) {
     T dst;
-    warp::rt_maps::mul(dst, lhs, rhs);
+    warp::rv_maps::mul(dst, lhs, rhs);
     return dst;
 }
 template <ducks::rv::all T, typename U>
 __device__ static inline void operator*=(T &lhs, const U &rhs) {
-    warp::rt_maps::mul(lhs, lhs, rhs);
+    warp::rv_maps::mul(lhs, lhs, rhs);
 }
 template <ducks::rv::all T, typename U>
 __device__ static inline T operator/(const T &lhs, const U &rhs) {
     T dst;
-    warp::rt_maps::div(dst, lhs, rhs);
+    warp::rv_maps::div(dst, lhs, rhs);
     return dst;
 }
 template <ducks::rv::all T, typename U>
 __device__ static inline void operator/=(T &lhs, const U &rhs) {
-    warp::rt_maps::div(lhs, lhs, rhs);
+    warp::rv_maps::div(lhs, lhs, rhs);
 }
 
 } // namespace kittens

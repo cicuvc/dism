@@ -323,6 +323,15 @@ struct LeftRightVec{
         #pragma unroll
         for(int i = 0; i < ROW_UNITS; i++) data[i] = {val...};
     }
+    __device__ LeftRightVec(const std::tuple<Ts...>& val){
+        #pragma unroll
+        for(int i = 0; i < ROW_UNITS; i++) data[i] = val;
+    }
+    __forceinline__ __device__ LeftRightVec& operator=(const std::tuple<Ts...>& val){
+        #pragma unroll
+        for(int i = 0; i < ROW_UNITS; i++) data[i] = val;
+        return *this;
+    }
 
     template<int PANEL>
     __device__ void print(){
@@ -536,6 +545,14 @@ struct TopBottomVec{
     __device__ __forceinline__ void store(SharedTopBottomVec<COLS, std::tuple_element_t<PANEL, std::tuple<Ts...>>>& dst) const {
         #pragma unroll
         for(int i = 0; i < TB_UNITS; i++) dst.store(i, std::get<PANEL>(data[i]));
+    }
+
+    template<int PANEL>
+    __device__ __forceinline__ void set(const std::tuple_element_t<PANEL, std::tuple<Ts...>>& value){
+        #pragma unroll
+        for(int i = 0; i < TB_UNITS; i++) {
+            std::get<PANEL>(data[i]) = value;
+        }
     }
 
     template<int PANEL>

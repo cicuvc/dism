@@ -16,7 +16,7 @@ target("cuda-exp")
     add_includedirs("include", "/home/cicuvc/miniconda3/envs/blkw/lib/python3.12/site-packages/torch/include/torch/csrc/api/include", "/home/cicuvc/miniconda3/envs/blkw/lib/python3.12/site-packages/torch/include", "/home/cicuvc/miniconda3/envs/blkw/include/python3.12/", "/usr/local/cuda/include")
     add_linkdirs("/home/cicuvc/miniconda3/envs/blkw/lib/python3.12/site-packages/torch/lib/","/home/cicuvc/miniconda3/envs/blkw/lib/")
     add_cuflags("-std=c++20", "-O3", "-fPIC", "-Wno-unknown-cuda-version")
-    add_cxxflags("-std=c++20","-Wextra", "-Wno-unused-private-field", "-Wno-unused-parameter", "-Wno-unused-local-typedef", "-Wno-unused-variable", "-fPIC")
+    add_cxxflags("-DFMT_HEADER_ONLY", "-std=c++20","-Wextra", "-Wno-unused-private-field", "-Wno-unused-parameter", "-Wno-unused-local-typedef", "-Wno-unused-variable", "-fPIC")
     add_links("python3.12","stdc++", "m", "torch", "c10", "torch_cpu", "torch_cuda", "c10_cuda", "torch_python")
     --add_links("gtest", "stdc++", "m")
 

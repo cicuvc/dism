@@ -138,7 +138,7 @@ using group = kittens::group<N_WARPS>;
         constexpr int RS = RV / 8, CS = CV / 8;
         using print_warp = print_utils_group<1>;
 
-        #pragma unroll
+        #pragma unroll 1
         for(int warp = 0; warp < N_WARPS; warp++){
             if(group::warpid() == warp){
                 print_warp::print("Data from warp %u\n", warp);

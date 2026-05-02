@@ -45,6 +45,21 @@ struct group {
         static_assert(GROUP_WARPS == 1, "barrier-less sync() can only be called by a single warp!");
         asm volatile("bar.warp.sync %0;\n" ::"n"(MASK));
     }
+    __device__ static inline bool elect_leader() { // ptxas need this for TMA/UMMA instructions
+        if constexpr (GROUP_WARPS == 1) {
+            uint32_t elected = 0;
+            asm volatile(
+                "{.reg .pred P;\n"
+                " elect.sync _|P, %1;\n"
+                " selp.u32 %0, 1, 0, P;}\n"
+                : "+r"(elected)
+                : "r"(0xFFFFFFFF)
+            );
+            return static_cast<bool>(elected);
+        } else {
+            return (warpid() == 0 && ::kittens::group<1>::elect_leader());
+        }
+    }
     __device__ static inline void arrive(int id) { asm volatile("bar.arrive %0, %1;\n" ::"r"(id), "n"(GROUP_THREADS)); }
 
     template <ducks::rt::all RT, ducks::st::all ST>
