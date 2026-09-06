@@ -32,6 +32,7 @@
 
 - 暂定沿用 ThunderKittens 的 warp MMA/TMA 组件，结合 `/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh`；若实际代码或性能证据支持，可选 CUTLASS/CuTe。避免无依据地混用多个布局系统。
 - GLX 与旧 sxdiag 的列布局不同。接入前明确逻辑 `(row,col)`、MMA accumulator `(lane,register,element)`、TMA/shared-memory 地址的映射，并验证正向与逆向路径。
+- score GEMM 的 TK accumulator→GLX 列置换已验证可吸收到 B 的 TMA 行加载中，对 warp_k_size=32/64 与 D=32/64/128 均无需 MMA 后 shuffle；公式、5D map 和结果见 `experiments/glx_tma_permute/README.md`。该统一列置换不同于 GLX 的 row-dependent roll，后者仍在寄存器中执行。
 - 新旧列布局都可以通过正确配置 TMA 完成随路转换；不要假设必须物化重排。但 GLX 的 row-dependent roll/skew 仍是单独的寄存器操作，不能与统一列置换混淆。
 - warp_k_size 优先争取 64，32 可作为回退；128 是后续探索目标，须验证寄存器压力和 spill，不能预设不可行。
 - GLX 原公开测试列出 16x64、32x32、16x16；本仓库实验已验证现有模板无需修改即可运行 16x32，具体覆盖及结果见 `experiments/glx_scan/README.md`。多 warp tile 的边界交换和同步由调用方负责。

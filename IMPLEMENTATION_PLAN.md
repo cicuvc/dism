@@ -28,6 +28,10 @@
 
 验收：小 tile 与跨 tile oracle 一致，mask 和边界无 NaN 污染，必要的 sanitizer 检查通过；确认生成代码中的布局转换与 spill 情况。
 
+进展：score GEMM 的 B-TMA 列置换及 TK accumulator→GLX 解释已在 sm120
+覆盖 warp_k_size=32/64、D=32/64/128，六种组合 bit-exact 且 memcheck 通过。
+PV 逆映射、真实 TMA pipeline、多 warp 边界和融合后的资源占用仍待完成。
+
 ## 阶段 2：fixed-length 核心前向
 
 1. 摘要 pass：并行 query checkpoints，计算 GEMM + score，warp 内生成行决策，GLX reduce 输出对角边界摘要。
