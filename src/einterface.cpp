@@ -73,6 +73,17 @@ struct BaselineNoPEAttnState {
         });
     }
 
+    void invokeBwdPreprocess(at::Tensor dO, at::Tensor dV){
+        BaselineNoPEAttnStateImpl<64, 64>::invokeBwdPreprocess({
+            Batch, Seqlen, Head,
+            (half*)FwdQ.data_ptr(), (half*)FwdK.data_ptr(),
+            (nv_bfloat16*)FwdV.data_ptr(),
+            (nv_bfloat16*)dO.data_ptr(),
+            (nv_bfloat16*)dV.data_ptr(),
+            (float*)FwdVBuffer.data_ptr(), (float*)FwdHBuffer.data_ptr(), (float*)RcpTau.data_ptr(), (float*)FwdMax.data_ptr()
+        });
+    }
+
     static void registerType(py::class_<BaselineNoPEAttnState> &clazz) {
         clazz.def(py::init<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>());
         clazz.def_readwrite("fwd_q", &BaselineNoPEAttnState::FwdQ);
@@ -85,6 +96,7 @@ struct BaselineNoPEAttnState {
 
         clazz.def("invoke_fwd_preprocess", &BaselineNoPEAttnState::invokeFwdPreprocess);
         clazz.def("invoke_fwd", &BaselineNoPEAttnState::invokeFwd);
+        clazz.def("invoke_bwd_preprocess", &BaselineNoPEAttnState::invokeBwdPreprocess);
     }
 };
 

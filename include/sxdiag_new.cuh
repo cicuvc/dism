@@ -332,8 +332,39 @@ struct LeftRightVec{
         for(int i = 0; i < ROW_UNITS; i++) data[i] = val;
         return *this;
     }
-
     template<int PANEL>
+    __device__ __forceinline__ void set(const std::tuple_element_t<PANEL, std::tuple<Ts...>>& value){
+        #pragma unroll
+        for(int i = 0; i < ROW_UNITS; i++) {
+            std::get<PANEL>(data[i]) = value;
+        }
+    }
+    template<int PANEL, size_t VLEN>
+    __device__ __forceinline__ void load_right(kittens::sv_fl<VLEN>& src, int offset){
+        uint32_t tid = threadIdx.x & 0x1f;
+        uint32_t tidm4 = tid & 0x3;
+        uint32_t tidr3 = tid >> 2;
+        uint32_t shmem_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&src));
+        #pragma unroll
+        for(int i = 0; i < ROW_UNITS; i++) {
+            if(tidm4 == 0) kittens::move<float>::lds(std::get<PANEL>(data[i]), shmem_ptr + sizeof(float) * (offset + tidr3 + i * 8));
+        }
+    }
+
+    template<int PANEL, bool INV = false, size_t VLEN>
+    __device__ __forceinline__ void load_left(kittens::sv_fl<VLEN>& src, int offset){
+        uint32_t tid = threadIdx.x & 0x1f;
+        uint32_t tidm4 = tid & 0x3;
+        uint32_t tidr3 = (tid >> 2) ^ (INV ? 0x7 : 0x0);
+        uint32_t shmem_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&src));
+        #pragma unroll
+        for(int i = 0; i < ROW_UNITS; i++) {
+            int ii = INV ? (ROW_UNITS - 1 - i) : i;
+            if(tidm4 == 3) kittens::move<float>::lds(std::get<PANEL>(data[i]), shmem_ptr + sizeof(float) * (offset + tidr3 + ii * 8));
+        }
+    }
+
+    template<int PANEL, bool RTL_OUT = true>
     __device__ void print(){
         using common::print;
         using T = std::tuple_element_t<PANEL, std::tuple<Ts...>>;
@@ -346,7 +377,7 @@ struct LeftRightVec{
 
             T val = std::get<PANEL>(data[r / 8]);
 
-            T print_val = pack_shfl_sync(~0u, val, 3 + 4 * (r % 8));
+            T print_val = pack_shfl_sync(~0u, val, (RTL_OUT ? 3 : 0) + 4 * (r % 8));
             if constexpr(std::is_same_v<T, float>) print("%8.4f |", print_val);
             if constexpr(std::is_same_v<T, float2>) print("%8.4f |", print_val.y);
             print("\n");
@@ -561,7 +592,8 @@ struct TopBottomVec{
         uint32_t smem_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(&src.data[0]));
         #pragma unroll
         for(int i = 0; i < TB_UNITS; i++) {
-            int offset = src.smem_index(i, threadIdx.x & 0x1f) * sizeof(T);
+            int sid = src.smem_index(i, threadIdx.x & 0x1f);
+            int offset = (sid) * sizeof(T);
             kittens::move<T>::lds(std::get<PANEL>(data[i]), smem_ptr + offset);
         }
     }

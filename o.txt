@@ -1,0 +1,14 @@
+Preproess kernel exit status: no error
+Preproess kernel exit status: no error
+Task info: cta = 0, batch = 0, head = 0, q_end = 0, k_begin = 0, CurrentQBlock = 16
+Task info: cta = 0, batch = 0, head = 0, q_end = 4, k_begin = 128, CurrentQBlock = 16
+Task info: cta = 0, batch = 0, head = 0, q_end = 8, k_begin = 256, CurrentQBlock = 16
+Task info: cta = 0, batch = 0, head = 0, q_end = 12, k_begin = 384, CurrentQBlock = 16
+Task info: cta = 0, batch = 0, head = 1, q_end = 0, k_begin = 0, CurrentQBlock = 16
+Task info: cta = 0, batch = 0, head = 1, q_end = 4, k_begin = 128, CurrentQBlock = 16
+Task info: cta = 0, batch = 0, head = 1, q_end = 8, k_begin = 256, CurrentQBlock = 16
+Task info: cta = 0, batch = 0, head = 1, q_end = 12, k_begin = 384, CurrentQBlock = 16
+Batch 0 Head 0 v_grad_error mean =  0.00866
+Batch 0 Head 1 v_grad_error mean =  0.00939
+Mean error =  0.00244, max error =  0.01727
+Preproess kernel exit status: no error

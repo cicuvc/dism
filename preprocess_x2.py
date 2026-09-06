@@ -185,6 +185,38 @@ def test_fwd_preprocess(q, k, v, rcptau, CHECKPOINT_SIZE: int = 32):
     total_err = torch.cat(errors, dim=-1)
     print(f"Mean error = {total_err.abs().mean().item():8.5f}, max error = {total_err.abs().max().item():8.5f}")
 
+@triton.jit
+def bwd_preprocess(o, do, drms, fallback_o, d_fallback_o, fwd_max, betas, d_betas, SEQLEN, HEAD, HEADDIM: tl.constexpr, BLOCK_M: tl.constexpr):
+    i_bh = tl.program_id(1)
+    batch = i_bh / HEAD
+    head = i_bh % HEAD
+    o = o + batch * HEAD * SEQLEN * HEADDIM + head * HEADDIM
+    do = do + batch * HEAD * SEQLEN * HEADDIM + head * HEADDIM
+    drms = drms + batch * HEAD * SEQLEN * HEADDIM + head * HEADDIM
+    fallback_o = fallback_o + batch * HEAD * SEQLEN * HEADDIM + head * HEADDIM
+    betas = betas + batch * HEAD * SEQLEN + head * SEQLEN
+    d_betas = d_betas + batch * HEAD * SEQLEN + head * SEQLEN
+    fwd_max = fwd_max + batch * HEAD * SEQLEN + head * SEQLEN
+
+    i_idx = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
+    v_idx = tl.arange(0, HEADDIM)
+    mask = i_idx < SEQLEN
+    o_val = tl.load(o + i_idx[:,None] * HEAD * HEADDIM + v_idx[None, :], mask = mask[:,None]).to(tl.float32)
+    do_val = tl.load(do + i_idx[:, None] * HEAD * HEADDIM + v_idx[None, :], mask = mask[:,None]).to(tl.float32)
+    fallback_o_val = tl.load(fallback_o + i_idx[:, None] * HEAD * HEADDIM + v_idx[None, :], mask = mask[:,None]).to(tl.float32)
+    max_val = tl.load(fwd_max + i_idx, mask = mask)
+    betas_val = tl.load(betas + i_idx, mask = mask)
+
+    d_rms_in = (do_val - (1.0/HEADDIM) * tl.sum(do_val * o_val, -1, keep_dims=True) * o_val) # [N, D]
+    tl.store(drms + i_idx[:,None] * HEAD * HEADDIM + v_idx[None, :], d_rms_in.to(drms.dtype), mask = mask[:, None])
+
+    fallback_weight = tl.exp2(betas_val - max_val)
+    tl.store(d_fallback_o + i_idx[:,None] * HEAD * HEADDIM + v_idx[None, :], (d_rms_in * fallback_weight[:, None]).to(d_fallback_o.dtype), mask = mask[:, None])
+
+    d_betas_val = tl.sum(d_rms_in * fallback_o_val, dim=-1, keepdim=False)
+    tl.store(d_betas + i_idx, d_betas_val, mask = mask)
+
+
 def test_fwd(q, k, v, rcptau, betas, fallback_o):
     BATCH, SEQLEN, HEAD, QK_DIM = q.shape
 
@@ -195,7 +227,12 @@ def test_fwd(q, k, v, rcptau, betas, fallback_o):
 
     launch_fwd_passing_kernel_fixed(state.fwd_v_buffer, state.fwd_h_buffer, SEQLEN)
     
+    state.fwd_h_buffer.zero_()
     state.invoke_fwd()
+
+    do = torch.randn_like(state.fwd_output)
+    dv = torch.empty_like(v)
+    state.invoke_bwd_preprocess(do, dv)
 
     errors = []
 
@@ -207,20 +244,30 @@ def test_fwd(q, k, v, rcptau, betas, fallback_o):
         warp0_M = q[CHECK_BATCH,:,CHECK_HEAD,:].float() @ k[CHECK_BATCH,:,CHECK_HEAD,:].T.float()
         warp0_logM = torch.log2(QK_LOG_OFFSET + warp0_M) + (rcptau[CHECK_HEAD] + QK_BIAS)
 
-
+        
         for i in range(1, warp0_logM.shape[-2]):
             last_state = warp0_logM[i-1,:]
             last_state = torch.roll(last_state, 1)
             last_state[0] = float('-inf')
             warp0_logM[i,:] += lse(last_state, torch.zeros_like(last_state))
 
+        
+
         tmask = torch.tril(torch.ones_like(warp0_logM, dtype = torch.bool))
         warp0_logM = torch.where(tmask, warp0_logM, torch.full_like(warp0_logM, float("-inf")))
         
+        
+        #print((warp0_logM[96:128, 0:16] - Zf[96:128]).T)
+        #print(state.fwd_v_buffer[CHECK_BATCH, CHECK_HEAD, 18:19])
+        #print(state.fwd_h_buffer[CHECK_BATCH, CHECK_HEAD, 1])
+
         Zf = torch.maximum(warp0_logM.max(-1, keepdim=True).values, betas[CHECK_BATCH, CHECK_HEAD, :, None])
         attn = torch.exp2(warp0_logM - Zf)
-        
 
+        #print(torch.exp2(warp0_logM[96:128, 0:16] - Zf[96:128,:]).T)
+        v_grad_error = (attn.T[:,:] @ do[CHECK_BATCH, :, CHECK_HEAD, :].float() - dv[CHECK_BATCH, :, CHECK_HEAD, :].float())
+        #print(v_grad_error.abs().mean(-1,keepdim=True))
+        print(f"Batch {CHECK_BATCH} Head {CHECK_HEAD} v_grad_error mean = {v_grad_error[0:128].abs().mean().item():8.5f}")
         o = (attn @ v[CHECK_BATCH,:,CHECK_HEAD,:].float()) + torch.exp2(betas[CHECK_BATCH, CHECK_HEAD, :, None] - Zf) * fallback_o[CHECK_BATCH, :, CHECK_HEAD, :]
         o = torch.nn.functional.rms_norm(o, (HEADDIM,), eps=1e-4)
 
@@ -234,7 +281,7 @@ def test_fwd(q, k, v, rcptau, betas, fallback_o):
 if __name__ == "__main__":
     torch.set_printoptions(threshold=100000, precision=4, linewidth=100000, sci_mode=False)
     torch.set_default_device('cuda:0')
-    BATCH, SEQLEN, HEAD, QK_DIM, HEADDIM = 2, 512, 2, 64, 64
+    BATCH, SEQLEN, HEAD, QK_DIM, HEADDIM = 1, 512, 2, 64, 64
 
     q_logits = torch.randn((BATCH, SEQLEN, HEAD, QK_DIM), dtype = torch.float32)
     k_logits = torch.randn((BATCH, SEQLEN, HEAD, QK_DIM), dtype = torch.float32)
@@ -244,6 +291,6 @@ if __name__ == "__main__":
 
     q = torch.softmax(q_logits, dim = -1).half()
     k = torch.softmax(k_logits, dim = -1).half()
-    rcptau = torch.rand((HEAD, ), dtype = torch.float32) + 5.0
+    rcptau = torch.rand((HEAD, ), dtype = torch.float32) + 3.0
 
     test_fwd(q, k, v, rcptau, betas, fallback_o)

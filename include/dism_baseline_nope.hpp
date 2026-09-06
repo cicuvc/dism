@@ -15,7 +15,15 @@ struct BaselineNoPEAttnStateImpl {
         float *VBuffer, *HBuffer, *RcpTau, *FwdMax;
     };
 
+    struct BwdPreprocessArgs{
+        size_t Batch, Seqlen, Head;
+        half *Q, *K;
+        nv_bfloat16 *V, *dO, *dV;
+        float *VBuffer, *HBuffer, *RcpTau, *FwdMax;
+    };
+
     static std::array<size_t, 4> getVHBufferShape(size_t batch, size_t head, size_t seqlen);
     static void invokeFwdPreprocess(const FwdPreprocessArgs&);
     static void invokeFwd(const FwdPreprocessArgs&);
+    static void invokeBwdPreprocess(const BwdPreprocessArgs&);
 };
