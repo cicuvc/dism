@@ -1,6 +1,6 @@
 # Dism v2 kernel 执行计划
 
-状态：已开始阶段 1 的独立 GLX 兼容性与寄存器实验；尚未实现 attention kernel。结果见 `experiments/glx_scan/README.md`。
+状态：阶段 1 的独立 GLX、TMA 列置换、融合单 stripe 和三阶段 checkpoint 实验已通过；尚未实现正式 attention kernel。结果见 `experiments/glx_scan/README.md`、`experiments/glx_tma_permute/README.md` 和 `experiments/glx_fused/README.md`。
 
 ## 目标基线
 
@@ -16,7 +16,7 @@
 - 定义 warp 内 RNG 的逻辑行 counter 与 PyTorch generator 消费方式，保证跨 pass、key tiles、重算及后续 varlen 的一致性。检查 generator/CUDA Graph 兼容需求，记录首版边界。
 - 定义生产接口对 hard_prob 广播形状和输入 stride 的支持范围；不静默缩减 reference 语义。
 
-验收：构建入口可用，接口/状态/RNG 约定明确。当前只确认设备可见为 RTX 5090、compute capability 12.0，未完成工具链验证。
+验收：构建入口可用，接口/状态/RNG 约定明确。当前已实测 RTX 5090 / sm120、CUDA 13.1 的 nvcc 与三类 sanitizer；生产接口与 PyTorch generator seed/offset 消费约定尚未完成。
 
 ## 阶段 1：MMA–TMA–GLX 布局和数值原语
 
@@ -30,7 +30,13 @@
 
 进展：score GEMM 的 B-TMA 列置换及 TK accumulator→GLX 解释已在 sm120
 覆盖 warp_k_size=32/64、D=32/64/128，六种组合 bit-exact 且 memcheck 通过。
-PV 逆映射、真实 TMA pipeline、多 warp 边界和融合后的资源占用仍待完成。
+16x64 的 PV 逆映射、三个 key tiles 的 TMA barrier/parity 循环和融合资源已验证：
+九种 D/DV、72 个合成用例，111–166 registers/thread、0 spill、8-byte stack/local。
+另有 20 个独立摘要→对角边界合成→重算用例，最多 12 个 checkpoints，
+验证 forward HState 的 -1 列偏移、padding identity、hard break 与不同 CTA 分组下的 RNG 重放。
+两程序均通过 memcheck/racecheck/synccheck。
+未 padding 输入尾加载、生产 RNG 契约、多 warp 同 tile 协作、重叠流水和完整 attention 对照仍未完成；
+不能将独立 probes 视为阶段 2 已完成。
 
 ## 阶段 2：fixed-length 核心前向
 

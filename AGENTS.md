@@ -36,6 +36,7 @@
 - 新旧列布局都可以通过正确配置 TMA 完成随路转换；不要假设必须物化重排。但 GLX 的 row-dependent roll/skew 仍是单独的寄存器操作，不能与统一列置换混淆。
 - warp_k_size 优先争取 64，32 可作为回退；128 是后续探索目标，须验证寄存器压力和 spill，不能预设不可行。
 - GLX 原公开测试列出 16x64、32x32、16x16；本仓库实验已验证现有模板无需修改即可运行 16x32，具体覆盖及结果见 `experiments/glx_scan/README.md`。多 warp tile 的边界交换和同步由调用方负责。
+- 16x64 融合 score→scan→online softmax→PV 及独立 checkpoint 摘要/合成/重算已通过实验，见 `experiments/glx_fused/README.md`。该 shape 的 forward HState 编码底行列 -1…62，列 63 在 VState；不能按普通底行数组加载。现有 TMA tail 实验使用 padded allocation，尚未证明未 padding 输入的安全尾加载。
 - 初始 logM 及二元组 `(logM,logM)` 明确使用 FP32，accumulator、扫描状态和归约也使用 FP32；BF16 输入及 Tensor Core 路径中的转换位置需要记录。后续可评估 BF16 logM/二元组，但需单独验证误差。
 - GLX 原生 inclusive scan 直接产出 W，不沿用旧 exclusive scan 保存原 score tile、最后再合成 inclusive 结果的做法。让原 score 和不再需要的 affine first 分量尽早结束生命周期；寄存器收益以编译结果为准。
 - 前向 scan 前先对标量 FP32 logM 做 roll，再将已 roll 的结果在寄存器中原地 duplicate 为 `(logM,logM)`。不要先 duplicate 再对两个相同分量分别 shuffle，以降低 roll 的 LSU/MIO 压力。保证展开后标量临时值不再独立存活，检查生成代码的 shuffle 数量与寄存器占用；此优化只适用于两个初始分量相同的前向 log-affine 输入。
