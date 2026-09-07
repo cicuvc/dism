@@ -5,6 +5,9 @@
 
 ## 已实现
 
+- 独立FP32 dV入口`backward.value_gradient`：同前向状态的转置重算、key warp独占累积；
+  BF16 P高位+残差两次MMA。正确性/精度/范围见[DV.md](DV.md)。其余core梯度及autograd尚未接入。
+
 - 三个 CUDA kernels：32行 affine 摘要、对角线 passing、重算 scan + online softmax + PV。
 - 16x64 warp tile，128行/CTA，compute warps 按 `0,4,1,5,2,6,3,7` 交错。
 - 每 CTA 384线程：两个 compute warpgroups + 一个 producer warpgroup。后者仅 warp8 执行加载，另外三个 warp 参与寄存器释放和必要的 CTA 同步。
@@ -166,7 +169,7 @@ core 106项、codegen 1项、环境/oracle 81项，总计188项通过。
 # 反向准备：可选扫描边界保存
 
 反向当前进度：`dism_v2.backward.delta(dout, out)` 已实现独立CUDA预处理，BF16输入、FP32逐行dot输出。
-core五项梯度的自然对数语义/归约公式已有FP64 autograd测试；B1/B2/B3和完整autograd尚未接入。
+core五项梯度的自然对数语义/归约公式已有FP64 autograd测试；独立dV已实现，完整B1/B2/B3和autograd尚未接入。
 delta使用已保存的BF16 O，不是对BF16舍入严格求导；详见IMPLEMENTATION_PLAN的core反向接口约定。
 
 `forward(..., save_boundaries=True)` 在原返回项之后追加 `ScanBoundaries`，
@@ -184,4 +187,4 @@ Padding 使用 affine identity 继续传递状态，不是有效注意力权重�
 边界由现有12-warp输出kernel直接保存：竖边在scalar unroll前取c=7，横边在现有unroll后取最后一行。
 无新增扫描/重排kernel，未改40/232预算。core测试增加所有保存边界的FP64递推对照、
 保存开关O/L2/旧摘要的逐位一致性检查。106项core测试三类sanitizer均通过，零错误/零hazards。
-真实转置MMA重算的独立验证见`experiments/glx_recompute/README.md`；生产反向尚未实现。
+真实转置MMA重算的独立验证见`experiments/glx_recompute/README.md`；独立dV已接入，其他梯度尚未实现。

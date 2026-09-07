@@ -35,7 +35,9 @@ def test_backward_codegen():
     if torch.cuda.get_device_capability()!=(12,0): pytest.skip("sm120a only")
     tool=str(Path(CUDA_HOME)/"bin/cuobjdump")
     sass=subprocess.check_output([tool,"--dump-sass",_extension().__file__],text=True)
+    assert "UTMALDG.5D" in sass
     assert not re.search(r"\b(?:CALL|LDL|STL)(?:\.|\s)",sass)
+    assert not re.search(r"\b(?:ATOM|RED)(?:\.|\s)",sass)
     resources=subprocess.check_output([tool,"--dump-resource-usage",_extension().__file__],text=True)
     sizes=re.findall(r"(?:STACK|LOCAL):(\d+)",resources)
     assert sizes and all(int(x)==0 for x in sizes)

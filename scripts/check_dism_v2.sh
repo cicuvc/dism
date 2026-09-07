@@ -12,6 +12,7 @@ echo "Results: $check_dir"
     tests/test_dism_v2_recompute.py \
     tests/test_dism_v2_reverse.py \
     tests/test_dism_v2_backward.py \
+    tests/test_dism_v2_dv.py \
     --junitxml="$check_dir/pytest.xml" -o junit_family=legacy \
     | tee "$check_dir/pytest.log"
 for checker in memcheck racecheck synccheck; do
@@ -21,6 +22,7 @@ for checker in memcheck racecheck synccheck; do
         --kernel-name kns=_ZN7dism_v2 --error-exitcode 1 \
         "$dism_python" -m pytest -x -q -p no:cacheprovider \
         tests/test_dism_v2_core.py tests/test_dism_v2_recompute.py tests/test_dism_v2_backward.py \
+        tests/test_dism_v2_dv.py \
         > "$check_dir/$checker.log" 2>&1
     tail -3 "$check_dir/$checker.log"
 done

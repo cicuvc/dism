@@ -223,6 +223,23 @@ GLX更新复验：旧前向/布局189项通过；完整前向350通过、44个�
 - 下一步接入B1：复用已验证的独立转置W重算，计算真实dO/V的dP、E与alpha，并融合dV和32-key摘要；
   随后接B2和B3。完整反向12-warp寄存器/双缓冲流水仍需在融合后实测。
 
+### dV正确性里程碑
+
+已实现独立`backward.value_gradient`：单warp CTA持有16key，64query逆序流式重算W/P，
+TMA加载A/dO并在warp内累积FP32 dV，无atomic/global W/P；暂未融合E和32-key reverse summary，
+不是完整B1。当前key先保存在shared、MMA前重新加载以缩短寄存器生命周期，尚无producer流水。
+输入、RNG、精度修正与资源详情见`dism_v2/DV.md`。
+
+初版P单次BF16转换在8193行两方向pure/mixed共4例超阈值；未放宽测试，改用P的BF16高位+
+BF16残差两次MMA。79项dV与76项已有backward测试合跑155项通过。
+随后将全匹配链/全不匹配等也扩至8193行，最终85项dV测试通过，最差相对L2=4.09694e-4，
+最低cosine=0.999999928；覆盖九种D/DV、N至8193、rtau≤lnD。扩充前合并非precision回归442项通过；
+本轮未重跑已有长序列forward precision/embedding precision套件，保留既有44个量化失败。
+所有dV实例无CALL/stack/local/spill/atomic，寄存器141–254；尚未测性能，不能外推12-warp资源预算。
+85项均已覆盖三类sanitizer，零错误/零hazards；日志`/tmp/dism-dv-corrected-check.9ZhQaG`
+及`/tmp/dism-dv-extra-check.afHEMu`。dV正确性里程碑完成，详细边界见DV.md。
+下一阶段才继续融合dP/E与反向摘要，然后B2/B3和完整core autograd。
+
 ## 阶段 4：voc_dism 全链路
 
 - 接入现有 EmbInterpFunction，先复现并解决 embedding backward 的重复 dq/dk 写入问题。

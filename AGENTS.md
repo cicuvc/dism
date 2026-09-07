@@ -34,7 +34,7 @@
 ## 实现组件与布局
 
 - 当前前向主方案：warp tile 16x64，32行 checkpoint，128行/CTA，compute warps 0–3 与 4–7 组成两个交错 warpgroup，连续16行块依次交给 0,4,1,5,2,6,3,7。只保留 0→4、1→5、2→6、3→7 的配对边界依赖，各 compute warpgroup 内四个 warp 独立。暂不拆 GLX upsweep/downsweep。
-- 当前反向主方案按key转置分块：每warp持有16个key，流式加载64个query，dV/dB在warp内累积直接写回，dA使用FP32 atomic。前向已通过可选save_boundaries接入原W坐标下竖16/横64粒度的FP32标量W₂边界；真实转置MMA/TMA、query列RNG和独立重算已在experiments/glx_recompute验证。warpgroup配对通信计划只用于reverse add-mul scan（4→0等）。q_from_k方向的dB是插值梯度，不能无条件称为dK。具体阶段与存储预算见IMPLEMENTATION_PLAN.md；生产反向尚未实现。
+- 当前反向主方案按key转置分块：每warp持有16个key，流式加载64个query，dV/dB在warp内累积直接写回，dA使用FP32 atomic。前向已通过可选save_boundaries接入原W坐标下竖16/横64粒度的FP32标量W₂边界；真实转置MMA/TMA、query列RNG和独立重算已在experiments/glx_recompute验证。warpgroup配对通信计划只用于reverse add-mul scan（4→0等）。q_from_k方向的dB是插值梯度，不能无条件称为dK。具体阶段与存储预算见IMPLEMENTATION_PLAN.md；dV已独立接入，完整反向尚未实现。
 - 当前采用12 warps/CTA：8 compute warps + 4 producer-group warps。sm120a 上整个 producer group 执行 setmaxnreg.dec<40>，两个 compute groups 执行 inc<232>；producer group 中仅 warp8 实际加载，其余参与重分配和必要的 CTA 同步。inc/dec 放在各自长期角色分支内，避免立即汇合导致编译器按低预算分配。K/V 双缓冲，单缓冲对照仍待做。query 初始 shared staging 转入寄存器后复用；资源以完整 CTA 编译结果为准。摘要、入边界及 RNG 均按逻辑 checkpoint/行索引，不能绑定物理 warp 编号。
 - sm120 当前 TMA 使用 shared::cta：本地工具链下 shared::cluster 的5D加载曾生成外部调用，使 setmaxnreg 被忽略。检查 SASS 的 UTMALDG 和 USETMAXREG，不能仅凭 PTX 或源代码判断指令已生效。实际验证见 `dism_v2/README.md`。
 - CTA 行数、checkpoint 高度、warpgroup 数和边界通信方式分别配置。若实测 memory bound，可后续验证 CTA cluster/DSM 内四个等价 compute warpgroup、64行摘要方案；当前不实现 cluster，不预设目标设备支持或性能收益。优先优化计算并行度，不为减少摘要空间引入长串行链。
@@ -52,6 +52,7 @@
 - `/home/cicuvc/cs/projects/rl/lse.cu` 是近似运算候选。其 approx2 源码包含等待 SASS 修改的 EX2 占位表达式，不得原样当作正确实现使用。先保证源码语义正确，再独立评估指令优化。
 - 即使 tile 内 affine 后续使用快速近似，跨 chunk passing 保留完整 `max + log1p(exp2(-abs)) * LOG2E` 语义，控制长程累积误差。
 - 不将 sm120 的性能结论外推到 sm90；两者共享数学和扫描组件，分别配置 tile、流水和调度。
+- dV已作为独立正确性路径接入backward.value_gradient：单warp CTA、16key×64query、FP32 warp累积无atomic，重放前向状态/RNG；P使用BF16高位+残差两次MMA以避免长序列单次BF16转换的精度失败。当前未合入12-warp producer流水或反向摘要，资源141–254寄存器、零spill；不得直接沿用前向232预算。详见dism_v2/DV.md。
 - reverse add-mul三步probe见`experiments/glx_reverse`：32-key摘要、逆向passing、4→0配对双槽通信已通过FP64/三类sanitizer验证。reverse HState编码列1…64，列0由VState补齐；与forward的-1…62不同。当前尚未融合梯度GEMM或反向producer流水。
 
 ## 已知旧实现问题
