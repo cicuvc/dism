@@ -1,4 +1,4 @@
-"""Core delta and dV; score-gradient passes and autograd are not connected yet."""
+"""Core delta, dV and affine summary/passing; B3 and autograd are not connected."""
 from functools import lru_cache
 from pathlib import Path
 import os
@@ -32,13 +32,15 @@ def delta(dout,out):
     return _extension().delta(dout,out)
 
 
-def value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,boundaries,*,sm_scale,rng_state):
+def value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,boundaries,*,sm_scale,rng_state,
+                   v=None,delta=None):
     """Compute FP32 dV using selected A/B/LSE and saved forward states.
 
     Replays the forward direction and row RNG without new generator consumption.
     FP32 P is split into BF16 high/residual for two Tensor Core products; dV
     accumulation is FP32, no atomics or global W/P. No autograd yet.
     Caller must supply unchanged operands, scale and states from the same forward.
+    Supplying both v and FP32 delta returns (dV, affine32_summary, G32_boundary).
     """
     if not isinstance(rng_state,RowRNGState) or not isinstance(boundaries,ScanBoundaries):
         raise TypeError("saved RowRNGState and ScanBoundaries required")
@@ -48,8 +50,11 @@ def value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,boundaries,*,sm_s
         raise ValueError("invalid replay seed/offset")
     if not isinstance(sm_scale,(int,float)):
         raise TypeError("sm_scale must be a scalar")
-    if torch.is_grad_enabled() and any(x.requires_grad for x in (a,b,dout,lse,tau,normalizer,boundaries.vertical,boundaries.horizontal)):
+    if (v is None)!=(delta is None):
+        raise ValueError("v and delta must be supplied together")
+    if torch.is_grad_enabled() and any(x.requires_grad for x in (a,b,dout,lse,tau,normalizer,boundaries.vertical,boundaries.horizontal,*(() if v is None else (v,delta)))):
         raise NotImplementedError("higher-order backward is not implemented")
-    return _extension().value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,
+    result = _extension().value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,
         boundaries.vertical,boundaries.horizontal,float(sm_scale),rng_state.direction=="k_from_q",
-        rng_state.hard_prob,rng_state.seed,rng_state.offset)
+        rng_state.hard_prob,rng_state.seed,rng_state.offset,v,delta)
+    return tuple(result) if v is not None else result[0]

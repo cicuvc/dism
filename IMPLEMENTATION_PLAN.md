@@ -240,6 +240,24 @@ BF16残差两次MMA。79项dV与76项已有backward测试合跑155项通过。
 及`/tmp/dism-dv-extra-check.afHEMu`。dV正确性里程碑完成，详细边界见DV.md。
 下一阶段才继续融合dP/E与反向摘要，然后B2/B3和完整core autograd。
 
+### dV融合摘要与B2 passing
+
+已在dV kernel内接入真实dP/E、稳定alpha和16-key add-mul reduce；后续一个CUDA passing kernel
+组合16→32-key摘要并逆序传递G边界。接口`value_gradient(...,v=v,delta=delta)`返回dV、summary32、boundary32，
+不提供可选参数时仍走独立dV。详见`dism_v2/BACKWARD_SUMMARY.md`。
+这是保持单warp CTA的功能实现：没有启用12-warp producer流水/配对mailbox，暂时多保留16-key local。
+该临时buffer和32-key输出共0.875*BH*np² bytes；np8192/BH1为56MiB，不能称为全路径峰值。
+
+为消除融合spill，dV累加值在阶段间暂存到本warp的shared数组，dP按32维分段加载。
+最终所有dV实例及passing无CALL/stack/local/spill/atomic，融合版170–255寄存器，passing36。
+新增78项summary/边界检查与85项dV和76项backward合跑239项通过。
+同重算W/L₂下FP64 oracle的摘要second/边界最大误差2.223e-5/6.315e-5；
+reference W的长程舍入差异单独记录，不把这项测试当成完整G对autograd验收。
+78项摘要用例三类sanitizer均通过，零错误/零hazards；日志`/tmp/dism-summary-final-check.3J8bU2`。
+合并reference/build/core/codegen/布局/反向原语/dV/摘要回归526项通过，日志`/tmp/dism-summary-all.xml`。
+本轮没有重跑已有forward precision/embedding precision，既有量化失败继续保留。
+下一项为B3 reverse scan和dA/dB/dLSE/drtau，性能流水及状态buffer复用待后续完成。
+
 ## 阶段 4：voc_dism 全链路
 
 - 接入现有 EmbInterpFunction，先复现并解决 embedding backward 的重复 dq/dk 写入问题。

@@ -1,5 +1,8 @@
 # dV 正确性里程碑（sm120a）
 
+本页记录独立dV基线。随后新增的可选dP/E摘要与passing见[BACKWARD_SUMMARY.md](BACKWARD_SUMMARY.md)；
+融合路径会在阶段间把dV累加值暂存shared，与本页寄存器常驻基线的资源策略不同。
+
 入口：`dism_v2.backward.value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,boundaries,sm_scale=...,rng_state=...)`。
 参数是同一次forward的已选方向操作数、FP32 L₂、`save_boundaries=True`返回的边界及RowRNGState。
 输入BF16 contiguous，D/DV独立32/64/128，返回FP32 `[B,H,N,DV]`。

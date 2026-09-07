@@ -6,7 +6,7 @@ import math
 import pytest
 import torch
 from dism_v2.core import forward_interpolated
-from dism_v2.backward import value_gradient
+from dism_v2.backward import value_gradient,delta
 from dism_v2.dism_ref import interpolation_ref,voc_dism_ref
 
 pytestmark=pytest.mark.skipif(not torch.cuda.is_available(),reason="CUDA required")
@@ -57,7 +57,20 @@ def test_dv_long_soft(n,direction,probability,record_property):
     run(64,128,n,direction,probability,record_property,"bounded_soft")
 
 
-def run(d,dv,n,direction,probability,record_property,mode="random"):
+@pytest.mark.parametrize("d,dv",itertools.product((32,64,128),repeat=2))
+@pytest.mark.parametrize("direction",("q_from_k","k_from_q"))
+@pytest.mark.parametrize("probability",(0.,.37,1.))
+def test_backward_summary(d,dv,direction,probability,record_property):
+    run(d,dv,139,direction,probability,record_property,check_summary=True)
+
+
+@pytest.mark.parametrize("n",(1,17,64,65,129,513,1025,2049))
+@pytest.mark.parametrize("mode",("chain","break","random"))
+def test_backward_summary_tails(n,mode,record_property):
+    run(64,128,n,"random",.37 if mode=="random" else 1.,record_property,mode,check_summary=True)
+
+
+def run(d,dv,n,direction,probability,record_property,mode="random",check_summary=False):
     if torch.cuda.get_device_capability()!=(12,0): pytest.skip("sm120a only")
     batch,heads=(1,1) if n>513 else (2,2)
     gen=torch.Generator(device="cuda").manual_seed(741+n+d+dv)
@@ -94,6 +107,47 @@ def run(d,dv,n,direction,probability,record_property,mode="random"):
     reference,aux=voc_dism_ref(q,k,vf,tau,qvoc,kvoc,sm_scale=scale,direction=state.direction,
         hard_prob=probability,interpolation=interp,hard_mask=mask,return_aux=True)
     expected,=torch.autograd.grad(reference,vf,dout.float())
+    if check_summary:
+        dd=delta(dout,out)
+        stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(stream):
+            fused,summary,boundary=value_gradient(a,b,dout,lse,tau,interp.q_index,interp.k_index,norm,edges,**kwargs,v=v,delta=dd)
+        torch.cuda.current_stream().wait_stream(stream)
+        assert torch.equal(before,torch.cuda.get_rng_state()) and torch.equal(explicit_before,gen.get_state())
+        torch.testing.assert_close(fused,actual,atol=2e-6,rtol=2e-6)
+        np=summary.shape[-2]
+        with torch.no_grad():
+            # Isolate the reverse operator from already rounded forward W/L2.
+            # This independent diagnostic rescan reads only saved sparse edges.
+            from test_dism_v2_recompute import probe
+            reconstructed=probe().recompute(a,b,lse,tau,interp.q_index,interp.k_index,
+                edges.vertical,edges.horizontal,scale,state.direction=="k_from_q",probability,state.seed,state.offset)
+            alpha=torch.ones((batch,heads,np,np),device="cuda",dtype=torch.float64)
+            emission=torch.zeros_like(alpha)
+            w=reconstructed[...,:n,:n].double()*math.log(2)
+            finite=torch.isfinite(w)&torch.isfinite(aux["scores"])
+            record_property("summary_w_max_abs",(w[finite]-aux["scores"].double()[finite]).abs().max().item() if finite.any() else 0.)
+            alpha[...,:n,:n]=torch.sigmoid(w)
+            emission[...,:n,:n]=torch.exp(w-norm.double()[...,None]*math.log(2))*(dout.double()@v.double().transpose(-1,-2)-dd.double()[...,None])
+            following=torch.zeros((batch,heads,np),device="cuda",dtype=torch.float64)
+            local_a=torch.ones_like(following); local_b=torch.zeros_like(following)
+            errors=[0.,0.,0.]
+            for k in range(np-1,-1,-1):
+                if k%32==31: local_a.fill_(1); local_b.zero_()
+                sf=torch.nn.functional.pad(following[...,1:],(0,1))
+                sa=torch.nn.functional.pad(local_a[...,1:],(0,1),value=1)
+                sb=torch.nn.functional.pad(local_b[...,1:],(0,1))
+                following=alpha[...,k]*sf+emission[...,k]
+                local_a=alpha[...,k]*sa
+                local_b=alpha[...,k]*sb+emission[...,k]
+                if k%32==0:
+                    for index,(x,y) in enumerate(((summary[...,k//32,:,0],local_a),(summary[...,k//32,:,1],local_b),(boundary[...,k//32,:],following))):
+                        errors[index]=max(errors[index],(x.double()-y).abs().max().item())
+                    torch.testing.assert_close(summary[...,k//32,:,0].double(),local_a,atol=2e-5,rtol=2e-4)
+                    torch.testing.assert_close(summary[...,k//32,:,1].double(),local_b,atol=2e-4,rtol=5e-4)
+                    torch.testing.assert_close(boundary[...,k//32,:].double(),following,atol=5e-4,rtol=1e-3)
+            record_property("summary",json.dumps(dict(d=d,dv=dv,n=n,mode=mode,probability=probability,
+                max_abs_first=errors[0],max_abs_second=errors[1],max_abs_boundary=errors[2])))
     difference=(actual-expected).double()
     denom=expected.double().norm()
     relative=(difference.norm()/denom).item() if denom>0 else difference.norm().item()

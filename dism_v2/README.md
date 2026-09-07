@@ -5,6 +5,9 @@
 
 ## 已实现
 
+- dV可选融合真实dP/E和add-mul摘要；CUDA passing组合为32-key摘要并逆向传递状态。
+  调用和验证范围见[BACKWARD_SUMMARY.md](BACKWARD_SUMMARY.md)，完整score梯度与autograd仍未接入。
+
 - 独立FP32 dV入口`backward.value_gradient`：同前向状态的转置重算、key warp独占累积；
   BF16 P高位+残差两次MMA。正确性/精度/范围见[DV.md](DV.md)。其余core梯度及autograd尚未接入。
 
