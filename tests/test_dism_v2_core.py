@@ -129,7 +129,11 @@ def check_case(d,dv,n,direction,hard,rng_seed=2**63+12345):
     rng=torch.Generator(device="cuda").manual_seed(rng_seed)
     rng.set_offset(2**34+12)
     before=rng.get_offset()
-    actual,l2,summary,boundary,state=forward(*inputs,**kwargs,generator=rng,return_rng_state=True)
+    actual,l2,summary,boundary,edges,state=forward(*inputs,**kwargs,generator=rng,
+        return_rng_state=True,save_boundaries=True)
+    plain=forward(*inputs,**kwargs,rng_state=state)
+    for x,y in zip((actual,l2,summary,boundary),plain):
+        torch.testing.assert_close(x,y,atol=0,rtol=0)
     mixed=0<float(hard)<1
     increment=4*int(mixed)+4*int(random_direction)
     assert rng.get_offset()==before+increment
@@ -168,7 +172,7 @@ def check_case(d,dv,n,direction,hard,rng_seed=2**63+12345):
     torch.testing.assert_close(l2,expected_l,atol=2e-5,rtol=2e-5)
     # Independent double recurrence checks both local summary components and
     # all resolved checkpoint values, including identity padding after N.
-    np=boundary.shape[-1]; rows=summary.shape[2]*32
+    np=boundary.shape[-1]; rows=np
     logs=aux["log_m"].double()/ln2
     previous=torch.full((batch,heads,np),-torch.inf,device="cuda",dtype=torch.float64)
     local_a=torch.zeros_like(previous); local_b=torch.full_like(previous,-torch.inf)
@@ -187,7 +191,10 @@ def check_case(d,dv,n,direction,hard,rng_seed=2**63+12345):
         previous=torch.logaddexp((shifted+m)*ln2,offset*ln2)/ln2
         local_a=sa+m
         local_b=torch.logaddexp((sb+m)*ln2,offset*ln2)/ln2
-        if i%32==31:
+        torch.testing.assert_close(edges.vertical[...,i].double(),previous[...,15::16],atol=3e-5,rtol=3e-5)
+        if i%64==63:
+            torch.testing.assert_close(edges.horizontal[...,i//64,:].double(),previous,atol=3e-5,rtol=3e-5)
+        if i%32==31 and i//32<summary.shape[2]:
             torch.testing.assert_close(boundary[...,i//32,:].double(),previous,atol=3e-5,rtol=3e-5)
             torch.testing.assert_close(summary[...,i//32,:,0].double(),local_a,atol=3e-5,rtol=3e-5)
             torch.testing.assert_close(summary[...,i//32,:,1].double(),local_b,atol=3e-5,rtol=3e-5)

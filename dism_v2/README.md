@@ -127,6 +127,8 @@ SASS 存在 `USETMAXREG.DEALLOC ... 0x28`、`TRY_ALLOC ... 0xe8` 和 `UTMALDG.5D
 同 embedding 输入的 core 输出/L2 全部通过。实际 embedding 的内部 BF16 权重与输出写回量化分离诊断、
 余弦/误差结果同样见 PRECISION.md；尚未接入生产 embedding 自动调用或反向。
 最新完整套件为 **349通过、44失败**，全部失败均为 FP32 插值对照输出阈值；没有放宽容差。
+更新GLX并加入稀疏边界回归后为350通过、同样44失败，203条已保存精度报告与更新前完全一致。
+生产16×64的106项core三类sanitizer复验通过；宽shape验证见 `experiments/glx_boundaries/README.md`。
 
 在仓库根目录使用 blkw：
 
@@ -161,3 +163,21 @@ core 106项、codegen 1项、环境/oracle 81项，总计188项通过。
 - 当前遍历全部 key tiles（包括因果上三角的 masked 工作），尚未进行因果裁剪、单/双缓冲比较或性能测量。
 - 当前每次调用建立 TMA descriptors；CUDA Graph capture 明确拒绝，graph-safe RNG 尚未实现。
 - 摘要和边界是矩形存储，空间 `12*B*H*ceil(N/32)*padded_N` bytes；仍是二次增长。
+# 反向准备：可选扫描边界保存
+
+`forward(..., save_boundaries=True)` 在原返回项之后追加 `ScanBoundaries`，
+如果同时指定 `return_rng_state=True`，RNG state 仍是最后一项。尚无 autograd。
+设 `np=ceil(N/64)*64`，两个 FP32 log2 W₂ 张量为：
+
+- `vertical[B,H,np/16,np]`：`vertical[...,e,i]=W₂[i,16*e+15]`。
+- `horizontal[B,H,np/64,np]`：`horizontal[...,e,j]=W₂[64*e+63,j]`。
+
+Padding 使用 affine identity 继续传递状态，不是有效注意力权重；包含完整 padded 方阵的边界，
+用于后续独立转置重算。未保存 full W/logM。关闭选项不分配边界存储；打开时额外占
+`4*B*H*np²*(1/16+1/64)` bytes（N8192、BH1 为20MiB）。目前不复用旧 summary/boundary，
+因此这20MiB是额外开销，不是总峰值；异步生命周期与复用后续再处理。
+
+边界由现有12-warp输出kernel直接保存：竖边在scalar unroll前取c=7，横边在现有unroll后取最后一行。
+无新增扫描/重排kernel，未改40/232预算。core测试增加所有保存边界的FP64递推对照、
+保存开关O/L2/旧摘要的逐位一致性检查。106项core测试三类sanitizer均通过，零错误/零hazards。
+真实转置MMA重算的独立验证见`experiments/glx_recompute/README.md`；生产反向尚未实现。

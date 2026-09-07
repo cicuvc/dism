@@ -8,6 +8,8 @@ echo "Results: $check_dir"
     tests/test_dism_v2_reference.py tests/test_dism_v2_build.py \
     tests/test_dism_v2_core.py tests/test_dism_v2_codegen.py tests/test_dism_v2_precision.py \
     tests/test_dism_v2_embedding_precision.py \
+    tests/test_dism_v2_boundaries.py \
+    tests/test_dism_v2_recompute.py \
     --junitxml="$check_dir/pytest.xml" -o junit_family=legacy \
     | tee "$check_dir/pytest.log"
 for checker in memcheck racecheck synccheck; do
@@ -15,7 +17,8 @@ for checker in memcheck racecheck synccheck; do
     # kernels (the latter greatly increases sanitizer runtime).
     "$cuda_root/bin/compute-sanitizer" --tool "$checker" \
         --kernel-name kns=_ZN7dism_v2 --error-exitcode 1 \
-        "$dism_python" -m pytest -x -q -p no:cacheprovider tests/test_dism_v2_core.py \
+        "$dism_python" -m pytest -x -q -p no:cacheprovider \
+        tests/test_dism_v2_core.py tests/test_dism_v2_recompute.py \
         > "$check_dir/$checker.log" 2>&1
     tail -3 "$check_dir/$checker.log"
 done

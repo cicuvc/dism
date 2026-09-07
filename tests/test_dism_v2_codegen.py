@@ -25,3 +25,5 @@ def test_sm120a_native_tma_and_register_reallocation():
     resources=subprocess.check_output([str(tool),"--dump-resource-usage",binary],text=True)
     local=re.findall(r"LOCAL:(\d+)",resources)
     assert local and all(int(size)==0 for size in local)
+    stack=re.findall(r"STACK:(\d+)",resources)
+    assert stack and all(int(size)==0 for size in stack)

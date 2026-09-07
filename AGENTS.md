@@ -34,6 +34,7 @@
 ## 实现组件与布局
 
 - 当前前向主方案：warp tile 16x64，32行 checkpoint，128行/CTA，compute warps 0–3 与 4–7 组成两个交错 warpgroup，连续16行块依次交给 0,4,1,5,2,6,3,7。只保留 0→4、1→5、2→6、3→7 的配对边界依赖，各 compute warpgroup 内四个 warp 独立。暂不拆 GLX upsweep/downsweep。
+- 当前反向主方案按key转置分块：每warp持有16个key，流式加载64个query，dV/dB在warp内累积直接写回，dA使用FP32 atomic。前向已通过可选save_boundaries接入原W坐标下竖16/横64粒度的FP32标量W₂边界；真实转置MMA/TMA、query列RNG和独立重算已在experiments/glx_recompute验证。warpgroup配对通信计划只用于reverse add-mul scan（4→0等）。q_from_k方向的dB是插值梯度，不能无条件称为dK。具体阶段与存储预算见IMPLEMENTATION_PLAN.md；生产反向尚未实现。
 - 当前采用12 warps/CTA：8 compute warps + 4 producer-group warps。sm120a 上整个 producer group 执行 setmaxnreg.dec<40>，两个 compute groups 执行 inc<232>；producer group 中仅 warp8 实际加载，其余参与重分配和必要的 CTA 同步。inc/dec 放在各自长期角色分支内，避免立即汇合导致编译器按低预算分配。K/V 双缓冲，单缓冲对照仍待做。query 初始 shared staging 转入寄存器后复用；资源以完整 CTA 编译结果为准。摘要、入边界及 RNG 均按逻辑 checkpoint/行索引，不能绑定物理 warp 编号。
 - sm120 当前 TMA 使用 shared::cta：本地工具链下 shared::cluster 的5D加载曾生成外部调用，使 setmaxnreg 被忽略。检查 SASS 的 UTMALDG 和 USETMAXREG，不能仅凭 PTX 或源代码判断指令已生效。实际验证见 `dism_v2/README.md`。
 - CTA 行数、checkpoint 高度、warpgroup 数和边界通信方式分别配置。若实测 memory bound，可后续验证 CTA cluster/DSM 内四个等价 compute warpgroup、64行摘要方案；当前不实现 cluster，不预设目标设备支持或性能收益。优先优化计算并行度，不为减少摘要空间引入长串行链。
@@ -43,6 +44,7 @@
 - 新旧列布局都可以通过正确配置 TMA 完成随路转换；不要假设必须物化重排。但 GLX 的 row-dependent roll/skew 仍是单独的寄存器操作，不能与统一列置换混淆。
 - warp_k_size 优先争取 64，32 可作为回退；128 是后续探索目标，须验证寄存器压力和 spill，不能预设不可行。
 - GLX 原公开测试列出 16x64、32x32、16x16；本仓库实验已验证现有模板无需修改即可运行 16x32，具体覆盖及结果见 `experiments/glx_scan/README.md`。多 warp tile 的边界交换和同步由调用方负责。
+- 竖16导出验证见`experiments/glx_boundaries/README.md`：16×64的最后register-column c=7不做roll，g=1/3从second直接导出逻辑列15/31/47/63，无额外shuffle；竖16/横64可恢复独立转置tile。更新后的GLX已验证16×128 scan/竖边导出（128 registers、零spill、无新增shuffle），包含它在内的六种默认shape覆盖见实验；32×64的导出映射正确但dense scan数值仍有未定位偏差。32×128数值通过但probe存在spill，不能外推为生产kernel资源已达标。
 - 16x64 融合 score→scan→online softmax→PV 及独立 checkpoint 摘要/合成/重算已通过实验，见 `experiments/glx_fused/README.md`。该 shape 的 forward HState 编码底行列 -1…62，列 63 在 VState；不能按普通底行数组加载。现有 TMA tail 实验使用 padded allocation，尚未证明未 padding 输入的安全尾加载。
 - 初始 logM 及二元组 `(logM,logM)` 明确使用 FP32，accumulator、扫描状态和归约也使用 FP32；BF16 输入及 Tensor Core 路径中的转换位置需要记录。后续可评估 BF16 logM/二元组，但需单独验证误差。
 - GLX 原生 inclusive scan 直接产出 W，不沿用旧 exclusive scan 保存原 score tile、最后再合成 inclusive 结果的做法。让原 score 和不再需要的 affine first 分量尽早结束生命周期；寄存器收益以编译结果为准。

@@ -38,9 +38,20 @@ class RowRNGState:
     hard_prob: float
 
 
+@dataclass(frozen=True)
+class ScanBoundaries:
+    """FP32 log2 W: vertical [B,H,paddedN/16,paddedN], horizontal /64.
+
+    Last axis is query for vertical, key for horizontal. Padding transports
+    diagonal state using affine identity; it is not an attention weight.
+    """
+    vertical: torch.Tensor
+    horizontal: torch.Tensor
+
+
 def forward(a, b, v, lse, tau, q_label, k_label, *, sm_scale, direction,
             hard_prob=0.0, return_debug=False, generator=None, rng_state=None,
-            return_rng_state=False):
+            return_rng_state=False, save_boundaries=False):
     """Return (BF16 O, FP32 log2 normalizer); optional checkpoint diagnostics.
 
     direction='q_from_k': a=q, b=q_from_k, lse=q_lse.
@@ -53,6 +64,7 @@ def forward(a, b, v, lse, tau, q_label, k_label, *, sm_scale, direction,
     Mixed scalar probability reserves four Philox words per row subsequence
     from the CUDA generator. Endpoints and explicit replay consume nothing.
     return_rng_state appends replay metadata to the usual result tuple.
+    save_boundaries appends ScanBoundaries before optional RNG metadata.
     """
     if direction not in ("q_from_k", "k_from_q", "random"):
         raise ValueError("unknown direction")
@@ -89,8 +101,11 @@ def forward(a, b, v, lse, tau, q_label, k_label, *, sm_scale, direction,
         direction = rng_state.direction
     tensors, seed, offset, column_lse = _extension().forward(
         a,b,v,lse,tau,q_label,k_label,float(sm_scale),direction=="k_from_q",float(hard_prob),
-        generator, None if rng_state is None else (rng_state.seed, rng_state.offset), alternative)
-    result = tuple(tensors) if return_debug else tuple(tensors[:2])
+        generator, None if rng_state is None else (rng_state.seed, rng_state.offset), alternative,
+        save_boundaries)
+    result = tuple(tensors[:4]) if return_debug else tuple(tensors[:2])
+    if save_boundaries:
+        result = (*result, ScanBoundaries(*tensors[4:6]))
     state = RowRNGState(seed, offset, tuple(a.shape[:3]),
                         "k_from_q" if column_lse else "q_from_k", float(hard_prob))
     return (*result, state) if return_rng_state else result

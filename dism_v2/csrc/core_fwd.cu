@@ -39,7 +39,7 @@ __device__ __forceinline__ float score(const Args& p, float dot, int bh, int i, 
 }
 
 template<int D,int DV,bool OUTPUT>
-__global__ __launch_bounds__(384,1) void core(Args p, __grid_constant__ const CUtensorMap km,
+__global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __grid_constant__ const CUtensorMap km,
                      __grid_constant__ const CUtensorMap vm) {
     extern __shared__ __align__(128) unsigned char bytes[];
     auto& shared=*reinterpret_cast<Shared<D,DV,OUTPUT>*>(bytes);
@@ -63,13 +63,12 @@ __global__ __launch_bounds__(384,1) void core(Args p, __grid_constant__ const CU
     kt::rt_bf<16,D> qreg;
     if(warp<8) kt::warp::load(qreg,shared.q[warp]);
     __syncthreads(); // q staging is now dead; ring may overwrite the union.
-    int tiles=p.padded_n/64;
     if(warp>=8) {
         // Keep reallocation inside the long-lived role branches: an earlier
         // join makes the compiler conservatively use the smaller budget.
         asm volatile("setmaxnreg.dec.sync.aligned.u32 40;" ::: "memory");
         if(warp==8) {
-        for(int t=0;t<tiles;++t) {
+        for(int t=0;t*64<p.padded_n;++t) {
             int s=t%STAGES;
             if(t>=STAGES) wait(&shared.free[s],((t/STAGES)-1)&1);
             auto& slot=shared.slot[s];
@@ -112,7 +111,7 @@ __global__ __launch_bounds__(384,1) void core(Args p, __grid_constant__ const CU
         Buffer::VState left;
         kt::rt_fl<16,DV> out{0.f};
         float maximum[2]{0,0}, denominator[2]{1,1};
-        for(int t=0;t<tiles;++t) {
+        for(int t=0;t*64<p.padded_n;++t) {
             int s=t%STAGES, phase=(t/STAGES)&1;
             wait(&shared.ready[s],phase);
             Scalar scalar;
@@ -150,7 +149,7 @@ __global__ __launch_bounds__(384,1) void core(Args p, __grid_constant__ const CU
                 top=Buffer::HState::load_shared(shared.mail[warp-4][s]);
                 arrive(&shared.mail_free[warp-4][s]);
             } else if constexpr(OUTPUT) {
-                if(checkpoint>0 && checkpoint<p.checkpoints) {
+                if(checkpoint>0 && checkpoint<=p.checkpoints) {
                     int j=t*64+8*(lane&3)+6-lane/4;
                     int64_t off=(int64_t(bh)*p.checkpoints+checkpoint-1)*p.padded_n;
                     top.init[0].first={0,0};
@@ -181,7 +180,32 @@ __global__ __launch_bounds__(384,1) void core(Args p, __grid_constant__ const CU
                     #pragma unroll
                     for(int c=0;c<8;++c) scalar.data[r][c].value=data.data[r][c].second;
                 }
+                // c=7 has zero roll. Odd lane groups own columns 15/31/47/63.
+                // Affine first is already dead; export from the scalar tile.
+                if(p.vertical && (lane&1)) {
+                    #pragma unroll
+                    for(int r=0;r<2;++r) {
+                        int i=qbase+8*r+lane/4;
+                        if(i<p.padded_n) {
+                            auto x=scalar.data[r][7].value;
+                            int edge=t*4+(lane&3)/2;
+                            int64_t off=int64_t(bh)*(p.padded_n/16)*p.padded_n;
+                            p.vertical[off+int64_t(edge)*p.padded_n+i]=x.u0;
+                            p.vertical[off+int64_t(edge+2)*p.padded_n+i]=x.u1;
+                        }
+                    }
+                }
                 scalar.template roll<false>();
+                if(p.horizontal && qbase%64==48 && qbase<p.padded_n && lane/4==7) {
+                    int64_t off=(int64_t(bh)*(p.padded_n/64)+qbase/64)*p.padded_n+t*64;
+                    #pragma unroll
+                    for(int c=0;c<8;++c) {
+                        auto x=scalar.data[1][c].value;
+                        int j=c+8*(lane&3);
+                        p.horizontal[off+j]=x.u0;
+                        p.horizontal[off+j+32]=x.u1;
+                    }
+                }
                 kt::rt_bf<16,64> weights;
                 #pragma unroll
                 for(int r=0;r<2;++r) {

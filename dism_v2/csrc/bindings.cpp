@@ -13,7 +13,7 @@ std::tuple<std::vector<torch::Tensor>,uint64_t,uint64_t,bool> core_forward(
         torch::Tensor a,torch::Tensor b,torch::Tensor v,torch::Tensor lse,torch::Tensor tau,
         torch::Tensor q_label,torch::Tensor k_label,double scale,bool column_lse,double hard_prob,
         std::optional<at::Generator> generator,std::optional<std::pair<uint64_t,uint64_t>> replay,
-        std::optional<std::vector<torch::Tensor>> alternative) {
+        std::optional<std::vector<torch::Tensor>> alternative, bool save_boundaries) {
     TORCH_CHECK(a.dim()==4 && a.is_cuda(),"A must be CUDA [B,H,N,D]");
     for(const auto& x:{a,b,v,lse,tau,q_label,k_label})
         TORCH_CHECK(x.device()==a.device() && x.is_contiguous(),"inputs must be contiguous on the same CUDA device");
@@ -73,13 +73,16 @@ std::tuple<std::vector<torch::Tensor>,uint64_t,uint64_t,bool> core_forward(
     auto summary=torch::empty({batch,heads,cp,np,2},lse.options());
     auto boundary=torch::empty({batch,heads,cp,np},lse.options());
     auto out=torch::empty_like(v), norm=torch::empty({batch,heads,n},lse.options());
+    auto vertical=torch::empty({batch,heads,save_boundaries?np/16:0,np},lse.options());
+    auto horizontal=torch::empty({batch,heads,save_boundaries?np/64:0,np},lse.options());
     dism_v2::Args p{a.data_ptr(),b.data_ptr(),v.data_ptr(),lse.data_ptr<float>(),tau.data_ptr<float>(),
         q_label.data_ptr<int64_t>(),k_label.data_ptr<int64_t>(),summary.data_ptr<float>(),boundary.data_ptr<float>(),
         norm.data_ptr<float>(),out.data_ptr(),int(batch*heads),int(heads),int(n),np,cp,float(scale),column_lse,float(hard_prob),seed,offset};
+    if(save_boundaries) { p.vertical=vertical.data_ptr<float>(); p.horizontal=horizontal.data_ptr<float>(); }
     auto stream=c10::cuda::getCurrentCUDAStream();
     dism_v2::launch_summary(p,d,stream); C10_CUDA_KERNEL_LAUNCH_CHECK();
     dism_v2::launch_passing(p,stream); C10_CUDA_KERNEL_LAUNCH_CHECK();
     dism_v2::launch_output(p,d,dv,stream); C10_CUDA_KERNEL_LAUNCH_CHECK();
-    return {{out,norm,summary,boundary},seed,offset,column_lse};
+    return {{out,norm,summary,boundary,vertical,horizontal},seed,offset,column_lse};
 }
 PYBIND11_MODULE(TORCH_EXTENSION_NAME,m) { m.def("forward",&core_forward); }

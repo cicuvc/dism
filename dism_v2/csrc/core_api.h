@@ -14,6 +14,7 @@ struct Args {
     bool column_lse;
     float hard_prob;
     uint64_t seed, offset;
+    float *vertical = nullptr, *horizontal = nullptr;
 };
 void launch_summary(const Args&, int d, cudaStream_t);
 void launch_passing(const Args&, cudaStream_t);

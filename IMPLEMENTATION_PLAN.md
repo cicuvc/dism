@@ -122,12 +122,78 @@ E[i,j] = P[i,j] * (dot(dO[i], v[j]) - delta[i])
 G[i,j] = E[i,j] + sigmoid(W[i,j]) * G[i+1,j+1]
 ```
 
+### 当前主方案：按 key 分块的转置反向
+
+用户接受当前前向精度作为初版基线，训练稳定性出现问题后再处理量化误差；测试中的失败与数值报告继续保留，
+不作为当前反向布局验证的阻塞条件，也不通过放宽阈值伪称精度已全部验收。
+
+- 前向训练保存 **每16列 key 的竖边 W₂** 和 **每64行 query 的横边 W₂**，仅 FP32 second 分量。
+  替代此前讨论的横16/竖64方案；前向 score/scan/online softmax 的16×64计算 tile不变。
+  32行 affine 摘要仅用于前向 passing，生命周期结束后可复用其空间，但需保证异步 stream/调试返回值语义。
+- 反向每个 warp 持有16个 key 的 B 操作数，流式加载64个 query 的 A/dO，使用转置视图 `[16 key,64 query]`。
+  原坐标的竖16边界对应转置视图的 top，横64对应 left，允许按 query tile 逆序独立重算 W。
+  不沿用前向 warpgroup0→1 的重算边界传递；仅在反向 add-mul scan 中配对 `4→0,5→1,6→2,7→3`。
+- 128个 key/CTA，逻辑16-key块仍交错分给0,4,1,5,2,6,3,7；反向摘要粒度32个 key。
+  producer沿query逆序提供双缓冲，12-warps、40/232为初始候选，完整反向寄存器和流水须重新编译验证。
+- B1：独立重算W/P/E/alpha，warp内累积dV并直接写回，生成32-key反向affine摘要。
+  B2：沿对角线反向passing得到key chunks的真实梯度入边界。
+  B3：重算并reverse scan得到G，warp内累积dB并直接写回，对dA做FP32 atomic，归约dLSE/drtau。
+  delta可先由独立小kernel生成；不保留完整G/P/W矩阵。
+- 所有query tiles由同一key warp遍历，因此dV与dB无跨CTA写竞争，不做split-query；dA存在跨key的累加。
+  q_from_k方向B=q_from_k，k_from_q方向B=K；无atomic的是core的dB，不应无条件称为原始dK。
+- 梯度定义在自然对数logits域，P=`exp2(W₂-L₂)`、alpha=`1/(1+exp2(-W₂))`（用稳定形式计算）。
+  affine `(a,b)*(c,d)=(a*c,b*c+d)`，初始`(alpha,E)`；真实hard不匹配`(0,0)`，padding identity`(1,0)`。
+  drtau包括soft与hard匹配项，不跳过hard行递推；后续dA/dB不重复乘LOG2E。
+- RNG逻辑身份不变；转置tile中64个query对应列而不是行，每个query的hard/soft选择沿16个key广播。
+- 忽略尾部取整，边界矩形存储约`4*BH*N²*(1/16+1/64)` bytes；N8192/BH1约20MiB。
+  这是保存边界的空间，不是整个forward/backward的峰值临时内存；后续仍需生命周期/因果裁剪预算。
+
+首个验证：从前向16×64 inclusive scan导出逻辑列15/31/47/63的second分量；
+检查GLX roll前后映射、tail/identity、负无穷与跨tile状态，再用竖16/横64边界独立恢复转置tile。
+实验目录 `experiments/glx_boundaries`。下一阶段才实现真实前向checkpoint写回和reverse add-mul scan，
+随后融合dV/dB/dA GEMM；本布局probe不代表反向已实现。
+
+2026-09-07验证结果：16×64的`data[r][7].second`在roll后仍对应原行，g=1/3直接输出15/31/47/63列，
+无新增shuffle。40个跨tile/尾部case中，竖16/横64独立恢复转置tile成功，double最大误差6.26467e-6，
+导出边界与完整W bit-exact。另验证16×16、16×32、32×16、32×32、16×64共25个单tile case；
+全部默认实例无CALL/stack/local/spill，导出前后SHFL相同，三类sanitizer通过。32×64导出映射仍正确，
+但dense scan对oracle有未定位偏差；当时16×128受GLX静态断言限制（更新后结果见下）。详情见实验README，
+回归入口`tests/test_dism_v2_boundaries.py`。生产kernel尚未改动。
+
+GLX更新复验：旧前向/布局189项通过；完整前向350通过、44个既有精度失败，失败集合和203条精度报告与
+更新前完全一致。106项core用例三类sanitizer均通过。旧scan/reduce/log-affine探针也全部通过。
+16×128现已支持并加入默认边界回归：5例log-affine数值通过、边界bit-exact，baseline/导出均128寄存器、
+124条SHFL、零spill；上游14项正/反scan和12项reduce等价检查通过，memcheck零错误。
+32×128的5例数值/导出也通过，但probe占255寄存器并有152/144 bytes stack及LDL/STL，保留为探索项。
+32×64的dense数值偏差仍可复现（max_abs=0.1004318），不作为已验收shape。尚未扩大生产kernel的tile。
+
 - 预处理 delta，重算前向 tile 并计算 dV 和反向 affine 摘要。
 - 反向传递 checkpoint 边界，再重算并 reverse scan，得到 score 梯度。
 - 计算左右 GEMM 输入梯度、对应 LSE 的 row/column reduction 和 rtau 梯度；soft mask 只作用在 soft score 的局部导数，不屏蔽递推链本身。
 - 初始跨 CTA 累加可使用 FP32 atomics 或显式 partial buffers，按实测选择并说明确定性；不使用 BF16 原子累加作为梯度精度基线。
 
 验收：core 全部可微输入对照 autograd；覆盖混合 hard/soft 跨 checkpoint 梯度传播、所有维度组合、tail 和两种方向。区分近似算子反向策略与精确数学梯度。
+
+### 反向实现前的准备项（当前执行顺序）
+
+1. 实际12-warp前向导出竖16/横64：已接入可选`save_boundaries`，返回FP32 W₂边界，
+   不物化全矩阵。106项core测试覆盖全部边界与FP64递推、保存开关逐位输出一致性，
+   加codegen共107项通过。尾部额外padding checkpoint承接最后一个已有32行边界。
+   初次集成在D64/DV64出现8-byte stack；移除跨角色分支存活的tiles循环上界后恢复
+   12实例STACK/LOCAL=0，无CALL/LDL/STL，原生TMA与40/232重分配保留。
+   当前保存状态单独分配，尚未做临时空间复用或性能计时。
+   106项core回归分别通过memcheck/racecheck/synccheck，零错误/零hazards；
+   日志`/tmp/dism-saved-edges.U5afDy`。
+2. 用真实BF16 MMA score、转置query列RNG、方向LSE和mask，验证按query逆序的独立重算。
+   仅允许读上述边界，不能读取完整W。真实MMA独立probe已实现于`experiments/glx_recompute`：
+   96数值用例+1codegen通过，FP64 GEMM/递推对照所有padded元素；D32/64/128资源125/124/193
+   registers、STACK/LOCAL=0，无CALL/LDL/STL。生产反向尚未接入，未外推为融合反向资源。
+   合并reference/build/core/codegen/稀疏边界/真实重算回归共286项通过；本轮未重跑长序列
+   precision与embedding_precision，先前44个量化相关失败仍保留，不声称完整精度套件全通过。
+   真实重算97项分别通过三类sanitizer，零错误/零hazards；日志`/tmp/dism-recompute-check.3YaK76`。
+3. 构建Dism专用reverse add-mul验证：signed E、稳定alpha、hard break/identity、
+   4→0配对mailbox、32-key摘要与reverse passing，对照独立FP64递推。
+4. 固定core梯度接口与归约归属，再实现B1/B2/B3；最后处理embedding backward写竞争及全链路。
 
 ## 阶段 4：voc_dism 全链路
 
