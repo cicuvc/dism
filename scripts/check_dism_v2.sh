@@ -10,6 +10,7 @@ echo "Results: $check_dir"
     tests/test_dism_v2_embedding_precision.py \
     tests/test_dism_v2_boundaries.py \
     tests/test_dism_v2_recompute.py \
+    tests/test_dism_v2_reverse.py \
     --junitxml="$check_dir/pytest.xml" -o junit_family=legacy \
     | tee "$check_dir/pytest.log"
 for checker in memcheck racecheck synccheck; do

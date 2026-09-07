@@ -52,6 +52,7 @@
 - `/home/cicuvc/cs/projects/rl/lse.cu` 是近似运算候选。其 approx2 源码包含等待 SASS 修改的 EX2 占位表达式，不得原样当作正确实现使用。先保证源码语义正确，再独立评估指令优化。
 - 即使 tile 内 affine 后续使用快速近似，跨 chunk passing 保留完整 `max + log1p(exp2(-abs)) * LOG2E` 语义，控制长程累积误差。
 - 不将 sm120 的性能结论外推到 sm90；两者共享数学和扫描组件，分别配置 tile、流水和调度。
+- reverse add-mul三步probe见`experiments/glx_reverse`：32-key摘要、逆向passing、4→0配对双槽通信已通过FP64/三类sanitizer验证。reverse HState编码列1…64，列0由VState补齐；与forward的-1…62不同。当前尚未融合梯度GEMM或反向producer流水。
 
 ## 已知旧实现问题
 

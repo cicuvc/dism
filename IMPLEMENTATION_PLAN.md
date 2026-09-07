@@ -193,6 +193,12 @@ GLX更新复验：旧前向/布局189项通过；完整前向350通过、44个�
    真实重算97项分别通过三类sanitizer，零错误/零hazards；日志`/tmp/dism-recompute-check.3YaK76`。
 3. 构建Dism专用reverse add-mul验证：signed E、稳定alpha、hard break/identity、
    4→0配对mailbox、32-key摘要与reverse passing，对照独立FP64递推。
+   已实现`experiments/glx_reverse`三步独立probe，45例全部通过，摘要first/second、passing边界及G
+   最大绝对误差8.11646005e-7。N最长513，含非对齐尾部、混合break、全不匹配和ln64长链。
+   reverse HState逻辑列1…64，列0由VState补齐；不能沿用前向-1…62编码。
+   摘要/scan/passing分别116/138/36寄存器，STACK/LOCAL=0，无CALL/LDL/STL。
+   三类sanitizer零错误/零hazards，日志`/tmp/dism-reverse-check.ZXq7hw`。
+   E中的signed_dP为测试信号，尚未融合真实dO/V/delta、MMA或12-warp producer流水。
 4. 固定core梯度接口与归约归属，再实现B1/B2/B3；最后处理embedding backward写竞争及全链路。
 
 ## 阶段 4：voc_dism 全链路
