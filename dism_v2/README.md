@@ -10,7 +10,7 @@
 - 每 CTA 384线程：两个 compute warpgroups + 一个 producer warpgroup。后者仅 warp8 执行加载，另外三个 warp 参与寄存器释放和必要的 CTA 同步。
 - K/V 双缓冲，配对 bottom mailbox 双缓冲；consumer A 完整 scan/reduce 后传出边界，未拆 upsweep/downsweep。
 - 输入 A/B/V 是 BF16，D/DV 独立取32/64/128；LSE、rtau、logM、affine pair、normalizer 和累加器为 FP32。
-- 固定 `q_from_k` / `k_from_q`；hard_prob 仅支持标量0或1。未实现混合 RNG，接口明确拒绝而非生成 global mask。
+- 固定 `q_from_k` / `k_from_q`；hard_prob 支持 [0,1] 标量，混合行决策由 warp 内 Philox 生成，不生成 global mask。
 - 安全的非对齐尾加载：完整 K/V tile 用 TMA，最后不足64行由 producer 检查逻辑行并填零到同一置换 shared view。无效 query warps 不提前退出。
 - 输出 BF16 O、FP32 log2 normalizer；可选返回32行摘要与底边用于调试，绝不物化完整 logM/W/P。
 
@@ -29,6 +29,38 @@ out, log_normalizer_2 = forward(
 所有输入要求 contiguous、同一 CUDA device；labels=int64、LSE/rtau=FP32。
 BF16 interpolation 转换由调用方显式进行，测试 oracle 使用相同转换结果。
 有梯度需求时入口明确拒绝，不能将本版当作 autograd 实现。
+
+## 行选择 RNG 契约
+
+使用 Philox4x32-10，逻辑 row=`(batch*H+head)*N+query_row`；counter 四个 word
+为 `(low32(offset/4), high32(offset/4), low32(row), high32(row))`，key 为 seed 的低/高32位。
+取输出第一个 word 的高24位乘 `2^-24`，与 FP32 hard_prob 比较，得到 hard 决策。
+概率先转换为 FP32，因此有相应量化；不承诺与 `torch.rand` 的线程映射或 reference 默认随机 mask 逐位相同。
+生产路径每个 compute warp 的 lane0–15 各生成一行，再用两次 shuffle 分发给该行的 MMA lanes；
+两枚决策保留在寄存器中，位于 key 循环之外。摘要和重算独立生成同一决策；passing 不生成 RNG。
+
+默认使用输入设备的 PyTorch CUDA generator，也可传 `generator=`。在 generator mutex 内预留
+4 个 Philox word（offset 按每个 subsequence 的 word 数计，不是全网格样本总数），
+每个逻辑行使用该 block 的第一个 word。一次混合调用只推进 offset 4，三个 pass 不分别消费。
+hard_prob=0/1 不推进状态。无索引的 `torch.Generator(device="cuda")` 也接受；显式设备须匹配输入。
+
+```python
+out, l2, state = forward(
+    a, b, v, lse, rtau, q_index, k_index, sm_scale=scale,
+    direction="q_from_k", hard_prob=0.37, return_rng_state=True,
+)
+out2, l2_again = forward(
+    a, b, v, lse, rtau, q_index, k_index, sm_scale=scale,
+    direction="q_from_k", hard_prob=0.37, rng_state=state,
+)
+```
+
+`RowRNGState` 只含 seed、offset、逻辑 [B,H,N]、已选 direction 和概率；不含行数组。
+显式重放不访问/推进 generator，要求 shape、direction、概率一致，不能同时传 generator。
+`return_rng_state=True` 在通常返回值（或四项 debug 返回值）末尾追加状态。
+跨 tile/摘要/重算不依赖 CTA、warp 号；未来 varlen 应把 row 身份替换为明确的 sequence/token 索引契约，
+不能直接依赖 padding 或 CTA 排布。当前仅验证既有交错配置，不声称测试了其他 CTA 配置。
+CUDA Graph capture 当前明确拒绝；尚未实现 graph-safe generator 状态以及全局随机 direction。
 
 ## setmaxnreg 与 TMA 实测
 
@@ -67,22 +99,27 @@ MAX_JOBS=2 /home/cicuvc/miniconda3/envs/blkw/bin/python -m pytest -q tests/test_
 ```
 
 `DISM_VERBOSE_BUILD=1` 可显示首次构建的 ptxas 资源，GLX 路径由 `GLX_ROOT` 覆盖。
-core 数值用例49个：九种 D/DV × 两方向 × soft/hard 共36个，另有13种尾部长度，最大N=513，B=H=2。
+原有 core 数值用例49个：九种 D/DV × 两方向 × soft/hard 共36个，另有13种尾部长度，最大N=513，B=H=2。
 检查 O、log2 normalizer、所有局部摘要的两个分量以及所有已解析 checkpoint（含 padding）。
 O 对 BF16 interpolation reference 的断言容差是 atol=0.008/rtol=0.012，
 L2 是2e-5，double affine/boundary 对照是3e-5；这些是验收阈值，不是实测最大误差。
 `test_dism_v2_codegen.py` 防止 setmaxnreg 被静默忽略、任何 CALL 或 local load/store 回归。
-49个数值用例加 codegen 检查共50项通过，连同环境/oracle 准备测试总计131项。
+RNG 增加九种 D/DV × 两方向的18个混合用例、6个混合尾部用例，以及5个默认 generator / 实际行身份用例；
+另有 Philox 零 counter/零 key 的已知向量检查。CPU 整数 Philox 生成 oracle mask，核对摘要、边界、输出和重放。
+覆盖64位 seed 高位、offset 超32位、显式/默认 generator、重设 seed、端点不消费及连续调用 offset+4；
+全不匹配 labels 的 L2==0 精确标识 hard 行，用于直接核对实际 GPU 决策而不导出 mask。
+core 79项、codegen 1项、环境/oracle 81项，总计161项通过。
 尾加载的 ready barrier 使用32个 producer 线程各自 arrive，而非单个 leader 代为发布；
 这修复了 racecheck 在普通 shared 写入与 consumer ldmatrix 之间报告的竞争。
-最终49个 core 用例均完成 memcheck、racecheck、synccheck：0 errors，racecheck 也是0 hazards/0 warnings。
+接入 RNG 后，79项 core 测试均完成 memcheck、racecheck、synccheck：0 errors，racecheck 也是0 hazards/0 warnings。
+本次完整日志位于 `/tmp/dism-v2-check.sPZ4nb`（临时目录）；资源检查仍为12个 core 实例 REG=168、STACK=0、LOCAL=0。
 复现完整检查用 `bash scripts/check_dism_v2.sh`，脚本只对 mangled name 含 `_ZN7dism_v2`
 的新 kernel 做 sanitizer instrumentation，不检查用于对照的 PyTorch kernels。
 
 ## 未完成
 
-- mixed hard_prob、PyTorch generator seed/offset 契约和全局 random direction。
+- 全局 random direction（目前 core 接受预先选定方向的操作数）。
 - 广播 hard_prob、一般 stride、varlen、sm90、backward、embedding 全链路集成。
 - 当前遍历全部 key tiles（包括因果上三角的 masked 工作），尚未进行因果裁剪、单/双缓冲比较或性能测量。
-- 当前每次调用建立 TMA descriptors；CUDA Graph 支持尚未验证。
+- 当前每次调用建立 TMA descriptors；CUDA Graph capture 明确拒绝，graph-safe RNG 尚未实现。
 - 摘要和边界是矩形存储，空间 `12*B*H*ceil(N/32)*padded_N` bytes；仍是二次增长。

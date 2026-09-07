@@ -3,6 +3,7 @@
 #include "core_api.h"
 #include "log_affine.cuh"
 #include "pipeline.cuh"
+#include "row_rng.cuh"
 
 namespace dism_v2 {
 namespace kt=kittens;
@@ -29,10 +30,10 @@ template<int D,int DV,bool OUTPUT> struct Shared {
     Buffer::HState::SharedStorage mail[4][STAGES];
 };
 
-__device__ __forceinline__ float score(const Args& p, float dot, int bh, int i, int j) {
+__device__ __forceinline__ float score(const Args& p, float dot, int bh, int i, int j, bool hard) {
     if(i>=p.n || j>=p.n || j>i) return -INFINITY;
     float tau=p.tau[bh%p.heads];
-    if(p.hard) return p.q_label[int64_t(bh)*p.n+i]==p.k_label[int64_t(bh)*p.n+j]?tau*LOG2E:-INFINITY;
+    if(hard) return p.q_label[int64_t(bh)*p.n+i]==p.k_label[int64_t(bh)*p.n+j]?tau*LOG2E:-INFINITY;
     float l=p.lse[int64_t(bh)*p.n+(p.column_lse?j:i)];
     return (dot*p.scale-l+tau)*LOG2E;
 }
@@ -102,6 +103,12 @@ __global__ __launch_bounds__(384,1) void core(Args p, __grid_constant__ const CU
         }
     } else {
         asm volatile("setmaxnreg.inc.sync.aligned.u32 232;" ::: "memory");
+        // One lane per query row generates a decision, before the key loop.
+        int decision=0;
+        if(lane<16 && qbase+lane<p.n)
+            decision=row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qbase+lane,p.hard_prob);
+        bool hard[2]={bool(__shfl_sync(0xffffffff,decision,lane/4)),
+                      bool(__shfl_sync(0xffffffff,decision,8+lane/4))};
         Buffer::VState left;
         kt::rt_fl<16,DV> out{0.f};
         float maximum[2]{0,0}, denominator[2]{1,1};
@@ -120,7 +127,7 @@ __global__ __launch_bounds__(384,1) void core(Args p, __grid_constant__ const CU
                     for(int c=0;c<8;++c) {
                         auto x=accum.tiles[0][c/2].data[r+2*(c&1)];
                         auto a=Buffer::layout(r,c,0), b=Buffer::layout(r,c,1);
-                        scalar.data[r][c].value={score(p,x.x,bh,qbase+a.first,t*64+a.second),score(p,x.y,bh,qbase+b.first,t*64+b.second)};
+                        scalar.data[r][c].value={score(p,x.x,bh,qbase+a.first,t*64+a.second,hard[r]),score(p,x.y,bh,qbase+b.first,t*64+b.second,hard[r])};
                     }
                 }
             }

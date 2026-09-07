@@ -27,6 +27,7 @@
 - 使用可重放的 counter-based RNG 或等价方案，将逻辑 `(sequence/batch, head, query row)` 映射到随机数。不得使用会随 CTA 调度、warp 所属或 key tile 改变的随机身份。
 - 同一行在不同 key tiles、前向摘要、前向重算和反向重算中的决策必须一致。只保存 seed、offset、选定的全局 direction 等少量元数据；反向不再消耗新的随机数。
 - 与 PyTorch generator 的 seed/offset 管理方式、每次调用的随机数消费约定必须显式记录并测试。
+- 当前 core 使用 Philox4x32-10，逻辑行 `(batch*H+head)*N+row` 为 subsequence，offset/4 为 block counter；取第一个 word 的高24位生成 [0,1) uniform，与 FP32 概率比较。混合标量概率调用在 generator mutex 内预留4 words；0/1及显式 RowRNGState 重放不推进 generator。每个 compute warp 在 key 循环前由16个 lane 各生成一行，shuffle 分发，摘要/重算共享同一身份。当前不支持 CUDA Graph capture、概率广播和全局 random direction；详见 `dism_v2/README.md`。
 - reference 的显式 `hard_mask`/`interpolation` 可用于调试对照，但不是生产路径的预计算 mask 方案。调试导出的 mask 不得进入正式性能路径。
 
 ## 实现组件与布局

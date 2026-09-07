@@ -1,6 +1,6 @@
 # Dism v2 kernel 执行计划
 
-状态：阶段 1 的独立 GLX、TMA 列置换、融合单 stripe 和三阶段 checkpoint 实验已通过。阶段 2 已实现固定 direction、hard_prob=0/1 的三阶段 CUDA core 前向；混合 RNG、完整接口、反向与性能基准仍未完成。新代码、实测和边界见 `dism_v2/README.md`；不能称为完整 voc_dism 已完成。
+状态：阶段 1 的独立 GLX、TMA 列置换、融合单 stripe 和三阶段 checkpoint 实验已通过。阶段 2 已实现固定 direction、标量 hard_prob（含混合 RNG）的三阶段 CUDA core 前向；完整接口、全局随机 direction、反向与性能基准仍未完成。新代码、实测和边界见 `dism_v2/README.md`；不能称为完整 voc_dism 已完成。
 
 ## 目标基线
 
@@ -18,7 +18,7 @@
 - 定义 warp 内 RNG 的逻辑行 counter 与 PyTorch generator 消费方式，保证跨 pass、key tiles、重算及后续 varlen 的一致性。检查 generator/CUDA Graph 兼容需求，记录首版边界。
 - 定义生产接口对 hard_prob 广播形状和输入 stride 的支持范围；不静默缩减 reference 语义。
 
-验收：构建入口可用，接口/状态/RNG 约定明确。当前已实测 RTX 5090 / sm120、CUDA 13.1 的 nvcc 与三类 sanitizer；生产接口与 PyTorch generator seed/offset 消费约定尚未完成。
+验收：构建入口可用，接口/状态/RNG 约定明确。当前已实测 RTX 5090 / sm120、CUDA 13.1 的 nvcc 与三类 sanitizer；fixed-direction core 的标量概率与 Philox seed/offset 契约已实现。完整 voc_dism 接口、概率广播及 graph-safe RNG 尚未完成。
 
 2026-09-07 环境准备：使用 conda `blkw`，解释器 `/home/cicuvc/miniconda3/envs/blkw/bin/python`；Python 3.12.12、PyTorch 2.13.0+cu130、Triton 3.8.0、pytest 9.0.2，ninja 可导入，GPU BF16 matmul 已实测。PyTorch CUDA 13.0 与系统 nvcc 13.1 不完全一致；现已在该组合完成最小 sm120 PyTorch CUDA 扩展的编译、加载、执行：BF16 bit-copy、137元素尾部、空输入和非默认 stream 通过。这不替代正式 TK/GLX 扩展的验证。
 
@@ -99,9 +99,13 @@
 
 验收：对照相同 interpolation、direction 和行决策的 reference，所有目标形状前向正确；完全不匹配行输出为零，长匹配链数值稳定。
 
-当前实测：固定方向 core 的49个用例通过，覆盖九种 D/DV、两个 direction、soft/hard、B=H=2、N最长513和多个尾部边界。检查 O、L2、局部摘要两个分量及所有 resolved checkpoints。12-warp/40→232版的3个摘要和9个输出实例均0 stack/0 spill；包括 passing 在内的所有 SASS 均无 CALL。输出除法改为每行一次硬件 reciprocal + FP32 Newton 修正，未修改 LSE 算法。尾部 ready barrier 改为每个 producer 线程发布自己的写入，修复单 leader 发布时的 racecheck 报告。最终49个 core 用例分别通过 memcheck/racecheck/synccheck（仅 instrumentation 新 Dism kernels），0 errors，racecheck 0 hazards/0 warnings。含 codegen、环境及 oracle 测试共131项通过，复现脚本 `scripts/check_dism_v2.sh`。尚未实现或验收混合 RNG，尚未做吞吐测量。原始 reference/embedding 文件未修改。
+前一版实测：固定方向 core 的49个用例通过，覆盖九种 D/DV、两个 direction、soft/hard、B=H=2、N最长513和多个尾部边界。检查 O、L2、局部摘要两个分量及所有 resolved checkpoints。12-warp/40→232版的3个摘要和9个输出实例均0 stack/0 spill；包括 passing 在内的所有 SASS 均无 CALL。输出除法改为每行一次硬件 reciprocal + FP32 Newton 修正，未修改 LSE 算法。尾部 ready barrier 改为每个 producer 线程发布自己的写入，修复单 leader 发布时的 racecheck 报告。49个 core 用例分别通过 memcheck/racecheck/synccheck，0 errors，racecheck 0 hazards/0 warnings。
+
+行 RNG 更新：warp 内 Philox4x32-10、标量混合 hard_prob、PyTorch 默认/显式 CUDA generator 和 RowRNGState 重放已实现，不生成 global mask。混合调用 offset+4，端点/重放不消费；逻辑行 counter 不依赖物理 warp。新增24个混合数值用例、5个 generator/实际行选择用例和1个已知向量检查；含 codegen、环境/oracle 共161项通过。SASS 无 CALL/LDL/STL，LOCAL=0，TMA 和 setmaxnreg 断言仍通过。不同 CTA 配置、全局 random direction、概率广播和 graph-safe RNG 尚未验收。尚未做吞吐测量，原始 reference/embedding 文件未修改。复现脚本 `scripts/check_dism_v2.sh`。
 
 ## 阶段 3：核心反向
+
+进入后续工作前的 RNG 回归：79项 core 测试在 memcheck、racecheck、synccheck 下分别通过；0 errors、0 hazards/0 warnings。记录 `/tmp/dism-v2-check.sPZ4nb`，12个 core 实例 STACK=0、LOCAL=0，初始 REG=168，producer/consumer 预算仍为40/232。
 
 数学基线（自然对数语义）：
 

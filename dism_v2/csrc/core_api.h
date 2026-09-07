@@ -11,7 +11,9 @@ struct Args {
     void* output;
     int batch_heads, heads, n, padded_n, checkpoints;
     float scale;
-    bool column_lse, hard;
+    bool column_lse;
+    float hard_prob;
+    uint64_t seed, offset;
 };
 void launch_summary(const Args&, int d, cudaStream_t);
 void launch_passing(const Args&, cudaStream_t);
