@@ -6,6 +6,7 @@
 - 当前主场景：q/k `[B,H,N,D]`、v `[B,H,N,DV]`，均为 BF16。D 与 DV 分别支持 32、64、128，二者独立，必须覆盖全部九种组合。
 - 词表为每 head 的 `[H,V,D]`，rtau 为 `[H]`。明确区分词表大小 V、value 张量 v 与扫描边界状态。
 - 首版支持 fixed-length，包括非 tile 整数倍的序列长度；最终支持 varlen。接口、RNG 索引与状态边界设计应为 varlen 留出空间。
+- Python、测试及扩展构建使用 conda 环境 `blkw`（本机解释器 `/home/cicuvc/miniconda3/envs/blkw/bin/python`）。无需兼容仓库内旧 Python/CUDA 接口、旧布局或旧构建入口；新实现使用独立 v2 接口，不修改 reference 的数学语义。
 - 用户最新明确指令优先于本文。实现、基准测试和算法变更按当前会话授权范围执行；本文件本身不授权启动尚未要求的工作。
 
 ## 数学语义
@@ -30,6 +31,9 @@
 
 ## 实现组件与布局
 
+- 当前前向主方案：warp tile 16x64，32行 checkpoint，128行/CTA，compute warps 0–3 与 4–7 组成两个交错 warpgroup，连续16行块依次交给 0,4,1,5,2,6,3,7。只保留 0→4、1→5、2→6、3→7 的配对边界依赖，各 compute warpgroup 内四个 warp 独立。暂不拆 GLX upsweep/downsweep。
+- 优先评估 8 compute warps + 1 producer warp、K/V 双缓冲，并保留单缓冲对照。query 初始 shared staging 可在转入寄存器后复用；资源以完整 CTA 编译结果为准，不能外推单 warp 实验结果。摘要、入边界及 RNG 均按逻辑 checkpoint/行索引，不能绑定物理 warp 编号。
+- CTA 行数、checkpoint 高度、warpgroup 数和边界通信方式分别配置。若实测 memory bound，可后续验证 CTA cluster/DSM 内四个等价 compute warpgroup、64行摘要方案；当前不实现 cluster，不预设目标设备支持或性能收益。优先优化计算并行度，不为减少摘要空间引入长串行链。
 - 暂定沿用 ThunderKittens 的 warp MMA/TMA 组件，结合 `/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh`；若实际代码或性能证据支持，可选 CUTLASS/CuTe。避免无依据地混用多个布局系统。
 - GLX 与旧 sxdiag 的列布局不同。接入前明确逻辑 `(row,col)`、MMA accumulator `(lane,register,element)`、TMA/shared-memory 地址的映射，并验证正向与逆向路径。
 - score GEMM 的 TK accumulator→GLX 列置换已验证可吸收到 B 的 TMA 行加载中，对 warp_k_size=32/64 与 D=32/64/128 均无需 MMA 后 shuffle；公式、5D map 和结果见 `experiments/glx_tma_permute/README.md`。该统一列置换不同于 GLX 的 row-dependent roll，后者仍在寄存器中执行。
@@ -57,6 +61,7 @@
 - 覆盖九种 D/DV 组合、两个固定方向、hard_prob=0/1/混合、非对齐 N、跨 tile 对角线、全不匹配行、长匹配链及 rtau 不同取值。
 - 正确性对照区分 FP32 torch 插值 oracle 和 BF16 embedding-kernel 插值 oracle，分别报告误差，避免把前级量化误差误判为扫描错误。
 - 对新增 kernel 进行必要的 Compute Sanitizer 检查；性能记录形状、dtype、GPU、工具链、计时范围、寄存器/spill 和临时存储大小。只声称实际执行过的验证。
+- 部分有效的128行 CTA 中，无效 compute warps 仍须执行约定的 buffer/barrier 协议；mask 计算和写回，不以提前 return 破坏 producer/consumer 计数。双缓冲的复用、配对边界 mailbox 和 CTA 结束条件都要覆盖非对齐 N 的同步测试。
 - 性能优化以完整路径为准，不只比较扫描 microbenchmark。近似计算须报告输出和各输入梯度的误差及长序列行为。
 - 不主动启用子 agent，除非用户明确要求并行 agent 工作。
 - 执行阶段和验收条件见 `IMPLEMENTATION_PLAN.md`；完成阶段后更新实测结果与剩余问题。

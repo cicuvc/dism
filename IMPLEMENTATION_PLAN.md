@@ -1,12 +1,14 @@
 # Dism v2 kernel 执行计划
 
-状态：阶段 1 的独立 GLX、TMA 列置换、融合单 stripe 和三阶段 checkpoint 实验已通过；尚未实现正式 attention kernel。结果见 `experiments/glx_scan/README.md`、`experiments/glx_tma_permute/README.md` 和 `experiments/glx_fused/README.md`。
+状态：阶段 1 的独立 GLX、TMA 列置换、融合单 stripe 和三阶段 checkpoint 实验已通过；当前更新主方案并准备阶段 2 实现，尚未实现正式 attention kernel。结果见 `experiments/glx_scan/README.md`、`experiments/glx_tma_permute/README.md` 和 `experiments/glx_fused/README.md`。
 
 ## 目标基线
 
 优先平台为 RTX 5090 / sm120。固定长度 BF16 输入，D、DV 独立取 32/64/128，支持非 tile 对齐 N。前向融合打分、对角递推、online softmax 和 PV，不物化 NxN 中间矩阵。生产路径在 warp 内生成可重放的逐行随机决策。最终扩展 varlen 和 sm90。
 
-暂定使用 ThunderKittens warp MMA/TMA + GLX，保留三阶段前向和三阶段反向的 checkpoint 框架。选择该框架是为了并行 query chunks 并复用既有推导；checkpoint 长度和 CTA 布局仍需实测决定。辅助状态空间预计随 BH*N*ceil(N/checkpoint) 增长，必须记录实际峰值，不能称为线性空间。
+使用 ThunderKittens warp MMA/TMA + GLX，保留三阶段前向和三阶段反向的 checkpoint 框架。当前前向主方案为32行 checkpoint、128行 CTA、双交错 compute warpgroup，不采用四个连续 warp 的逐级串行链；暂不拆 upsweep/downsweep。辅助状态空间随 BH*N*ceil(N/checkpoint) 增长，必须记录实际峰值，不能称为线性空间。
+
+不兼容仓库内旧接口；为 v2 建立独立入口、扩展和测试。旧 CUDA/Triton 仅复用有验证依据的组件，不接入其 RMSNorm、旧布局或 Triton passing。现有 `dism_v2/dism_ref.py` 和 `emb_kernel.py` 的用户改动保留。
 
 ## 阶段 0：环境、接口与可重放语义
 
@@ -17,6 +19,18 @@
 - 定义生产接口对 hard_prob 广播形状和输入 stride 的支持范围；不静默缩减 reference 语义。
 
 验收：构建入口可用，接口/状态/RNG 约定明确。当前已实测 RTX 5090 / sm120、CUDA 13.1 的 nvcc 与三类 sanitizer；生产接口与 PyTorch generator seed/offset 消费约定尚未完成。
+
+2026-09-07 环境准备：使用 conda `blkw`，解释器 `/home/cicuvc/miniconda3/envs/blkw/bin/python`；Python 3.12.12、PyTorch 2.13.0+cu130、Triton 3.8.0、pytest 9.0.2，ninja 可导入，GPU BF16 matmul 已实测。PyTorch CUDA 13.0 与系统 nvcc 13.1 不完全一致；现已在该组合完成最小 sm120 PyTorch CUDA 扩展的编译、加载、执行：BF16 bit-copy、137元素尾部、空输入和非默认 stream 通过。这不替代正式 TK/GLX 扩展的验证。
+
+准备命令（仓库根目录；也可 `conda run -n blkw ...`）：
+
+```bash
+/home/cicuvc/miniconda3/envs/blkw/bin/python dism_v2/dism_ref.py
+/home/cicuvc/miniconda3/envs/blkw/bin/python -m pytest -q tests/test_dism_v2_reference.py
+/home/cicuvc/miniconda3/envs/blkw/bin/python -m pytest -q tests/test_dism_v2_build.py
+```
+
+实测 reference 自带 smoke test、80个新增 oracle 准备用例和1个扩展构建用例通过，扩展 bit-copy probe 的 memcheck 为0 errors。oracle 用例覆盖九种 D/DV、两个 direction、显式 soft/hard/mixed mask、16/32/64/128边界邻近长度的零输出 fallback；固定 direction + 显式 mask 不推进 generator 状态。这些测试仅验证 oracle/输入场景和工具链准备，不代表新 attention kernel 正确性，也未验证正式 RNG 契约或 embedding kernel。
 
 ## 阶段 1：MMA–TMA–GLX 布局和数值原语
 
@@ -40,9 +54,43 @@
 
 ## 阶段 2：fixed-length 核心前向
 
-1. 摘要 pass：并行 query checkpoints，计算 GEMM + score，warp 内生成行决策，GLX reduce 输出对角边界摘要。
-2. 边界传递 pass：合成各 checkpoint 的入边界；先采用独立 diagonal groups 内顺序传递的基线。
-3. 输出 pass：重算 score 和行决策，注入边界做 GLX inclusive scan，融合 online softmax 与 PV。初始化 max=0、denominator=1、numerator=0 以包含固定 fallback。
+### 主调度与三个 kernel
+
+每 CTA 覆盖128个 query 行，warp tile 为16x64，4个独立32行 checkpoints。compute group A 是 warps 0–3，group B 是 warps 4–7；producer 候选为 warp 8（288线程/CTA，不为凑齐 producer warpgroup 自动增加三个空闲 warp）。
+
+| checkpoint | 前16行 / group A | 后16行 / group B |
+|---|---|---|
+| 0 | warp 0 | warp 4 |
+| 1 | warp 1 | warp 5 |
+| 2 | warp 2 | warp 6 |
+| 3 | warp 3 | warp 7 |
+
+1. **摘要 pass**：A 的四个 warp 从 top identity 出发，并行计算 score + scalar roll + FP32 pair reduce；B 各 warp 从配对 A 接收 bottom state，再 reduce 并导出32行摘要。各 warp 沿 key tiles 保留自己的 right state；B0 不向 A1 传递，不形成128行的串行链。不加载 V，不物化 score。
+2. **边界传递 pass**：普通128/256-thread CTA，不做 warp specialization/TMA。每线程固定 checkpoint 对角坐标 `j-s*32`，沿 checkpoints 顺序合成 `X[s,j]=LSE(X[s-1,j-32]+a[s,j],b[s,j])`，缺失前驱为负无穷。只读摘要，写真实底边 W；不重新计算 score/RNG。相邻线程在同一 checkpoint 访问相邻列。
+3. **输出 pass**：每个 A warp 独立加载对应 checkpoint 的真实入边界，B 从配对 A 接收状态；完整 inclusive scan 后发布边界，随后 unroll W、online softmax、PV。暂不拆 upsweep/downsweep，不重复执行 reduce+scan。初始化 max=0、denominator=1、numerator=0；输出 BF16 O，保存 FP32 normalization statistics。A 下一 key tile 与 B 当前 tile 的后半段允许重叠，不强制全 CTA 锁步。
+
+### 数据、接口和缓冲
+
+- 新文件按职责分为 v2 Python 入口/扩展构建、core CUDA、公共 log-affine/布局/RNG helpers、测试；不引入旧接口兼容层，也不把实验中的 `.cu`/main 重命名 include 方式带入正式代码。
+- 两个 direction 使用统一 A/B GEMM 接口并分别实例化：`q_from_k` 为 A=q、B=q_from_k、减 row q_lse；`k_from_q` 为 A=k_from_q、B=k、减 column k_lse。rtau/LSE 对外自然对数，score 进入 scan 时统一换成 log2，不能重复乘 sm_scale。
+- 输出保存 `L2=max+log2(denominator)`，文档明确为 log2；未来 backward 使用自然对数 L 时乘 ln(2)。正常 API 不返回完整 logM/W/P，不用 torch/Triton fallback 冒充 CUDA 前向。尚未实现 backward 时显式拒绝需要梯度的生产调用，而不是静默断梯度；测试可使用 no_grad。
+- 首版用 contiguous BHND/BHNDV 作为 fast path。其他 stride 在入口显式校验或显式 contiguous 化，记录额外拷贝。hard_prob 支持范围及广播行为要显式测试，不能静默缩减 reference 语义。
+- 以 K/V 双缓冲起步，保留单缓冲对照；摘要 pass 只有 K。每 slot 有 ready/free 和 phase，回收计数覆盖两个 compute warpgroup。metadata 与对应 tile 的 ready 协议一致。
+- A 初始 shared staging 转入寄存器后可与后续 ring storage 复用。D=DV=128 时，不永久保留32 KiB的128行 A 再叠加64 KiB双缓冲；为边界和 metadata 留出预算。检查 A 的长存活是否导致寄存器/spill 问题，按实际资源调整，不预设双缓冲优于单缓冲。
+- 配对 bottom mailbox 独立双缓冲，ready/free/phase 与 key tile 身份关联。先完整 scan 后发布；在正式主循环中不使用要求 producer 和 consumers 同步到达的全 CTA barrier。初始 staging 复用和最终退出可使用全 CTA barrier，但必须保证所有线程参加。
+- 尾部采用有效坐标检查的安全加载路径，再进入同一 swizzled/permuted shared view；完整 tile 使用 TMA。不得直接用未 padding 输入的现有5D map越界取尾 tile。若后续采用显式 padded workspace，必须计入分配、拷贝和计时。
+- 无效 query warp/checkpoint 不执行有效输出写回，但仍履行所有预定的 buffer/mailbox 协议；padding 为 affine identity，合法 hard mismatch 为零映射。明确因果右上方不生产/不读取的摘要区域。
+- CTA 内按共同的 key tile 遍历范围驱动 producer 和所有 consumers，各 warp 用逻辑 mask 处理自己不需要的部分，不能因各行 causal 范围不同而漏掉回收确认。具体的跳过策略必须同时调整生产、消费和边界协议后再优化。
+- 首版可采用矩形摘要 `(BH,ceil(N/32),padded_N,2)` 和底边 `(BH,ceil(N/32),padded_N)`；FP32总预算为 `12*BH*ceil(N/32)*padded_N` bytes。随后评估因果三角存储；O、L2 和其他 staging 另外统计。
+- checkpoint、CTA 行数、compute group 数、通信方式分开配置。仅后续在实测 memory bound 且目标设备验证通过后，评估 CTA cluster/DSM 内四个等价 compute warpgroup、64行摘要。不在当前实现中引入 cluster，也不先拆 GLX scan。
+
+### 实现顺序与检查点
+
+1. **扩展入口与公共组件**：在 blkw 编译/加载最小 CUDA 扩展；整理现有经过验证的 FP32 log-affine、16x64布局、TMA helper；建立两个 direction 的数据参数。固定 RNG seed/offset/全局 direction 契约，首个数值路径用 hard_prob=0、固定 direction。
+2. **双 group 摘要及 passing**：先完成32行摘要，检查与 CPU/torch oracle 的两个 affine 分量及已解析边界。验证配对关系、右边界、HState -1列、多个128行 CTA 和尾部无效 warps；memcheck/racecheck/synccheck。
+3. **输出 kernel**：接入同一调度的完整 inclusive scan、online softmax 和 PV，与相同 interpolation 对照；先完成 D=DV=64，再覆盖九种组合。V BF16、概率 MMA 前 BF16 转换、FP32 denominator 分别记录误差来源。
+4. **随机和场景补齐**：加入 hard=1/混合、两个 direction、可重放随机 direction、不同 B/H 和非对齐 N；测试摘要与重算行决策、generator 状态推进及不同执行配置一致。调试 mask 仅用于 oracle，不成为正式 global mask 输入。
+5. **流水验证与初测**：同一主调度下比较单/双缓冲，检查所有9种 D/DV 的寄存器、local、spill、shared以及 kernel时延。包含尾加载、摘要及 passing 开销，分别报告 core 三阶段和含 embedding 端到端；先测瓶颈，再决定是否增加深度/减少摘要。
 
 - 先固定 direction 和 hard_prob=0 排查主路径，再加入 hard_prob=1、混合和随机 direction。
 - 不保存 logM、W 或行 mask；检查不同 pass 的 RNG 选择完全一致。
