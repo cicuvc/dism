@@ -6,7 +6,9 @@ check_dir=$(mktemp -d /tmp/dism-v2-check.XXXXXX)
 echo "Results: $check_dir"
 "$dism_python" -m pytest -q -p no:cacheprovider \
     tests/test_dism_v2_reference.py tests/test_dism_v2_build.py \
-    tests/test_dism_v2_core.py tests/test_dism_v2_codegen.py \
+    tests/test_dism_v2_core.py tests/test_dism_v2_codegen.py tests/test_dism_v2_precision.py \
+    tests/test_dism_v2_embedding_precision.py \
+    --junitxml="$check_dir/pytest.xml" -o junit_family=legacy \
     | tee "$check_dir/pytest.log"
 for checker in memcheck racecheck synccheck; do
     # Check every new Dism kernel; do not instrument unrelated PyTorch oracle

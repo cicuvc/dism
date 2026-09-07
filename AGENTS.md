@@ -13,6 +13,7 @@
 
 - 唯一算法 oracle 是 `dism_v2/dism_ref.py`。旧 `tt_dism.py` 和 `src/dism_fwd_nope.cu` 仅供参考。
 - soft score 使用 reference 的 embedding 插值 Jensen 下界。`direction=random` 每次调用选择一个全局方向，不能改为逐行方向或双向平均。
+- 用户目标场景的 rtau 上限为自然对数域 `ln(D)`。测试将范围内与超范围压力结果分开；不要误写成自然对数接口数值上限 `log2(D)`。kernel 当前不替调用方 clamp rtau。
 - hard/soft 决策按 `(batch, head, query row)` 生成，一个 query 行的所有 key 共享决策。hard 匹配分数为 rtau，不匹配为负无穷。
 - 因果递推为 `W[i,j] = logM[i,j] + softplus(W[i-1,j-1])`，缺失前驱为负无穷。
 - 输出分母为 `1 + sum(exp(W))`，固定 fallback 的 log-score/value 都是 0。使用 FlashAttention 风格 online softmax；不得沿用旧 CUDA 的 RMSNorm 输出。
@@ -63,6 +64,8 @@
 - 验证按阶段进行：布局/边界 → fixed-length 前向 → 核心反向 → embedding 全链路 → 性能 → varlen → sm90。
 - 覆盖九种 D/DV 组合、两个固定方向、hard_prob=0/1/混合、非对齐 N、跨 tile 对角线、全不匹配行、长匹配链及 rtau 不同取值。
 - 正确性对照区分 FP32 torch 插值 oracle 和 BF16 embedding-kernel 插值 oracle，分别报告误差，避免把前级量化误差误判为扫描错误。
+- 长序列精度测试与实测见 `dism_v2/PRECISION.md`；当前相同 BF16 插值输入的 core 检查通过，但纯 soft 对未量化 FP32 插值存在可复现失败（包括 rtau≤ln(D)）。保持失败可见，不把旧188项通过当成端到端精度验收。
+- 实际 emb_kernel 前向接入测试也已固化：同 emb 输出的 core 检查通过，FP32 插值对照仍有失败（含一个混合行用例）。内部 softmax 权重转 BF16 与最终输出 BF16 写回是两处独立量化；FP32 输出缓冲变体仅作测试诊断，不等于生产 core 支持 FP32 插值。embedding backward 未验证。
 - 对新增 kernel 进行必要的 Compute Sanitizer 检查；性能记录形状、dtype、GPU、工具链、计时范围、寄存器/spill 和临时存储大小。只声称实际执行过的验证。
 - 检查所有最终 SASS 中的 CALL（含 CALL.REL，不只 CALL.ABS），定位并消除未内联或后端生成的调用，建立 codegen 回归断言；同时确保原生 TMA、寄存器重分配与零 spill 不退化。不能用改变 hard/identity 数学语义的方法消除调用。
 - 部分有效的128行 CTA 中，无效 compute warps 仍须执行约定的 buffer/barrier 协议；mask 计算和写回，不以提前 return 破坏 producer/consumer 计数。双缓冲的复用、配对边界 mailbox 和 CTA 结束条件都要覆盖非对齐 N 的同步测试。

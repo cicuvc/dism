@@ -119,6 +119,15 @@ SASS 存在 `USETMAXREG.DEALLOC ... 0x28`、`TRY_ALLOC ... 0xe8` 和 `UTMALDG.5D
 
 ## 验证
 
+新增长序列/rtau 上限精度回归及余弦指标验证后、接入实际 embedding 之前，套件为 **301通过、28失败**；失败是 FP32 插值对照的输出精度，
+不是相同 BF16 插值输入的 core 检查。包括 rtau≤ln(D) 范围内的14例。实测误差、范围与复现见
+[`PRECISION.md`](PRECISION.md)。下文188项全通过指新增压力测试之前的基础回归。
+
+随后接入真实 emb_kernel 的64项测试，单模块48通过、16个 FP32 插值输出阈值失败；
+同 embedding 输入的 core 输出/L2 全部通过。实际 embedding 的内部 BF16 权重与输出写回量化分离诊断、
+余弦/误差结果同样见 PRECISION.md；尚未接入生产 embedding 自动调用或反向。
+最新完整套件为 **349通过、44失败**，全部失败均为 FP32 插值对照输出阈值；没有放宽容差。
+
 在仓库根目录使用 blkw：
 
 ```bash

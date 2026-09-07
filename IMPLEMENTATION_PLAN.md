@@ -107,6 +107,10 @@
 
 ## 阶段 3：核心反向
 
+实际 embedding 前向诊断：新增64项 `test_dism_v2_embedding_precision.py`，48通过、16个相对未量化FP32插值的输出阈值失败；同emb输入core输出/L2全部通过，所有随机样本标签一致，LSE最大误差9.54e-7。包含九种D/DV、N至8193、V=31/64/65/129/257及多BH。只改输出缓冲dtype的诊断调用显示内部BF16 softmax权重和最终BF16写回都贡献误差；尚未修改生产embedding或CUDA core精度。详细对照见PRECISION.md。V65/N257尾部emb_fwd memcheck为0 errors；embedding backward仍未验证。
+
+前向精度压力回归（新增141项）：N最长8193，rtau自然对数上限ln(D)，九种D/DV、两方向、长匹配链与FP32插值对照，详见 `dism_v2/PRECISION.md`。完整329项中301通过、28失败；14个失败位于rtau上限内，全部为纯soft输出对未量化FP32插值的阈值失败。同BF16插值的core检查通过，最差范围内长序列用例的reference间插值量化误差已接近端到端偏差。输出余弦也已固化到JUnit：范围内同BF16插值的整体余弦最低0.999996730，FP32插值对照最低0.999926263、最差行0.998288881；不以高余弦替代逐元素误差验收。保留普通失败、不放宽阈值；后续需与用户明确是否接受此量化误差或探索更高精度插值路径。此次未修改kernel数学或数值实现。
+
 进入后续工作前的 RNG 回归：79项 core 测试在 memcheck、racecheck、synccheck 下分别通过；0 errors、0 hazards/0 warnings。记录 `/tmp/dism-v2-check.sPZ4nb`，12个 core 实例 STACK=0、LOCAL=0，初始 REG=168，producer/consumer 预算仍为40/232。
 
 数学基线（自然对数语义）：
