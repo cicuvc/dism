@@ -32,7 +32,8 @@
 ## 实现组件与布局
 
 - 当前前向主方案：warp tile 16x64，32行 checkpoint，128行/CTA，compute warps 0–3 与 4–7 组成两个交错 warpgroup，连续16行块依次交给 0,4,1,5,2,6,3,7。只保留 0→4、1→5、2→6、3→7 的配对边界依赖，各 compute warpgroup 内四个 warp 独立。暂不拆 GLX upsweep/downsweep。
-- 优先评估 8 compute warps + 1 producer warp、K/V 双缓冲，并保留单缓冲对照。query 初始 shared staging 可在转入寄存器后复用；资源以完整 CTA 编译结果为准，不能外推单 warp 实验结果。摘要、入边界及 RNG 均按逻辑 checkpoint/行索引，不能绑定物理 warp 编号。
+- 当前采用12 warps/CTA：8 compute warps + 4 producer-group warps。sm120a 上整个 producer group 执行 setmaxnreg.dec<40>，两个 compute groups 执行 inc<232>；producer group 中仅 warp8 实际加载，其余参与重分配和必要的 CTA 同步。inc/dec 放在各自长期角色分支内，避免立即汇合导致编译器按低预算分配。K/V 双缓冲，单缓冲对照仍待做。query 初始 shared staging 转入寄存器后复用；资源以完整 CTA 编译结果为准。摘要、入边界及 RNG 均按逻辑 checkpoint/行索引，不能绑定物理 warp 编号。
+- sm120 当前 TMA 使用 shared::cta：本地工具链下 shared::cluster 的5D加载曾生成外部调用，使 setmaxnreg 被忽略。检查 SASS 的 UTMALDG 和 USETMAXREG，不能仅凭 PTX 或源代码判断指令已生效。实际验证见 `dism_v2/README.md`。
 - CTA 行数、checkpoint 高度、warpgroup 数和边界通信方式分别配置。若实测 memory bound，可后续验证 CTA cluster/DSM 内四个等价 compute warpgroup、64行摘要方案；当前不实现 cluster，不预设目标设备支持或性能收益。优先优化计算并行度，不为减少摘要空间引入长串行链。
 - 暂定沿用 ThunderKittens 的 warp MMA/TMA 组件，结合 `/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh`；若实际代码或性能证据支持，可选 CUTLASS/CuTe。避免无依据地混用多个布局系统。
 - GLX 与旧 sxdiag 的列布局不同。接入前明确逻辑 `(row,col)`、MMA accumulator `(lane,register,element)`、TMA/shared-memory 地址的映射，并验证正向与逆向路径。
@@ -61,6 +62,7 @@
 - 覆盖九种 D/DV 组合、两个固定方向、hard_prob=0/1/混合、非对齐 N、跨 tile 对角线、全不匹配行、长匹配链及 rtau 不同取值。
 - 正确性对照区分 FP32 torch 插值 oracle 和 BF16 embedding-kernel 插值 oracle，分别报告误差，避免把前级量化误差误判为扫描错误。
 - 对新增 kernel 进行必要的 Compute Sanitizer 检查；性能记录形状、dtype、GPU、工具链、计时范围、寄存器/spill 和临时存储大小。只声称实际执行过的验证。
+- 检查所有最终 SASS 中的 CALL（含 CALL.REL，不只 CALL.ABS），定位并消除未内联或后端生成的调用，建立 codegen 回归断言；同时确保原生 TMA、寄存器重分配与零 spill 不退化。不能用改变 hard/identity 数学语义的方法消除调用。
 - 部分有效的128行 CTA 中，无效 compute warps 仍须执行约定的 buffer/barrier 协议；mask 计算和写回，不以提前 return 破坏 producer/consumer 计数。双缓冲的复用、配对边界 mailbox 和 CTA 结束条件都要覆盖非对齐 N 的同步测试。
 - 性能优化以完整路径为准，不只比较扫描 microbenchmark。近似计算须报告输出和各输入梯度的误差及长序列行为。
 - 不主动启用子 agent，除非用户明确要求并行 agent 工作。

@@ -1,6 +1,6 @@
 # Dism v2 kernel 执行计划
 
-状态：阶段 1 的独立 GLX、TMA 列置换、融合单 stripe 和三阶段 checkpoint 实验已通过；当前更新主方案并准备阶段 2 实现，尚未实现正式 attention kernel。结果见 `experiments/glx_scan/README.md`、`experiments/glx_tma_permute/README.md` 和 `experiments/glx_fused/README.md`。
+状态：阶段 1 的独立 GLX、TMA 列置换、融合单 stripe 和三阶段 checkpoint 实验已通过。阶段 2 已实现固定 direction、hard_prob=0/1 的三阶段 CUDA core 前向；混合 RNG、完整接口、反向与性能基准仍未完成。新代码、实测和边界见 `dism_v2/README.md`；不能称为完整 voc_dism 已完成。
 
 ## 目标基线
 
@@ -56,7 +56,7 @@
 
 ### 主调度与三个 kernel
 
-每 CTA 覆盖128个 query 行，warp tile 为16x64，4个独立32行 checkpoints。compute group A 是 warps 0–3，group B 是 warps 4–7；producer 候选为 warp 8（288线程/CTA，不为凑齐 producer warpgroup 自动增加三个空闲 warp）。
+每 CTA 覆盖128个 query 行，warp tile 为16x64，4个独立32行 checkpoints。compute group A 是 warps 0–3，group B 是 warps 4–7；当前 producer group 是 warps 8–11，总计384线程。早期288线程版本有 spill；按用户建议改为完整 producer group，通过 sm120a setmaxnreg 将其预算降至40、consumer 升至232。只有 warp8 实际加载，其余 producer warps 参与重分配及 CTA 同步。
 
 | checkpoint | 前16行 / group A | 后16行 / group B |
 |---|---|---|
@@ -78,6 +78,7 @@
 - 以 K/V 双缓冲起步，保留单缓冲对照；摘要 pass 只有 K。每 slot 有 ready/free 和 phase，回收计数覆盖两个 compute warpgroup。metadata 与对应 tile 的 ready 协议一致。
 - A 初始 shared staging 转入寄存器后可与后续 ring storage 复用。D=DV=128 时，不永久保留32 KiB的128行 A 再叠加64 KiB双缓冲；为边界和 metadata 留出预算。检查 A 的长存活是否导致寄存器/spill 问题，按实际资源调整，不预设双缓冲优于单缓冲。
 - 配对 bottom mailbox 独立双缓冲，ready/free/phase 与 key tile 身份关联。先完整 scan 后发布；在正式主循环中不使用要求 producer 和 consumers 同步到达的全 CTA barrier。初始 staging 复用和最终退出可使用全 CTA barrier，但必须保证所有线程参加。
+- inc/dec 在 staging 结束后、producer/consumer 长期分支内执行，不能在降额后紧接着汇合并期望编译器仍分别按两套预算优化。预算 `128*40+256*232=64512` registers/CTA；初始 metadata 报168 registers/thread，不代表 consumer 的实际预算只有168。最终 SASS 检查寄存器重分配、原生 TMA、所有 CALL 和 local load/store。
 - 尾部采用有效坐标检查的安全加载路径，再进入同一 swizzled/permuted shared view；完整 tile 使用 TMA。不得直接用未 padding 输入的现有5D map越界取尾 tile。若后续采用显式 padded workspace，必须计入分配、拷贝和计时。
 - 无效 query warp/checkpoint 不执行有效输出写回，但仍履行所有预定的 buffer/mailbox 协议；padding 为 affine identity，合法 hard mismatch 为零映射。明确因果右上方不生产/不读取的摘要区域。
 - CTA 内按共同的 key tile 遍历范围驱动 producer 和所有 consumers，各 warp 用逻辑 mask 处理自己不需要的部分，不能因各行 causal 范围不同而漏掉回收确认。具体的跳过策略必须同时调整生产、消费和边界协议后再优化。
@@ -97,6 +98,8 @@
 - 支持全部九种 D/DV 组合及非对齐 N，记录临时存储和输出 dtype。
 
 验收：对照相同 interpolation、direction 和行决策的 reference，所有目标形状前向正确；完全不匹配行输出为零，长匹配链数值稳定。
+
+当前实测：固定方向 core 的49个用例通过，覆盖九种 D/DV、两个 direction、soft/hard、B=H=2、N最长513和多个尾部边界。检查 O、L2、局部摘要两个分量及所有 resolved checkpoints。12-warp/40→232版的3个摘要和9个输出实例均0 stack/0 spill；包括 passing 在内的所有 SASS 均无 CALL。输出除法改为每行一次硬件 reciprocal + FP32 Newton 修正，未修改 LSE 算法。尾部 ready barrier 改为每个 producer 线程发布自己的写入，修复单 leader 发布时的 racecheck 报告。最终49个 core 用例分别通过 memcheck/racecheck/synccheck（仅 instrumentation 新 Dism kernels），0 errors，racecheck 0 hazards/0 warnings。含 codegen、环境及 oracle 测试共131项通过，复现脚本 `scripts/check_dism_v2.sh`。尚未实现或验收混合 RNG，尚未做吞吐测量。原始 reference/embedding 文件未修改。
 
 ## 阶段 3：核心反向
 
