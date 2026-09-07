@@ -27,7 +27,7 @@
 - 使用可重放的 counter-based RNG 或等价方案，将逻辑 `(sequence/batch, head, query row)` 映射到随机数。不得使用会随 CTA 调度、warp 所属或 key tile 改变的随机身份。
 - 同一行在不同 key tiles、前向摘要、前向重算和反向重算中的决策必须一致。只保存 seed、offset、选定的全局 direction 等少量元数据；反向不再消耗新的随机数。
 - 与 PyTorch generator 的 seed/offset 管理方式、每次调用的随机数消费约定必须显式记录并测试。
-- 当前 core 使用 Philox4x32-10，逻辑行 `(batch*H+head)*N+row` 为 subsequence，offset/4 为 block counter；取第一个 word 的高24位生成 [0,1) uniform，与 FP32 概率比较。混合标量概率调用在 generator mutex 内预留4 words；0/1及显式 RowRNGState 重放不推进 generator。每个 compute warp 在 key 循环前由16个 lane 各生成一行，shuffle 分发，摘要/重算共享同一身份。当前不支持 CUDA Graph capture、概率广播和全局 random direction；详见 `dism_v2/README.md`。
+- 当前 core 使用 Philox4x32-10，逻辑行 `(batch*H+head)*N+row` 为 subsequence，offset/4 为 block counter；取第一个 word 的高24位生成 [0,1) uniform，与 FP32 概率比较。固定方向的混合标量概率调用在 generator mutex 内预留4 words，0/1不消费；全局 random direction 额外预留前置4 words，host 计算该 block 的 subsequence0、第一个 word 的最低位，选择本次调用的统一方向，无 GPU→CPU 同步。RowRNGState 保存后一个 block 的行 offset 和已选方向，重放不消费。每个 compute warp 在 key 循环前由16个 lane 各生成一行，shuffle 分发，摘要/重算共享同一身份。当前不支持 CUDA Graph capture 和概率广播；详见 `dism_v2/README.md`。
 - reference 的显式 `hard_mask`/`interpolation` 可用于调试对照，但不是生产路径的预计算 mask 方案。调试导出的 mask 不得进入正式性能路径。
 
 ## 实现组件与布局
@@ -47,6 +47,7 @@
 - GLX 原生 inclusive scan 直接产出 W，不沿用旧 exclusive scan 保存原 score tile、最后再合成 inclusive 结果的做法。让原 score 和不再需要的 affine first 分量尽早结束生命周期；寄存器收益以编译结果为准。
 - 前向 scan 前先对标量 FP32 logM 做 roll，再将已 roll 的结果在寄存器中原地 duplicate 为 `(logM,logM)`。不要先 duplicate 再对两个相同分量分别 shuffle，以降低 roll 的 LSU/MIO 压力。保证展开后标量临时值不再独立存活，检查生成代码的 shuffle 数量与寄存器占用；此优化只适用于两个初始分量相同的前向 log-affine 输入。
 - `/home/cicuvc/cs/projects/rl/lse.cu` 是近似运算候选。其 approx2 源码包含等待 SASS 修改的 EX2 占位表达式，不得原样当作正确实现使用。先保证源码语义正确，再独立评估指令优化。
+- 即使 tile 内 affine 后续使用快速近似，跨 chunk passing 保留完整 `max + log1p(exp2(-abs)) * LOG2E` 语义，控制长程累积误差。
 - 不将 sm120 的性能结论外推到 sm90；两者共享数学和扫描组件，分别配置 tile、流水和调度。
 
 ## 已知旧实现问题

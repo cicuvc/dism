@@ -1,7 +1,7 @@
 """Initial sm120 core forward, independent of the legacy dism interfaces.
 
 Accepts already selected, BF16 interpolation operands and warp-local row RNG.
-No autograd, random direction, varlen or graph support yet.
+Supports fixed or per-call random direction. No autograd, varlen or graph support yet.
 """
 from functools import lru_cache
 from pathlib import Path
@@ -45,6 +45,8 @@ def forward(a, b, v, lse, tau, q_label, k_label, *, sm_scale, direction,
 
     direction='q_from_k': a=q, b=q_from_k, lse=q_lse.
     direction='k_from_q': a=k_from_q, b=k, lse=k_lse.
+    direction='random': a=(q,k_from_q), b=(q_from_k,k), lse=(q_lse,k_lse).
+    Alternatively use forward_interpolated to supply both directions by name.
     BF16 interpolation conversion is the caller's explicit responsibility.
     All input tensors must be contiguous. Checkpoint diagnostics are O(N^2/32),
     never full logM/W/P. Current implementation computes the full key range.
@@ -52,8 +54,14 @@ def forward(a, b, v, lse, tau, q_label, k_label, *, sm_scale, direction,
     from the CUDA generator. Endpoints and explicit replay consume nothing.
     return_rng_state appends replay metadata to the usual result tuple.
     """
-    if direction not in ("q_from_k", "k_from_q"):
-        raise NotImplementedError("only fixed directions are implemented")
+    if direction not in ("q_from_k", "k_from_q", "random"):
+        raise ValueError("unknown direction")
+    alternative = None
+    if direction == "random":
+        if any(not isinstance(x, (tuple,list)) or len(x)!=2 for x in (a,b,lse)):
+            raise ValueError("random direction requires two operands for each of a, b, lse")
+        alternative = [a[1],b[1],lse[1]]
+        a,b,lse = a[0],b[0],lse[0]
     if not isinstance(hard_prob, (int, float)):
         raise NotImplementedError("probability broadcasting is not implemented yet")
     if not math.isfinite(hard_prob) or not 0 <= hard_prob <= 1:
@@ -63,17 +71,45 @@ def forward(a, b, v, lse, tau, q_label, k_label, *, sm_scale, direction,
     if rng_state is not None:
         if not isinstance(rng_state, RowRNGState):
             raise TypeError("rng_state must be RowRNGState")
-        if (rng_state.shape, rng_state.direction, rng_state.hard_prob) != (tuple(a.shape[:3]), direction, hard_prob):
+        if (rng_state.shape != tuple(a.shape[:3]) or rng_state.hard_prob != hard_prob or
+            rng_state.direction not in ("q_from_k", "k_from_q") or
+            (direction != "random" and rng_state.direction != direction)):
             raise ValueError("replay shape, direction and probability must match")
         if not (0 <= rng_state.seed < 2**64 and 0 <= rng_state.offset < 2**64 and rng_state.offset % 4 == 0):
             raise ValueError("invalid replay seed/offset")
-    if torch.is_grad_enabled() and any(x.requires_grad for x in (a,b,v,lse,tau)):
+    grad_inputs = (a,b,v,lse,tau,*(alternative or []))
+    if torch.is_grad_enabled() and any(x.requires_grad for x in grad_inputs):
         raise NotImplementedError("core backward is not implemented")
     if not isinstance(sm_scale, (int, float)):
         raise TypeError("sm_scale must be a scalar")
-    tensors, seed, offset = _extension().forward(
+    if rng_state is not None and direction == "random":
+        if rng_state.direction == "k_from_q":
+            a,b,lse = alternative
+        alternative = None
+        direction = rng_state.direction
+    tensors, seed, offset, column_lse = _extension().forward(
         a,b,v,lse,tau,q_label,k_label,float(sm_scale),direction=="k_from_q",float(hard_prob),
-        generator, None if rng_state is None else (rng_state.seed, rng_state.offset))
+        generator, None if rng_state is None else (rng_state.seed, rng_state.offset), alternative)
     result = tuple(tensors) if return_debug else tuple(tensors[:2])
-    state = RowRNGState(seed, offset, tuple(a.shape[:3]), direction, float(hard_prob))
+    state = RowRNGState(seed, offset, tuple(a.shape[:3]),
+                        "k_from_q" if column_lse else "q_from_k", float(hard_prob))
     return (*result, state) if return_rng_state else result
+
+
+def forward_interpolated(q, k, v, tau, interpolation, *, direction="random", **kwargs):
+    """Core forward from a prepared InterpolationResult; does not run embedding.
+
+    Both interpolated operands must already be BF16. No implicit conversion.
+    A random direction is chosen once for the entire call, including all B/H.
+    """
+    if direction == "q_from_k":
+        a,b,lse = q,interpolation.q_from_k,interpolation.q_lse
+    elif direction == "k_from_q":
+        a,b,lse = interpolation.k_from_q,k,interpolation.k_lse
+    elif direction == "random":
+        a,b,lse = (q,interpolation.k_from_q),(interpolation.q_from_k,k),\
+                  (interpolation.q_lse,interpolation.k_lse)
+    else:
+        raise ValueError("unknown direction")
+    return forward(a,b,v,lse,tau,interpolation.q_index,interpolation.k_index,
+                   direction=direction,**kwargs)

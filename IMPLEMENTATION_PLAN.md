@@ -1,6 +1,6 @@
 # Dism v2 kernel 执行计划
 
-状态：阶段 1 的独立 GLX、TMA 列置换、融合单 stripe 和三阶段 checkpoint 实验已通过。阶段 2 已实现固定 direction、标量 hard_prob（含混合 RNG）的三阶段 CUDA core 前向；完整接口、全局随机 direction、反向与性能基准仍未完成。新代码、实测和边界见 `dism_v2/README.md`；不能称为完整 voc_dism 已完成。
+状态：阶段 1 的独立 GLX、TMA 列置换、融合单 stripe 和三阶段 checkpoint 实验已通过。阶段 2 已实现固定/每次调用全局随机 direction、标量 hard_prob（含混合 RNG）的三阶段 CUDA core 前向；完整接口、反向与性能基准仍未完成。新代码、实测和边界见 `dism_v2/README.md`；不能称为完整 voc_dism 已完成。
 
 ## 目标基线
 
@@ -101,7 +101,9 @@
 
 前一版实测：固定方向 core 的49个用例通过，覆盖九种 D/DV、两个 direction、soft/hard、B=H=2、N最长513和多个尾部边界。检查 O、L2、局部摘要两个分量及所有 resolved checkpoints。12-warp/40→232版的3个摘要和9个输出实例均0 stack/0 spill；包括 passing 在内的所有 SASS 均无 CALL。输出除法改为每行一次硬件 reciprocal + FP32 Newton 修正，未修改 LSE 算法。尾部 ready barrier 改为每个 producer 线程发布自己的写入，修复单 leader 发布时的 racecheck 报告。49个 core 用例分别通过 memcheck/racecheck/synccheck，0 errors，racecheck 0 hazards/0 warnings。
 
-行 RNG 更新：warp 内 Philox4x32-10、标量混合 hard_prob、PyTorch 默认/显式 CUDA generator 和 RowRNGState 重放已实现，不生成 global mask。混合调用 offset+4，端点/重放不消费；逻辑行 counter 不依赖物理 warp。新增24个混合数值用例、5个 generator/实际行选择用例和1个已知向量检查；含 codegen、环境/oracle 共161项通过。SASS 无 CALL/LDL/STL，LOCAL=0，TMA 和 setmaxnreg 断言仍通过。不同 CTA 配置、全局 random direction、概率广播和 graph-safe RNG 尚未验收。尚未做吞吐测量，原始 reference/embedding 文件未修改。复现脚本 `scripts/check_dism_v2.sh`。
+行 RNG 更新：warp 内 Philox4x32-10、标量混合 hard_prob、PyTorch 默认/显式 CUDA generator 和 RowRNGState 重放已实现，不生成 global mask。固定方向混合调用 offset+4，端点/重放不消费；逻辑行 counter 不依赖物理 warp。新增24个混合数值用例、5个 generator/实际行选择用例和1个已知向量检查；含 codegen、环境/oracle 共161项通过。SASS 无 CALL/LDL/STL，LOCAL=0，TMA 和 setmaxnreg 断言仍通过。不同 CTA 配置、概率广播和 graph-safe RNG 尚未验收。尚未做吞吐测量，原始 reference/embedding 文件未修改。复现脚本 `scripts/check_dism_v2.sh`。
+
+全局 direction 更新：`direction=random` 每次调用在 host 上计算预留 Philox block 的一个方向位，统一选择 A/B/LSE，无 GPU→CPU 同步。前置方向 block 与后续行 RNG block 隔离；随机方向端点/混合分别消费4/8 words，保存已选方向与行 offset，重放消费0。新增 `forward_interpolated` 命名入口（要求预先准备 BF16 contiguous interpolation，不运行 embedding）。增加27项随机方向测试，覆盖两个随机结果、九种 D/DV、默认/显式 generator、重设 seed、重放及端点；总计188项通过，106项 core 测试分别通过 memcheck/racecheck/synccheck，0 errors、0 hazards/0 warnings。SASS codegen 断言仍通过，日志 `/tmp/dism-v2-check.x6Ly3n`。chunk passing 后续保留完整 log1p/exp2 LSE，避免 tile 内近似扩展到长程传递。
 
 ## 阶段 3：核心反向
 

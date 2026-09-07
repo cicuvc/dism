@@ -4,7 +4,7 @@ import math
 from dataclasses import replace
 import pytest
 import torch
-from dism_v2.core import forward, RowRNGState
+from dism_v2.core import forward, forward_interpolated
 from dism_v2.dism_ref import interpolation_ref, voc_dism_ref
 
 pytestmark=pytest.mark.skipif(not torch.cuda.is_available(),reason="CUDA required")
@@ -34,9 +34,24 @@ def test_mixed_rng(d,dv,direction):
 def test_mixed_rng_tails(n):
     check_case(64,64,n,"q_from_k",0.63)
 
-@pytest.mark.parametrize("probability",(0.,1.,0.01,0.5,0.99))
+@pytest.mark.parametrize("d,dv",itertools.product((32,64,128),repeat=2))
+@pytest.mark.parametrize("direction_bit",(0,1))
 @torch.no_grad()
-def test_rng_default_generator_and_row_identity(probability):
+def test_random_direction(d,dv,direction_bit):
+    seed=next(s for s in range(100) if philox_word(s,2**34+12,0)&1==direction_bit)
+    check_case(d,dv,139,"random",0.37,rng_seed=seed)
+
+@pytest.mark.parametrize("hard",(0.,1.))
+@pytest.mark.parametrize("direction_bit",(0,1))
+@torch.no_grad()
+def test_random_direction_endpoints(hard,direction_bit):
+    seed=next(s for s in range(100) if philox_word(s,2**34+12,0)&1==direction_bit)
+    check_case(64,64,129,"random",hard,rng_seed=seed)
+
+@pytest.mark.parametrize("probability",(0.,1.,0.01,0.5,0.99))
+@pytest.mark.parametrize("direction",("q_from_k","random"))
+@torch.no_grad()
+def test_rng_default_generator_and_row_identity(probability,direction):
     # Unmatched hard rows have exactly zero normalizer; soft rows do not.
     # Thus the actual row decisions can be observed without any mask buffer.
     shape=(2,2,257)
@@ -44,13 +59,18 @@ def test_rng_default_generator_and_row_identity(probability):
     lse=torch.zeros(shape,device="cuda")
     labels=torch.zeros(shape,device="cuda",dtype=torch.long)
     inputs=(x,x,x,lse,torch.zeros(2,device="cuda"),labels,labels+1)
-    kwargs=dict(sm_scale=1.,direction="q_from_k",hard_prob=probability)
+    if direction=="random":
+        inputs=((x,x),(x,x),x,(lse,lse),inputs[4],labels,labels+1)
+    kwargs=dict(sm_scale=1.,direction=direction,hard_prob=probability)
     with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
         torch.cuda.manual_seed(321)
         g=torch.cuda.default_generators[torch.cuda.current_device()]
         before=g.get_offset()
         o,l,state=forward(*inputs,**kwargs,return_rng_state=True)
-        assert g.get_offset()==before+(4 if 0<probability<1 else 0)
+        assert g.get_offset()==before+(4 if 0<probability<1 else 0)+(4 if direction=="random" else 0)
+        if direction=="random":
+            assert state.direction==("k_from_q" if philox_word(321,before,0)&1 else "q_from_k")
+            assert state.offset==before+4
         p32=torch.tensor(probability,dtype=torch.float32).item()
         expected=torch.tensor([(philox_word(state.seed,state.offset,r)>>8)*2**-24<p32
             for r in range(math.prod(shape))],device="cuda").reshape(shape)
@@ -84,7 +104,7 @@ def test_dimensions(d,dv,direction,hard):
 def test_tails(n):
     check_case(64,64,n,"q_from_k",False)
 
-def check_case(d,dv,n,direction,hard):
+def check_case(d,dv,n,direction,hard,rng_seed=2**63+12345):
     generator=torch.Generator(device="cuda").manual_seed(41+n+d+dv)
     def rand(shape): return torch.randn(shape,device="cuda",dtype=torch.bfloat16,generator=generator)
     batch,heads=2,2
@@ -93,23 +113,36 @@ def check_case(d,dv,n,direction,hard):
     tau=torch.tensor([-0.5,0.5],device="cuda")
     scale=d**-0.5
     interp=interpolation_ref(q,k,qvoc,kvoc,scale)
-    interp=replace(interp,q_from_k=interp.q_from_k.bfloat16(),k_from_q=interp.k_from_q.bfloat16())
+    interp=replace(interp,q_from_k=interp.q_from_k.bfloat16().contiguous(),
+        k_from_q=interp.k_from_q.bfloat16().contiguous(),q_lse=interp.q_lse.contiguous(),
+        k_lse=interp.k_lse.contiguous(),q_index=interp.q_index.contiguous(),k_index=interp.k_index.contiguous())
     a,b,lse=(q,interp.q_from_k,interp.q_lse) if direction=="q_from_k" else (interp.k_from_q,k,interp.k_lse)
     inputs=(a.contiguous(),b.contiguous(),v,lse.contiguous(),tau,
         interp.q_index.contiguous(),interp.k_index.contiguous())
+    random_direction=direction=="random"
+    if random_direction:
+        inputs=((q.contiguous(),interp.k_from_q.contiguous()),
+                (interp.q_from_k.contiguous(),k.contiguous()),v,
+                (interp.q_lse.contiguous(),interp.k_lse.contiguous()),tau,
+                interp.q_index.contiguous(),interp.k_index.contiguous())
     kwargs=dict(sm_scale=scale,direction=direction,hard_prob=float(hard),return_debug=True)
-    rng=torch.Generator(device="cuda").manual_seed(2**63+12345)
+    rng=torch.Generator(device="cuda").manual_seed(rng_seed)
     rng.set_offset(2**34+12)
     before=rng.get_offset()
     actual,l2,summary,boundary,state=forward(*inputs,**kwargs,generator=rng,return_rng_state=True)
     mixed=0<float(hard)<1
-    assert rng.get_offset()==before+(4 if mixed else 0)
+    increment=4*int(mixed)+4*int(random_direction)
+    assert rng.get_offset()==before+increment
+    if random_direction:
+        expected_direction="k_from_q" if philox_word(rng_seed,before,0)&1 else "q_from_k"
+        assert state.direction==expected_direction and state.offset==before+4
     mask=torch.tensor(hard,device="cuda",dtype=torch.bool)
     if mixed:
-        assert state.seed==2**63+12345 and state.offset==before
+        assert state.seed==rng_seed and state.offset==before+4*int(random_direction)
         p32=torch.tensor(float(hard),dtype=torch.float32).item()
         mask=torch.tensor([(philox_word(state.seed,state.offset,row)>>8)*2**-24<p32
             for row in range(batch*heads*n)],device="cuda").reshape(batch,heads,n,1)
+    if mixed or random_direction:
         default_before=torch.cuda.get_rng_state()
         replay=forward(*inputs,**kwargs,rng_state=state)
         assert torch.equal(default_before,torch.cuda.get_rng_state())
@@ -117,8 +150,15 @@ def check_case(d,dv,n,direction,hard):
             torch.testing.assert_close(x,y,atol=0,rtol=0)
         # Fresh calls use the next per-row Philox block, not the same masks.
         *_,next_state=forward(*inputs,**kwargs,generator=rng,return_rng_state=True)
-        assert next_state.offset==before+4 and rng.get_offset()==before+8
-    expected,aux=voc_dism_ref(q,k,v,tau,qvoc,kvoc,hard_prob=float(hard),direction=direction,
+        assert next_state.offset==before+increment+4*int(random_direction)
+        assert rng.get_offset()==before+2*increment
+    if random_direction:
+        # Named-operand wrapper must replay the same global direction.
+        named=forward_interpolated(q,k,v,tau,interp,sm_scale=scale,hard_prob=float(hard),
+            rng_state=state,return_debug=True)
+        for x,y in zip((actual,l2,summary,boundary),named):
+            torch.testing.assert_close(x,y,atol=0,rtol=0)
+    expected,aux=voc_dism_ref(q,k,v,tau,qvoc,kvoc,hard_prob=float(hard),direction=state.direction,
         sm_scale=scale,interpolation=interp,hard_mask=mask,return_aux=True)
     torch.cuda.synchronize()
     assert torch.isfinite(actual).all()
