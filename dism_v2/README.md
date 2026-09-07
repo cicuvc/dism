@@ -165,6 +165,10 @@ core 106项、codegen 1项、环境/oracle 81项，总计188项通过。
 - 摘要和边界是矩形存储，空间 `12*B*H*ceil(N/32)*padded_N` bytes；仍是二次增长。
 # 反向准备：可选扫描边界保存
 
+反向当前进度：`dism_v2.backward.delta(dout, out)` 已实现独立CUDA预处理，BF16输入、FP32逐行dot输出。
+core五项梯度的自然对数语义/归约公式已有FP64 autograd测试；B1/B2/B3和完整autograd尚未接入。
+delta使用已保存的BF16 O，不是对BF16舍入严格求导；详见IMPLEMENTATION_PLAN的core反向接口约定。
+
 `forward(..., save_boundaries=True)` 在原返回项之后追加 `ScanBoundaries`，
 如果同时指定 `return_rng_state=True`，RNG state 仍是最后一项。尚无 autograd。
 设 `np=ceil(N/64)*64`，两个 FP32 log2 W₂ 张量为：

@@ -201,6 +201,28 @@ GLX更新复验：旧前向/布局189项通过；完整前向350通过、44个�
    E中的signed_dP为测试信号，尚未融合真实dO/V/delta、MMA或12-warp producer流水。
 4. 固定core梯度接口与归约归属，再实现B1/B2/B3；最后处理embedding backward写竞争及全链路。
 
+### Core反向接口与初版精度约定
+
+- 反向消费已选方向的A/B/V/LSE/rtau/labels、保存的BF16 O、FP32 L₂和ScanBoundaries，
+  以及RowRNGState；dO首版为contiguous BF16，与O同形状。不得重选direction或消费新offset。
+- 返回core语义的FP32 `(dA,dB,dV,dLSE,drtau)`；完整autograd包装接入时再按输入dtype回传，
+  不在跨CTA累计时降为BF16。不提供尚未完成的伪backward入口。
+- dA为FP32 zero-init缓冲，B3按key tiles atomic累加；dB/dV每key warp遍历全部query，独占写回。
+  q_from_k的dLSE按query归约，使用FP32跨key累加；k_from_q的dLSE按key归约，key warp独占写回。
+  drtau包含soft及hard匹配的G，以每CTA/head partial再按head归约，避免BF16 atomics。
+- `G=d loss/d natural_logM`；dA/dB仅乘sm_scale，不再乘LOG2E。
+  soft局部导数使用`G_soft=G*(~hard_row)`，dLSE为负的row/column sum；drtau为所有G之和。
+- delta使用保存的BF16 O：`sum(float(dO)*float(O))`，FP32累加输出；不是对BF16舍入严格求导。
+  后续梯度误差测试需要区分理想FP32 core oracle和保存O量化引入的误差。
+- 新增54项CPU FP64 autograd公式检查：全部九种D/DV、两方向、soft/mixed/hard，覆盖五项core梯度，
+  atol/rtol=2e-12全部通过。该测试验证数学与归约契约，不等于CUDA B1/B2/B3验收。
+- 已实现独立CUDA delta预处理（`dism_v2/backward.py::delta`），8行/CTA、一warp一行，支持DV32/64/128、
+  非对齐行数、非默认stream；21数值/接口用例+1codegen通过。三实例14/16/19寄存器，
+  STACK/LOCAL/SHARED均0，无CALL/LDL/STL。不与前向扩展混编，避免其codegen回归计数混淆。
+  22项GPU测试分别通过memcheck/racecheck/synccheck，零错误/零hazards；日志`/tmp/dism-delta-check.7dxkGq`。
+- 下一步接入B1：复用已验证的独立转置W重算，计算真实dO/V的dP、E与alpha，并融合dV和32-key摘要；
+  随后接B2和B3。完整反向12-warp寄存器/双缓冲流水仍需在融合后实测。
+
 ## 阶段 4：voc_dism 全链路
 
 - 接入现有 EmbInterpFunction，先复现并解决 embedding backward 的重复 dq/dk 写入问题。
