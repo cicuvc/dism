@@ -33,6 +33,18 @@
 
 ## 实现组件与布局
 
+- CUDA embedding前向已实现（计划dism_v2/EMBEDDING_CUDA_PLAN.md，实测dism_v2/EMBEDDING_CUDA.md）：
+  每CTA同一64个token，WG0四warp各16行acc_qo=softmax(k E_k^T) E_q，
+  WG1四warp各16行acc_ko=softmax(q E_q^T) E_k。8compute+4producer组成12warp，
+  仅warp8加载E_q/E_k共享双缓冲，producer group整体释放寄存器；初始dec40/inc232。
+  词表槽须等两个组的score与PV读取全部结束才复用，无scan/组间边界依赖。
+  D32/64/128完整CTA均零spill、无CALL，原生TMA与dec40/inc232已验证。
+  voc_dism通过embedding_backend="cuda"显式选择，默认仍为Triton；embedding反向继续Triton。
+  八项输出和反向保存状态必须来自同一次被选中的前向，不混用两个backend的LSE/插值。
+  保留单warp双独立FA作数值基线，但它与WS的CTA行数不同，不能作为流量减半的受控性能证明。
+  D32/64另有block_v=128低层实验选项，两个实例零spill；完整V较64略快但本批仍慢于Triton，
+  短V尾部可能变慢，不据此统一更改默认。高层CUDA embedding暂保持64步长。
+
 - 当前前向主方案：warp tile 16x64，32行 checkpoint，128行/CTA，compute warps 0–3 与 4–7 组成两个交错 warpgroup，连续16行块依次交给 0,4,1,5,2,6,3,7。只保留 0→4、1→5、2→6、3→7 的配对边界依赖，各 compute warpgroup 内四个 warp 独立。暂不拆 GLX upsweep/downsweep。
 - 当前反向主方案按key转置分块：每warp持有16个key，流式加载64个query，dV/dB在warp内累积直接写回，dA使用FP32 atomic。前向已通过可选save_boundaries接入原W坐标下竖16/横64粒度的FP32标量W₂边界；真实转置MMA/TMA、query列RNG和独立重算已在experiments/glx_recompute验证。warpgroup配对通信计划只用于reverse add-mul scan（4→0等）。q_from_k方向的dB是插值梯度，不能无条件称为dK。具体阶段与存储预算见IMPLEMENTATION_PLAN.md；dV已独立接入，完整反向尚未实现。
 - 当前采用12 warps/CTA：8 compute warps + 4 producer-group warps。sm120a 上整个 producer group 执行 setmaxnreg.dec<40>，两个 compute groups 执行 inc<232>；producer group 中仅 warp8 实际加载，其余参与重分配和必要的 CTA 同步。inc/dec 放在各自长期角色分支内，避免立即汇合导致编译器按低预算分配。K/V 双缓冲，单缓冲对照仍待做。query 初始 shared staging 转入寄存器后复用；资源以完整 CTA 编译结果为准。摘要、入边界及 RNG 均按逻辑 checkpoint/行索引，不能绑定物理 warp 编号。

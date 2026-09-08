@@ -495,6 +495,28 @@ pure soft、rtau=ln64逐元素精度失败，保留普通失败。reference FP32
 
 ## 阶段 5：sm120 性能迭代
 
+### 下一主项：CUDA embedding插值前向
+
+用户确认端到端主线完成，提交8a90cba；随后授权实现CUDA embedding前向，
+暂不实现其backward。详细执行与验收见[dism_v2/EMBEDDING_CUDA_PLAN.md](dism_v2/EMBEDDING_CUDA_PLAN.md)。
+12 warps/CTA：WG0四warp各16行acc_qo、WG1四warp各16行acc_ko；
+producer group8–11参与setmaxnreg，只有warp8实际加载。两个计算组处理相同64个token位置，
+共享E_q/E_k双缓冲，分别交换词表的score-key/PV-value角色。初始B_V64、dec40/inc232，
+以编译实测为准；只有最后一次PV输入读取完成后才释放词表slot。
+E1单warp基线、E2融合12-warp/TMA双缓冲、E3显式端到端backend已实现。
+D32/64/128均零spill，无SASS CALL，原生TMA和40/232寄存器重分配已验证。
+124项embedding前向/布局/tie/codegen/Triton对照通过；三类sanitizer各124项零错误。
+CUDA端到端81项接线通过；108项reference中100通过、8项既有类型rtau幅值失败，
+符号无反转。与原套件一起514通过/31普通失败，其中旧套件23项失败保留。
+E4已提供热cache前向API计时脚本；尚未完成纯kernel、冷cache/L2/HBM采样、
+相同CTA划分的独立FA流量消融及单缓冲对照。D32/64部分形状仍慢于融合Triton，
+因此默认Triton不变。详见[dism_v2/EMBEDDING_CUDA.md](dism_v2/EMBEDDING_CUDA.md)。
+追加B_V128：D32/64两个WS实例均零spill，48项新增数值/tail测试通过。
+已补CUPTI实际kernel计时：N4096/V1024、B1/H4时D32为55.94→54.21µs，
+D64为78.03→71.02µs，融合Triton为29.63/56.35µs；V129尾部变慢。
+暂保留block_v=128为低层显式实验选项，不自动改变高层64步长。
+因此上述E4剩余项中纯kernel计时已有首批数据，冷cache/L2/HBM/消融仍待做。
+
 - 建立按 B/H/N/V/D/DV 分组的基准，序列长度覆盖短序列到显存预算内的长序列；具体训练代表形状由用户场景补充。
 - 分别测量 embedding、摘要、传递、输出、各反向阶段以及端到端时延，包含临时缓冲和 RNG 的实际路径。
 - 调整 GLX shape、checkpoint 长度、warps/CTA、TMA stages、producer/consumer 分工和寄存器存活区间。
@@ -502,6 +524,21 @@ pure soft、rtau=ln64逐元素精度失败，保留普通失败。reference FP32
 - 根据瓶颈再决定并行化边界传递、减少 GEMM 重算、消除原子竞争或采用 CUTLASS/CuTe；不预设必须重写框架。
 
 验收：发布可复现的 correctness/performance 表与显存开销，不设未经测量的性能承诺；优化后的必要回归检查通过。
+
+### CUDA embedding反向新增里程碑（用户已批准）
+
+单warp稀疏反向基线已按用户授权保留spill并验证：48项同状态检查及三类sanitizer通过。
+另18项与Triton反向一致，其中6项V1对FP32 oracle保留量化失败。
+WS/P mailbox已写入，编译新增D64 vocab 8B stack、D128 token/vocab 16/64B stack；
+全部无CALL、原生TMA/setmaxnreg生效，按新增spill先报约定暂停，未调参、未测试WS。
+未接入autograd；详细资源及待确认项见dism_v2/EMBEDDING_BACKWARD.md。
+随后按用户建议比较词表WG0/WG1=248/216与232/232：拆成两个长期consumer分支后，
+两种预算都使D128 vocab降为8B stack（store8/load32B）；D64仍8B，D32零spill。
+因此目前保留长期分支+232/232，不能把收益归因于非对称预算；未继续压低WG1预算。
+此次只做编译/SASS对照，无CALL；WS运行验证仍待进行。
+另按用户建议预乘scale/LSE的LOG2E，P重算仿射部分使用单FFMA。
+LSE2临时行缓冲额外8B×BHN，梯度scale保持自然域；WS FMUL静态数量减少，spill不变。
+单warp数值回归仍60通过/6项既有V1失败，详见embedding反向文档。
 
 ## 阶段 6：varlen
 

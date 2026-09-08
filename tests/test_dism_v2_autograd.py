@@ -50,9 +50,13 @@ def inputs(d,dv,n,vocab=65,tau=.2):
     qv=rand((2,vocab,d));kv=rand(qv.shape)
     return (q,k,v,ts,qv,kv),rand(v.shape)
 
-def manual(ins,dout,scale,state):
+def manual(ins,dout,scale,state,embedding_backend="triton"):
     q,k,v,tau,qv,kv=ins
-    raw=emb_fwd_wrapper(q,k,qv,kv,scale)
+    if embedding_backend=="cuda":
+        from dism_v2.embedding import forward as embedding_forward
+        raw=embedding_forward(q,k,qv,kv,scale,warp_specialized=True)
+    else:
+        raw=emb_fwd_wrapper(q,k,qv,kv,scale)
     emb=InterpolationResult(*raw)
     emb=replace(emb,q_index=emb.q_index.long(),k_index=emb.k_index.long())
     out,norm,edges=forward_interpolated(q,k,v,tau,emb,sm_scale=scale,direction=state.direction,
@@ -75,16 +79,17 @@ def manual(ins,dout,scale,state):
 @pytest.mark.parametrize("d,dv",itertools.product((32,64,128),repeat=2))
 @pytest.mark.parametrize("direction",("q_from_k","k_from_q","random"))
 @pytest.mark.parametrize("probability",(0.,.37,1.))
-def test_autograd_wiring(d,dv,direction,probability):
+@pytest.mark.parametrize("embedding_backend",("triton","cuda"))
+def test_autograd_wiring(d,dv,direction,probability,embedding_backend):
     ins,dout=inputs(d,dv,65)
     leaves=[x.detach().requires_grad_() for x in ins]
     gen=torch.Generator(device="cuda").manual_seed(932)
     out,state=voc_dism(*leaves,sm_scale=d**-.5,direction=direction,hard_prob=probability,
-        generator=gen,return_rng_state=True)
+        generator=gen,return_rng_state=True,embedding_backend=embedding_backend)
     before=gen.get_state();default_before=torch.cuda.get_rng_state()
     grads=torch.autograd.grad(out,leaves,dout)
     assert torch.equal(before,gen.get_state()) and torch.equal(default_before,torch.cuda.get_rng_state())
-    with torch.no_grad(): expected,reference=manual(ins,dout,d**-.5,state)
+    with torch.no_grad(): expected,reference=manual(ins,dout,d**-.5,state,embedding_backend)
     torch.testing.assert_close(out,expected,atol=0,rtol=0)
     for x,y,leaf in zip(grads,reference,ins):
         assert x.shape==leaf.shape and x.dtype==leaf.dtype and torch.isfinite(x).all()
@@ -121,18 +126,24 @@ def test_embedding_backward(d,vocab,record_property):
 def test_autograd_reference(d,dv,direction,probability,oracle_kind,record_property):
     check_reference(d,dv,direction,probability,oracle_kind,record_property)
 
-def check_reference(d,dv,direction,probability,oracle_kind,record_property,n=65,tau=.2):
+def check_reference(d,dv,direction,probability,oracle_kind,record_property,n=65,tau=.2,embedding_backend="triton"):
     ins,dout=inputs(d,dv,n,tau=tau)
     leaves=[x.detach().requires_grad_() for x in ins]
     out,state=voc_dism(*leaves,sm_scale=d**-.5,direction=direction,hard_prob=probability,
-        generator=torch.Generator(device="cuda").manual_seed(721),return_rng_state=True)
+        generator=torch.Generator(device="cuda").manual_seed(721),return_rng_state=True,
+        embedding_backend=embedding_backend)
     actual=torch.autograd.grad(out,leaves,dout)
     ref=[x.float().detach().requires_grad_() for x in ins]
     interp=None
     if oracle_kind=="same_embedding":
         # Same embedding VALUES and labels; FP32 torch embedding Jacobian.
         fp=interpolation_ref(ref[0],ref[1],ref[4],ref[5],d**-.5)
-        with torch.no_grad(): raw=InterpolationResult(*emb_fwd_wrapper(ins[0],ins[1],ins[4],ins[5],d**-.5))
+        with torch.no_grad():
+            if embedding_backend=="cuda":
+                from dism_v2.embedding import forward as embedding_forward
+                raw=InterpolationResult(*embedding_forward(ins[0],ins[1],ins[4],ins[5],d**-.5,warp_specialized=True))
+            else:
+                raw=InterpolationResult(*emb_fwd_wrapper(ins[0],ins[1],ins[4],ins[5],d**-.5))
         values={name:getattr(fp,name)+(getattr(raw,name).float()-getattr(fp,name)).detach()
             for name in ("q_from_k","k_from_q","q_lse","k_lse")}
         interp=replace(fp,**values,q_index=raw.q_index.long(),k_index=raw.k_index.long())
