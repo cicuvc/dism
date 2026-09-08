@@ -17,7 +17,7 @@ from fla.modules import FusedRMSNormGated, RMSNorm, ShortConvolution
 from fla.ops.retention.chunk import chunk_simple_gla
 from fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule
 from fla.layers.gated_deltanet import GatedDeltaNet
-from ops.rope import apply_rope_vo, build_rope_cache, apply_rope_vo_T, apply_rope_bnhc, apply_rope_vo_bnhc
+from rope import apply_rope_vo, build_rope_cache, apply_rope_vo_T, apply_rope_bnhc, apply_rope_vo_bnhc
 from flash_attn import flash_attn_func
 
 def lse0(x: torch.Tensor): # logsumexp(x, y)
