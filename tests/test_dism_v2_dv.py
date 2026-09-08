@@ -70,7 +70,7 @@ def test_backward_summary_tails(n,mode,record_property):
     run(64,128,n,"random",.37 if mode=="random" else 1.,record_property,mode,check_summary=True)
 
 
-def run(d,dv,n,direction,probability,record_property,mode="random",check_summary=False,warp_specialized=False):
+def run(d,dv,n,direction,probability,record_property,mode="random",check_summary=False,warp_specialized=False,check_g=False):
     if torch.cuda.get_device_capability()!=(12,0): pytest.skip("sm120a only")
     batch,heads=(1,1) if n>513 else (2,2)
     gen=torch.Generator(device="cuda").manual_seed(741+n+d+dv)
@@ -133,6 +133,14 @@ def run(d,dv,n,direction,probability,record_property,mode="random",check_summary
             record_property("summary_w_max_abs",(w[finite]-aux["scores"].double()[finite]).abs().max().item() if finite.any() else 0.)
             alpha[...,:n,:n]=torch.sigmoid(w)
             emission[...,:n,:n]=torch.exp(w-norm.double()[...,None]*math.log(2))*(dout.double()@v.double().transpose(-1,-2)-dd.double()[...,None])
+            if check_g:
+                from test_dism_v2_g_recompute import probe as g_probe
+                stream.wait_stream(torch.cuda.current_stream())
+                with torch.cuda.stream(stream):
+                    actual_g=g_probe().run(a,b,v,dout,lse,tau,interp.q_index,interp.k_index,norm,dd,
+                        edges.vertical,edges.horizontal,boundary,scale,state.direction=="k_from_q",probability,state.seed,state.offset)
+                torch.cuda.current_stream().wait_stream(stream)
+                g_error=0.
             following=torch.zeros((batch,heads,np),device="cuda",dtype=torch.float64)
             local_a=torch.ones_like(following); local_b=torch.zeros_like(following)
             errors=[0.,0.,0.]
@@ -142,6 +150,9 @@ def run(d,dv,n,direction,probability,record_property,mode="random",check_summary
                 sa=torch.nn.functional.pad(local_a[...,1:],(0,1),value=1)
                 sb=torch.nn.functional.pad(local_b[...,1:],(0,1))
                 following=alpha[...,k]*sf+emission[...,k]
+                if check_g:
+                    g_error=max(g_error,(actual_g[...,k].double()-following).abs().max().item())
+                    torch.testing.assert_close(actual_g[...,k].double(),following,atol=5e-4,rtol=2e-3)
                 local_a=alpha[...,k]*sa
                 local_b=alpha[...,k]*sb+emission[...,k]
                 if k%32==0:
@@ -152,6 +163,11 @@ def run(d,dv,n,direction,probability,record_property,mode="random",check_summary
                     torch.testing.assert_close(boundary[...,k//32,:].double(),following,atol=5e-4,rtol=1e-3)
             record_property("summary",json.dumps(dict(d=d,dv=dv,n=n,mode=mode,probability=probability,
                 max_abs_first=errors[0],max_abs_second=errors[1],max_abs_boundary=errors[2])))
+            if check_g:
+                record_property("g_max_abs",g_error)
+                from test_dism_v2_g_recompute import check_gemm
+                check_gemm(actual_g,a,b,mask,scale,record_property)
+                assert torch.equal(before,torch.cuda.get_rng_state()) and torch.equal(explicit_before,gen.get_state())
     difference=(actual-expected).double()
     denom=expected.double().norm()
     relative=(difference.norm()/denom).item() if denom>0 else difference.norm().item()

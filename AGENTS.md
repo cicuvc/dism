@@ -56,7 +56,18 @@
 - dV已作为独立正确性路径接入backward.value_gradient：单warp CTA、16key×64query、FP32 warp累积无atomic，重放前向状态/RNG；P使用BF16高位+残差两次MMA以避免长序列单次BF16转换的精度失败。当前未合入12-warp producer流水或反向摘要，资源141–254寄存器、零spill；不得直接沿用前向232预算。详见dism_v2/DV.md。
 - reverse add-mul三步probe见`experiments/glx_reverse`：32-key摘要、逆向passing、4→0配对双槽通信已通过FP64/三类sanitizer验证。reverse HState编码列1…64，列0由VState补齐；与forward的-1…62不同。当前尚未融合梯度GEMM或反向producer流水。
 
+- dA shared转置/TMA输出probe已通过：`experiments/glx_da_tma`。Gsoft写shared时恢复逻辑query列，
+  TK col-layout加载后按16x32分块MMA，FP32 shared双槽经原生UTMAREDG.2D.ADD异步累加。
+  每writer fence+syncwarp发布，leader wait_group.read后方可复用输出槽；退出前wait_group0。
+  未padding尾部和多warp/CTA冲突累加通过；此独立probe资源不能外推到完整12-warp反向。
+
+- B3真实G前置验证见`experiments/glx_g_recompute`：单warp32key顺序处理高/低16半块，
+  从真实score/dP/E、前向W边界及生产G32边界恢复G；之后独立验证dA TMA和dB独占GEMM。
+  149项及三类sanitizer通过，G probe168–250寄存器、零spill。完整G仅作诊断输出，
+  生产B3不得物化；尚未完成dA/dB融合或dLSE/drtau归约，不外推12-warp资源。
+
 ## 已知旧实现问题
+
 
 - 旧 CUDA 最终 bwd kernel 为空；跨 checkpoint 的前向传递仍有 Triton 阶段；输出尾部为 RMSNorm，不能直接作为 v2 的正确性基线。
 - 旧 CUDA 使用 `[B,N,H,D]`，而 v2 使用 `[B,H,N,D]`，不能混用 stride 或接口。

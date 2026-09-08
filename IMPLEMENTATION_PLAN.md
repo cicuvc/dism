@@ -381,6 +381,22 @@ XML `/tmp/dism-ws-tanh-long-summary.xml`。当前97项合计91通过/6已知失�
 
 ## 阶段 4：voc_dism 全链路
 
+前置B3布局probe：已按用户要求验证Gsoft经shared的转置读取、dA16x32分块MMA、
+FP32 shared双槽和原生TMA异步reduce-add。见`experiments/glx_da_tma/README.md`。
+63数值+1codegen通过，三类sanitizer通过；六个D/warp实例72/80寄存器，零CALL/spill。
+输出不padding，TMA边界丢弃和多warp/CTA累加已验证。此probe无DV维度、无真实G重建，
+不代表完整dA/dB或12-warp融合资源验收。当前没有改动生产kernel。
+
+进一步的B3真实输入单warp验证见`experiments/glx_g_recompute/README.md`：
+每warp顺序处理32key的高/低16半块，用真实score/dP/E、前向稀疏W边界和生产G32
+边界恢复完整G（仅诊断输出）；随后测试Gsoft接入dA TMA及新dB独占累加probe。
+新增G/梯度GEMM85项与原dA64项共149通过；合并dV/WS回归403通过/6旧P量化失败。
+G九实例168–250registers、dB40/64/154，均零spill。尚未融合成不物化G的B3生产kernel，
+不能把诊断kernel的资源或量化对照当作完整反向验收；未实现dLSE/drtau归约。
+三类sanitizer各149项通过，零errors/hazards。G最大绝对误差2.47260e-4，
+同BF16 Gsoft下dA/dB误差2.84749e-6/1.89835e-6；FP32 Gsoft量化对照最大relative L2
+约0.00293/0.00295。具体口径及日志见实验README。下一步为不物化G的B3融合及资源验证。
+
 - 接入现有 EmbInterpFunction，先复现并解决 embedding backward 的重复 dq/dk 写入问题。
 - 正确传递插值 embedding 与 LSE 梯度，合并 score 的直接 q/k 梯度和 embedding 阶段梯度，完成六个输入的 autograd 接口。
 - 检查包导入、stride、dtype、sm_scale、词表 tail、top-1 tie 和随机调用语义。
