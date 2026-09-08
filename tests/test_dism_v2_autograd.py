@@ -1,4 +1,4 @@
-"""Six-input autograd through the existing Triton embedding and CUDA core."""
+"""Six-input autograd through selectable embedding backends and CUDA core."""
 import itertools
 import math
 import json
@@ -16,6 +16,22 @@ from test_dism_v2_precision import row_mask
 
 pytestmark=pytest.mark.skipif(not torch.cuda.is_available(),reason="CUDA required")
 NAMES=("q","k","v","rtau","q_voc","k_voc")
+
+
+@pytest.mark.parametrize("backend",("cuda","cuda_symmetric"))
+@pytest.mark.parametrize("d",(32,64,128))
+def test_all_cuda_no_embedding_fallback(backend,d,monkeypatch):
+    import dism_v2.autograd as module
+    def forbidden(*args,**kwargs):
+        raise AssertionError("all-CUDA path must not call Triton embedding")
+    monkeypatch.setattr(module,"emb_fwd_wrapper",forbidden)
+    monkeypatch.setattr(module,"emb_bwd_wrapper",forbidden)
+    ins,dout=inputs(d,128,65)
+    leaves=[x.detach().requires_grad_() for x in ins]
+    out=voc_dism(*leaves,sm_scale=d**-.5,hard_prob=.37,
+        embedding_backend="cuda",embedding_backward_backend=backend)
+    grads=torch.autograd.grad(out,leaves,dout)
+    assert torch.isfinite(out).all() and all(torch.isfinite(g).all() for g in grads)
 
 def test_embedding_row_store_ownership():
     import ast
@@ -80,12 +96,14 @@ def manual(ins,dout,scale,state,embedding_backend="triton"):
 @pytest.mark.parametrize("direction",("q_from_k","k_from_q","random"))
 @pytest.mark.parametrize("probability",(0.,.37,1.))
 @pytest.mark.parametrize("embedding_backend",("triton","cuda"))
-def test_autograd_wiring(d,dv,direction,probability,embedding_backend):
+@pytest.mark.parametrize("embedding_backward_backend",("triton","cuda","cuda_symmetric"))
+def test_autograd_wiring(d,dv,direction,probability,embedding_backend,embedding_backward_backend):
     ins,dout=inputs(d,dv,65)
     leaves=[x.detach().requires_grad_() for x in ins]
     gen=torch.Generator(device="cuda").manual_seed(932)
     out,state=voc_dism(*leaves,sm_scale=d**-.5,direction=direction,hard_prob=probability,
-        generator=gen,return_rng_state=True,embedding_backend=embedding_backend)
+        generator=gen,return_rng_state=True,embedding_backend=embedding_backend,
+        embedding_backward_backend=embedding_backward_backend)
     before=gen.get_state();default_before=torch.cuda.get_rng_state()
     grads=torch.autograd.grad(out,leaves,dout)
     assert torch.equal(before,gen.get_state()) and torch.equal(default_before,torch.cuda.get_rng_state())
@@ -123,15 +141,17 @@ def test_embedding_backward(d,vocab,record_property):
 @pytest.mark.parametrize("direction",("q_from_k","k_from_q"))
 @pytest.mark.parametrize("probability",(0.,.37,1.))
 @pytest.mark.parametrize("d,dv",itertools.product((32,64,128),repeat=2))
-def test_autograd_reference(d,dv,direction,probability,oracle_kind,record_property):
-    check_reference(d,dv,direction,probability,oracle_kind,record_property)
+@pytest.mark.parametrize("backend",("triton","cuda","cuda_symmetric"))
+def test_autograd_reference(d,dv,direction,probability,oracle_kind,record_property,backend):
+    check_reference(d,dv,direction,probability,oracle_kind,record_property,
+        embedding_backend="triton" if backend=="triton" else "cuda",embedding_backward_backend=backend)
 
-def check_reference(d,dv,direction,probability,oracle_kind,record_property,n=65,tau=.2,embedding_backend="triton"):
+def check_reference(d,dv,direction,probability,oracle_kind,record_property,n=65,tau=.2,embedding_backend="triton",embedding_backward_backend="triton"):
     ins,dout=inputs(d,dv,n,tau=tau)
     leaves=[x.detach().requires_grad_() for x in ins]
     out,state=voc_dism(*leaves,sm_scale=d**-.5,direction=direction,hard_prob=probability,
         generator=torch.Generator(device="cuda").manual_seed(721),return_rng_state=True,
-        embedding_backend=embedding_backend)
+        embedding_backend=embedding_backend,embedding_backward_backend=embedding_backward_backend)
     actual=torch.autograd.grad(out,leaves,dout)
     ref=[x.float().detach().requires_grad_() for x in ins]
     interp=None
@@ -172,14 +192,18 @@ def check_reference(d,dv,direction,probability,oracle_kind,record_property,n=65,
 @pytest.mark.parametrize("n,probability",((17,0.),(139,0.),(139,.37),(513,0.)))
 @pytest.mark.parametrize("direction",("q_from_k","k_from_q"))
 @pytest.mark.parametrize("oracle_kind",("torch","same_embedding"))
-def test_autograd_reference_tau_bound(n,probability,direction,oracle_kind,record_property):
-    check_reference(64,128,direction,probability,oracle_kind,record_property,n,math.log(64))
+@pytest.mark.parametrize("backend",("triton","cuda","cuda_symmetric"))
+def test_autograd_reference_tau_bound(n,probability,direction,oracle_kind,record_property,backend):
+    check_reference(64,128,direction,probability,oracle_kind,record_property,n,math.log(64),
+        embedding_backend="triton" if backend=="triton" else "cuda",embedding_backward_backend=backend)
 
-def test_training_backward():
+@pytest.mark.parametrize("backend",("triton","cuda","cuda_symmetric"))
+def test_training_backward(backend):
     ins,_=inputs(32,64,65)
     leaves=[x.detach().requires_grad_() for x in ins]
     for step in range(3):
-        out=voc_dism(*leaves,sm_scale=32**-.5,hard_prob=.37)
+        out=voc_dism(*leaves,sm_scale=32**-.5,hard_prob=.37,
+            embedding_backend="cuda",embedding_backward_backend=backend)
         out.float().square().mean().backward()
         for x in leaves:
             assert x.grad is not None and x.grad.dtype==x.dtype and torch.isfinite(x.grad).all()
@@ -189,28 +213,32 @@ def test_training_backward():
                 x.grad=None
 
 @pytest.mark.parametrize("n,vocab",((1,1),(17,31),(63,64),(129,129),(257,257),(1025,65)))
-def test_replay_tails_and_partial_grad(n,vocab):
+@pytest.mark.parametrize("backend",("triton","cuda","cuda_symmetric"))
+def test_replay_tails_and_partial_grad(n,vocab,backend):
     ins,dout=inputs(64,32,n,vocab)
     leaves=[x.detach().requires_grad_() for x in ins]
     stream=torch.cuda.Stream()
     stream.wait_stream(torch.cuda.current_stream())
+    kw=dict(embedding_backend="triton" if backend=="triton" else "cuda",embedding_backward_backend=backend)
     with torch.cuda.stream(stream):
-        out,state=voc_dism(*leaves,sm_scale=64**-.5,hard_prob=.37,return_rng_state=True)
+        out,state=voc_dism(*leaves,sm_scale=64**-.5,hard_prob=.37,return_rng_state=True,**kw)
         g=torch.autograd.grad(out,leaves,dout)
     torch.cuda.current_stream().wait_stream(stream)
     before=torch.cuda.get_rng_state()
-    replay=voc_dism(*leaves,sm_scale=64**-.5,hard_prob=.37,rng_state=state)
+    replay=voc_dism(*leaves,sm_scale=64**-.5,hard_prob=.37,rng_state=state,**kw)
     again=torch.autograd.grad(replay,leaves,dout)
     assert torch.equal(before,torch.cuda.get_rng_state())
     torch.testing.assert_close(out,replay,atol=0,rtol=0)
     for x,y in zip(g,again): torch.testing.assert_close(x,y,atol=.002,rtol=.008)
     only_tau=list(ins);only_tau[3]=ins[3].detach().requires_grad_()
-    out_tau=voc_dism(*only_tau,sm_scale=64**-.5,hard_prob=.37,rng_state=state)
+    out_tau=voc_dism(*only_tau,sm_scale=64**-.5,hard_prob=.37,rng_state=state,**kw)
     gt,=torch.autograd.grad(out_tau,only_tau[3],dout)
     torch.testing.assert_close(gt,g[3],atol=3e-5,rtol=3e-5)
 
 def test_autograd_contract():
     ins,dout=inputs(32,64,17)
+    with pytest.raises(ValueError,match="embedding_backward_backend"):
+        voc_dism(*ins,embedding_backward_backend="invalid")
     with pytest.raises(TypeError,match="BF16"): voc_dism(ins[0].float(),*ins[1:])
     with pytest.raises(ValueError,match="contiguous"): voc_dism(ins[0].transpose(0,1),*ins[1:])
     with pytest.raises(ValueError,match="hard_prob"): voc_dism(*ins,hard_prob=[.2])

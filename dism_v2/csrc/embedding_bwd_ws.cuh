@@ -212,16 +212,39 @@ template<int D,int T> __global__ __launch_bounds__(384,1) void vocabulary_ws(
     }
     __syncthreads();
 }
-template<int D> void dispatch_ws(Args a,cudaStream_t stream) {
+#include "embedding_bwd_symmetric.cuh"
+template<int D,bool SYMMETRIC,int VT,bool SHARED> void dispatch_ws(Args a,cudaStream_t stream) {
     constexpr int T=D==128?32:64;
+    // Sweep only the vocabulary scan; token-gradient tiling stays fixed.
     auto km=map<D,T>(a.key,a.voc,a.heads),vm=map<D,T>(a.value,a.voc,a.heads);
-    auto xm=map<D,T>(a.x,a.n,a.batch*a.heads),ym=map<D,T>(a.y,a.n,a.batch*a.heads);
-    auto um=map<D,T>(a.packed_u,a.n,a.batch*a.heads);
+    auto xm=map<D,VT>(a.x,a.n,a.batch*a.heads),ym=map<D,VT>(a.y,a.n,a.batch*a.heads);
+    auto um=map<D,VT>(a.packed_u,a.n,a.batch*a.heads);
     auto e=cudaFuncSetAttribute(token_ws<D,T>,cudaFuncAttributeMaxDynamicSharedMemorySize,sizeof(TokenWS<D,T>));
     if(e!=cudaSuccess) throw std::runtime_error(cudaGetErrorString(e));
-    e=cudaFuncSetAttribute(vocabulary_ws<D,T>,cudaFuncAttributeMaxDynamicSharedMemorySize,sizeof(VocabWS<D,T>));
+    if constexpr(SYMMETRIC)
+        e=cudaFuncSetAttribute(vocabulary_symmetric<D,VT,SHARED>,cudaFuncAttributeMaxDynamicSharedMemorySize,sizeof(VocabSymmetric<D,VT,SHARED>));
+    else e=cudaFuncSetAttribute(vocabulary_ws<D,VT>,cudaFuncAttributeMaxDynamicSharedMemorySize,sizeof(VocabWS<D,VT>));
     if(e!=cudaSuccess) throw std::runtime_error(cudaGetErrorString(e));
     preprocess<D><<<(a.batch*a.heads*a.n+3)/4,128,0,stream>>>(a);
     token_ws<D,T><<<dim3((a.n+63)/64,a.batch*a.heads),384,sizeof(TokenWS<D,T>),stream>>>(a,km,vm);
-    vocabulary_ws<D,T><<<dim3((a.voc+63)/64,a.heads),384,sizeof(VocabWS<D,T>),stream>>>(a,xm,ym,um);
+    if constexpr(SYMMETRIC)
+        vocabulary_symmetric<D,VT,SHARED><<<dim3((a.voc+127)/128,a.heads),384,sizeof(VocabSymmetric<D,VT,SHARED>),stream>>>(a,xm,ym,um);
+    else vocabulary_ws<D,VT><<<dim3((a.voc+63)/64,a.heads),384,sizeof(VocabWS<D,VT>),stream>>>(a,xm,ym,um);
+}
+template<int D,bool SYMMETRIC,bool SHARED> void select_vocab_step(Args a,int vt,cudaStream_t stream) {
+    if(vt==16) dispatch_ws<D,SYMMETRIC,16,SHARED>(a,stream);
+    else if(vt==32) dispatch_ws<D,SYMMETRIC,32,SHARED>(a,stream);
+    else {
+        if constexpr(D==128 && !SYMMETRIC)
+            throw std::runtime_error("paired D128 step64 exceeds shared capacity");
+        else dispatch_ws<D,SYMMETRIC,64,SHARED>(a,stream);
+    }
+}
+template<int D> void select_ws(Args a,bool symmetric,int vt,bool shared,cudaStream_t stream) {
+    if(symmetric) {
+        if constexpr(D==64) {
+            if(shared) {select_vocab_step<D,true,true>(a,vt,stream);return;}
+        }
+        select_vocab_step<D,true,false>(a,vt,stream);
+    } else select_vocab_step<D,false,false>(a,vt,stream);
 }

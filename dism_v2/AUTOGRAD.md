@@ -1,5 +1,13 @@
 # sm120端到端前向与反向
 
+最新（2026-09-08）：CUDA embedding前向和配对/对称WS反向均已显式接入。
+设置`embedding_backend="cuda", embedding_backward_backend="cuda"`运行全CUDA链路；
+反向选`"cuda_symmetric"`使用对称词表方案。默认前后向仍为Triton embedding，
+CUDA core不变。两个后端开关独立，全部六种组合均有接线/RNG回归。
+CUDA配对反向的token扫描步长D32=64、D64/128=32；对称为D32 reg/T32、
+D64 shared/T16、D128 reg/T16。它们是显式固定选项，不是自动性能调度器。
+以下原Triton验证记录保留；最终本轮结果见文末。
+
 入口：
 
 ```python
@@ -124,3 +132,48 @@ memcheck/racecheck/synccheck测试耗时9.41/160.29/11.78秒，不是性能基�
 没有新增失败，记录/tmp/dism-e2e-forward-regression.{log,xml}。
 本轮没有改变既有CUDA core二进制，未重跑所有core微基准或长序列反向压力集；
 不将本批有限场景视为完整训练稳定性/性能验收。
+
+## 全CUDA embedding最终端到端验证（2026-09-08）
+
+本轮新增显式CUDA embedding反向接线；保存本次实际前向的插值/LSE，
+反向按保存的全局direction将db或da和另一支dlse传给CUDA sparse embedding backward，
+之后与core直接梯度FP32相加，再转回输入dtype。反向不重新抽样，不混用后端保存状态。
+
+```python
+out = voc_dism(q, k, v, rtau, q_voc, k_voc,
+               sm_scale=D**-0.5, hard_prob=0.37,
+               embedding_backend="cuda",
+               embedding_backward_backend="cuda")  # 或 cuda_symmetric
+out.float().square().mean().backward()
+```
+
+验证范围：九种D/DV、两固定方向及random、hard_prob=0/.37/1，
+两种embedding前向×三种反向共六种组合。486项接线测试以同一次embedding前向值，
+手动CUDA core+原Triton embedding反向为对照，全部通过。额外6项测试禁止调用
+Triton embedding wrappers，确保全CUDA选项没有fallback。
+三步训练、跨stream尾部N1/17/63/129/257/1025、RNG重放和只求rtau梯度检查通过。
+
+联合`test_dism_v2_autograd.py`、`test_dism_v2_embedding_cuda.py`、
+`test_dism_v2_embedding_backward.py`最终结果：**1508通过、77个普通精度失败**。
+autograd为842通过/63失败，embedding CUDA前向套件272/8，独立CUDA embedding反向394/6。
+失败构成为68项rtau幅值与9项V1词表梯度量化；没有放宽容差或添加xfail。
+新增两种CUDA反向的40项reference失败均是原有rtau幅值场景的重复覆盖，
+没有出现接线、NaN、RNG或q/k/v/词表梯度的新失败。
+480个reference用例记录的rtau符号检查均无反号（近零阈值1e-5）；不外推训练稳定性。
+完整误差属性与失败列表：`/tmp/dism-final-e2e.xml`、`/tmp/dism-final-e2e.log`。
+
+memcheck/racecheck/synccheck各69项端到端选例全部通过，零errors/hazards。
+选例覆盖九种D/DV的混合行接线、全部后端的尾部/跨stream重放、全CUDA无fallback。
+kernel过滤器`regex=(emb_fwd|_interp_bwd|_ZN7dism_v2)`，覆盖embedding及CUDA core，
+不对PyTorch oracle kernels插桩。racecheck用时176.66秒，不是性能数据。
+PyTorch已有的跨stream AccumulateGrad提示仍保留，显式wait_stream及重放检查通过。
+日志`/tmp/dism-final-e2e-{memcheck,racecheck,synccheck}.log`。
+
+复现（conda blkw）：
+
+```bash
+python -m pytest -q tests/test_dism_v2_autograd.py tests/test_dism_v2_embedding_cuda.py tests/test_dism_v2_embedding_backward.py
+compute-sanitizer --tool racecheck --error-exitcode 99 --kernel-name 'regex=(emb_fwd|_interp_bwd|_ZN7dism_v2)' python -m pytest -q tests/test_dism_v2_autograd.py -k '(test_autograd_wiring and cuda and q_from_k and 0.37) or test_replay_tails_and_partial_grad or test_all_cuda_no_embedding_fallback'
+```
+
+默认后端不变；没有移植sm90、增加varlen、修复spill或改变此前接受的BF16量化语义。

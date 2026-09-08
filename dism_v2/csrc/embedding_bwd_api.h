@@ -11,5 +11,5 @@ struct Args {
     int batch,heads,n,voc;
     float scale,scale2;
 };
-void launch(Args,int,bool,cudaStream_t);
+void launch(Args,int,bool,bool,int,bool,cudaStream_t);
 }

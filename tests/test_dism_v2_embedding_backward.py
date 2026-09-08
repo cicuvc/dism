@@ -10,7 +10,7 @@ pytestmark=pytest.mark.skipif(not torch.cuda.is_available(),reason="CUDA require
 
 @pytest.mark.parametrize("d,direction,n,v",itertools.product(
     [32,64,128],["q_from_k","k_from_q"],[1,65],[1,31,65,129]))
-def test_same_state(d,direction,n,v):
+def test_same_state(d,direction,n,v,warp_specialized=False,vocab_symmetric=False,**config):
     torch.manual_seed(d+n+v)
     q,k=[torch.randn(2,2,n,d,device="cuda",dtype=torch.bfloat16) for _ in range(2)]
     eq,ek=[torch.randn(2,v,d,device="cuda",dtype=torch.bfloat16) for _ in range(2)]
@@ -20,7 +20,8 @@ def test_same_state(d,direction,n,v):
     full=direction=="q_from_k"
     out=raw[0 if full else 1]
     actual=backward(q,k,eq,ek,out,raw[2],raw[3],u,lam,direction=direction,
-                    sm_scale=d**-.5,return_preprocess=True)
+                    sm_scale=d**-.5,return_preprocess=True,
+                    warp_specialized=warp_specialized,vocab_symmetric=vocab_symmetric,**config)
     x,y,key,value,lx,ly=(k,q,ek,eq,raw[2],raw[3]) if full else (q,k,eq,ek,raw[3],raw[2])
     delta=(out.float()*u).sum(-1)
     torch.testing.assert_close(actual[4],delta,atol=5e-6,rtol=2e-6)
@@ -39,16 +40,32 @@ def test_same_state(d,direction,n,v):
         torch.testing.assert_close(a,b,atol=.003,rtol=.008)
 
 
+@pytest.mark.parametrize("d,direction,n,v",itertools.product(
+    [32,64],["q_from_k","k_from_q"],[1,17,65],[1,65,129]))
+def test_symmetric_narrow(d,direction,n,v):
+    test_same_state(d,direction,n,v,warp_specialized=True,vocab_symmetric=True)
+
+
+def test_symmetric_shared64_codegen():
+    sass=subprocess.check_output(["/usr/local/cuda/bin/cuobjdump","--dump-sass",
+                                  _backward_extension().__file__],text=True)
+    kernels=[p for p in re.split(r"Function\s*:\s*",sass)[1:]
+             if "vocabulary_symmetricILi64ELi16" in p.splitlines()[0]]
+    assert len(kernels)==2  # shared and register-resident variants
+    for body in kernels:
+        assert not re.search(r"\bCALL(?:\.|\s)",body)
+        assert "UTMALDG" in body and "USETMAXREG" in body
+
+
 def test_codegen():
     so=_backward_extension().__file__
     sass=subprocess.check_output(["/usr/local/cuda/bin/cuobjdump","--dump-sass",so],text=True)
     assert not re.search(r"\bCALL(?:\.|\s)",sass)
+    # Spills are accepted for the configuration sweep; CALLs are not.
     for body in re.split(r"Function\s*:\s*",sass)[1:]:
         name=body.splitlines()[0]
-        if '10vocabularyILi128ELi32ELb0' not in name:
-            assert not re.search(r"\b(?:LDL|STL)(?:\.|\s)",body), name
-    # D128 value-side single-warp spill is explicitly accepted; other kernels
-    # still enforce zero local traffic. No CALL exceptions are allowed.
+        if "_ws" in name or "vocabulary_symmetric" in name:
+            assert "UTMALDG" in body and "USETMAXREG" in body,name
 
 
 def test_lse_fma_codegen():
@@ -66,14 +83,26 @@ def test_lse_fma_codegen():
         if "_ws" not in name: continue
         count+=1
         assert "UTMALDG" in body and "USETMAXREG" in body
-        ceiling=96 if "ILi128E" in name else 192
+        tile=int(re.search(r"ILi\d+ELi(\d+)E",name).group(1))
+        ceiling=3*tile
         assert len(re.findall(r"\bFMUL(?:\.|\s)",body))<=ceiling, name
-    assert count==6
+    assert count==11  # three token + eight feasible paired-vocabulary kernels
+
+
+from dism_v2.benchmark_embedding_backward import configurations
+
+
+@pytest.mark.parametrize("d,name,config",[(d,name,cfg) for d in (32,64,128)
+    for name,cfg in configurations(d) if name!="single"])
+@pytest.mark.parametrize("direction",["q_from_k","k_from_q"])
+@pytest.mark.parametrize("n,v",[(1,1),(17,65),(65,129),(257,257),(1025,65)])
+def test_configurations(d,name,config,direction,n,v):
+    test_same_state(d,direction,n,v,**config)
 
 
 @pytest.mark.parametrize("d,direction,v",itertools.product(
     [32,64,128],["q_from_k","k_from_q"],[1,65,129]))
-def test_reference(d,direction,v,record_property):
+def test_reference(d,direction,v,record_property,**config):
     from dism_v2.dism_ref import interpolation_ref
     from dism_v2.emb_kernel import emb_bwd_wrapper
     torch.manual_seed(331+d+v)
@@ -84,7 +113,7 @@ def test_reference(d,direction,v,record_property):
     lam=torch.randn(q.shape[:3],device="cuda",dtype=torch.float32)
     full=direction=="q_from_k"
     actual=backward(q,k,eq,ek,raw[0 if full else 1],raw[2],raw[3],u,lam,
-                    direction=direction,sm_scale=d**-.5)
+                    direction=direction,sm_scale=d**-.5,**config)
     zero=torch.zeros_like(u)
     upstream=(u,zero,None,lam) if full else (zero,u,lam,None)
     triton=emb_bwd_wrapper(q,k,eq,ek,*raw[:4],*upstream,d**-.5)
@@ -104,3 +133,37 @@ def test_reference(d,direction,v,record_property):
         try: torch.testing.assert_close(a,b,atol=.02,rtol=.02)
         except AssertionError: failures.append(name)
     assert not failures, f"FP32 oracle precision failures: {failures}"
+
+
+@pytest.mark.parametrize("d,name,config",[(d,name,cfg) for d in (32,64,128)
+    for name,cfg in configurations(d) if name!="single"])
+@pytest.mark.parametrize("direction",["q_from_k","k_from_q"])
+@pytest.mark.parametrize("v",[65,129])
+def test_config_reference(d,name,config,direction,v,record_property):
+    test_reference(d,direction,v,record_property,**config)
+
+
+@pytest.mark.parametrize("d,direction",itertools.product([32,64,128],["q_from_k","k_from_q"]))
+def test_selected_long(d,direction):
+    test_same_state(d,direction,4096,1024,warp_specialized=True,
+                    vocab_token_step=64 if d==32 else 32)
+
+
+@pytest.mark.parametrize("d,symmetric,step,shared",[(32,True,32,False),
+    (64,True,32,False),(64,True,16,True),(128,False,32,False)])
+@pytest.mark.parametrize("direction",["q_from_k","k_from_q"])
+def test_selected_wide(d,symmetric,step,shared,direction):
+    test_same_state(d,direction,1024,8192,warp_specialized=True,
+                    vocab_symmetric=symmetric,vocab_token_step=step,vocab_shared=shared)
+
+
+def test_invalid_configurations():
+    q=torch.zeros(1,1,1,128,device='cuda',dtype=torch.bfloat16)
+    eq=q[0]
+    raw=forward(q,q,eq,eq)
+    for cfg,reason in [(dict(vocab_token_step=64),'shared memory capacity'),
+                       (dict(vocab_token_step=8),'16/32/64'),
+                       (dict(vocab_symmetric=True,vocab_shared=True),'symmetric D64')]:
+        with pytest.raises(RuntimeError,match=reason):
+            backward(q,q,eq,eq,raw[0],raw[2],raw[3],q.float(),raw[2],
+                     direction='q_from_k',warp_specialized=True,**cfg)

@@ -539,6 +539,25 @@ WS/P mailbox已写入，编译新增D64 vocab 8B stack、D128 token/vocab 16/64B
 另按用户建议预乘scale/LSE的LOG2E，P重算仿射部分使用单FFMA。
 LSE2临时行缓冲额外8B×BHN，梯度scale保持自然域；WS FMUL静态数量减少，spill不变。
 单warp数值回归仍60通过/6项既有V1失败，详见embedding反向文档。
+按用户后续要求新增对称词表WS：每组独占64词表项、每warp同时累积两张词表梯度，
+取消P mailbox及配对通信，仅保留共享输入ring同步。D32/64/128编译新增stack32/152/248B，
+无CALL、TMA/setmaxnreg生效；按约定暂停，未调参、未测试或计时。旧配对版保留作对照。
+后续用户授权缩小token步长：对称版D32=32、D64/128=16，stack分别0/8/208B。
+用户明确暂不处理D128；仅D64将两张词表常驻shared、按32-feature读取，
+最大live GPR实测198→188，动态shared32896→45184B，8B标量spill仍在，未计时。
+D32/64共36项同状态检查通过；D64三类sanitizer各18项通过。详见embedding反向文档。
+
+最新：用户授权放弃spill修复，已完成20个可运行WS配置的数值/性能搜索。
+embedding反向套件394通过、6个既有V1 FP32 oracle普通失败；全配置三类sanitizer各20项通过。
+七组B/H/N/V、D32/64/128、每配置三轮20次CUPTI计时已固化CSV及可复现脚本。
+小CTA网格配对更优；大CTA网格D32/64对称可胜出；D128本批仍配对最优。
+D64 reg/T32与shared/T16对称候选随形状互有胜负，spill不作为淘汰依据。
+完整方法、资源、误差与结果见dism_v2/EMBEDDING_BACKWARD.md及benchmarks/embedding_backward_sm120a.csv。
+暂保留显式配置，不更改低层默认或把CUDA embedding backward接入autograd。
+随后按用户最终全链路验证要求，已增加embedding_backward_backend="cuda"/"cuda_symmetric"
+显式接入配对/对称WS反向；默认Triton及低层配置不变。最终验证结果见dism_v2/AUTOGRAD.md。
+最终联合回归1508通过/77个既有类别精度失败（68项rtau幅值、9项V1词表量化）；
+486项六后端组合接线全通过，三类sanitizer各69项通过，480个reference用例无rtau反号。
 
 ## 阶段 6：varlen
 

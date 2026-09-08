@@ -250,11 +250,11 @@ template<int D> void dispatch(Args a,cudaStream_t stream) {
     vocabulary<D,T,true><<<dim3((a.voc+15)/16,a.heads),32,sizeof(VocabScratch<D,T>),stream>>>(a);
     vocabulary<D,T,false><<<dim3((a.voc+15)/16,a.heads),32,sizeof(VocabScratch<D,T>),stream>>>(a);
 }
-void launch(Args a,int d,bool ws,cudaStream_t stream) {
+void launch(Args a,int d,bool ws,bool symmetric,int vt,bool shared,cudaStream_t stream) {
     if(ws) {
-        if(d==32) dispatch_ws<32>(a,stream);
-        else if(d==64) dispatch_ws<64>(a,stream);
-        else dispatch_ws<128>(a,stream);
+        if(d==32) select_ws<32>(a,symmetric,vt,shared,stream);
+        else if(d==64) select_ws<64>(a,symmetric,vt,shared,stream);
+        else select_ws<128>(a,symmetric,vt,shared,stream);
     } else if(d==32) dispatch<32>(a,stream);
     else if(d==64) dispatch<64>(a,stream);
     else dispatch<128>(a,stream);

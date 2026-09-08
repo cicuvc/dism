@@ -1,4 +1,4 @@
-"""Fixed-length sm120 Dism, using the existing Triton embedding kernels."""
+"""Fixed-length sm120 Dism with selectable Triton/CUDA embedding kernels."""
 import math
 import torch
 from .core import forward,RowRNGState,ScanBoundaries
@@ -8,7 +8,7 @@ from .emb_kernel import emb_fwd_wrapper,emb_bwd_wrapper
 
 class _VocDism(torch.autograd.Function):
     @staticmethod
-    def forward(ctx,q,k,v,tau,qvoc,kvoc,scale,direction,probability,generator,replay,embedding_backend):
+    def forward(ctx,q,k,v,tau,qvoc,kvoc,scale,direction,probability,generator,replay,embedding_backend,embedding_backward_backend):
         # Actual order: q_from_k, k_from_q, k_lse, q_lse, k_top, q_top, k_idx, q_idx.
         if embedding_backend=="cuda":
             from .embedding import forward as embedding_forward
@@ -27,6 +27,7 @@ class _VocDism(torch.autograd.Function):
             edges.vertical,edges.horizontal)
         ctx.state=state
         ctx.scale=scale
+        ctx.embedding_backward_backend=embedding_backward_backend
         ctx.set_materialize_grads(False)
         return out,state
 
@@ -34,7 +35,7 @@ class _VocDism(torch.autograd.Function):
     def backward(ctx,dout,_state_grad):
         if torch.is_grad_enabled():
             raise NotImplementedError("higher-order backward is not implemented")
-        if dout is None: return (None,)*12
+        if dout is None: return (None,)*13
         q,k,v,tau,qvoc,kvoc,oq,ok,lk,lq,qi,ki,out,norm,vertical,horizontal=ctx.saved_tensors
         state=ctx.state
         if state.direction=="q_from_k": a,b,lse=q,oq,lq
@@ -46,24 +47,35 @@ class _VocDism(torch.autograd.Function):
         dv,_,g32=value_gradient(a,b,dout,lse,tau,qi,ki,norm,edges,**kw,
             v=v,delta=dd,warp_specialized=True)
         da,db,dlse,dtau=operand_gradient(a,b,v,dout,lse,tau,qi,ki,norm,dd,edges,g32,**kw)
-        zero=torch.zeros_like(a,dtype=torch.float32)
+        if ctx.embedding_backward_backend!="triton":
+            from .embedding import backward as embedding_backward
+            symmetric=ctx.embedding_backward_backend=="cuda_symmetric"
+            full=state.direction=="q_from_k"
+            dq,dk,dqvoc,dkvoc=embedding_backward(q,k,qvoc,kvoc,oq if full else ok,lk,lq,
+                db if full else da,dlse,direction=state.direction,sm_scale=ctx.scale,
+                warp_specialized=True,vocab_symmetric=symmetric,
+                vocab_token_step=None if symmetric else (64 if q.shape[-1]==32 else 32))
+        else:
+            zero=torch.zeros_like(a,dtype=torch.float32)
+            dq,dk,dqvoc,dkvoc=emb_bwd_wrapper(q,k,qvoc,kvoc,oq,ok,lk,lq,
+                db if state.direction=="q_from_k" else zero,
+                zero if state.direction=="q_from_k" else da,
+                None if state.direction=="q_from_k" else dlse,
+                dlse if state.direction=="q_from_k" else None,ctx.scale)
         # emb wrapper dlq belongs to out_q/k_lse; dlk to out_k/q_lse.
         if state.direction=="q_from_k":
-            dq,dk,dqvoc,dkvoc=emb_bwd_wrapper(q,k,qvoc,kvoc,oq,ok,lk,lq,
-                db,zero,None,dlse,ctx.scale)
             dq=dq+da
         else:
-            dq,dk,dqvoc,dkvoc=emb_bwd_wrapper(q,k,qvoc,kvoc,oq,ok,lk,lq,
-                zero,da,dlse,None,ctx.scale)
             dk=dk+db
         # Merge direct/embedding FP32 terms BEFORE the final input-dtype cast.
         grads=(dq,dk,dv,dtau,dqvoc,dkvoc)
         inputs=(q,k,v,tau,qvoc,kvoc)
-        return tuple(g.to(x.dtype) for g,x in zip(grads,inputs))+(None,)*6
+        return tuple(g.to(x.dtype) for g,x in zip(grads,inputs))+(None,)*7
 
 
 def voc_dism(q,k,v,rtau,q_voc,k_voc,*,sm_scale=1.0,direction="random",hard_prob=0.0,
-             generator=None,rng_state=None,return_rng_state=False,embedding_backend="triton"):
+             generator=None,rng_state=None,return_rng_state=False,embedding_backend="triton",
+             embedding_backward_backend="triton"):
     """BF16 output and six-input first-order autograd; optional replay state.
 
     q/k [B,H,N,D], v [B,H,N,DV], vocab [H,V,D]: contiguous BF16.
@@ -72,10 +84,13 @@ def voc_dism(q,k,v,rtau,q_voc,k_voc,*,sm_scale=1.0,direction="random",hard_prob=
     probability broadcasting or higher-order gradients. Known precision limits
     of BF16 outputs/delta are retained; no global attention or random masks.
     embedding_backend="cuda" opts into the fused CUDA embedding forward;
-    embedding backward remains Triton for both backends.
+    embedding_backward_backend="cuda" selects paired CUDA WS backward;
+    "cuda_symmetric" selects symmetric WS. Default backward remains Triton.
     """
     if embedding_backend not in ("triton","cuda"):
         raise ValueError("embedding_backend must be triton or cuda")
+    if embedding_backward_backend not in ("triton","cuda","cuda_symmetric"):
+        raise ValueError("embedding_backward_backend must be triton, cuda or cuda_symmetric")
     if q.ndim!=4 or not q.is_cuda:
         raise ValueError("q must be CUDA [B,H,N,D]")
     batch,heads,n,d=q.shape
@@ -108,5 +123,5 @@ def voc_dism(q,k,v,rtau,q_voc,k_voc,*,sm_scale=1.0,direction="random",hard_prob=
         if torch.cuda.is_current_stream_capturing():
             raise RuntimeError("CUDA Graph capture is not supported")
         out,state=_VocDism.apply(q,k,v,rtau,q_voc,k_voc,float(sm_scale),direction,
-            float(hard_prob),generator,rng_state,embedding_backend)
+            float(hard_prob),generator,rng_state,embedding_backend,embedding_backward_backend)
     return (out,state) if return_rng_state else out

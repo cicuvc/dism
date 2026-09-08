@@ -51,21 +51,31 @@ def _backward_extension():
         verbose=os.environ.get("DISM_VERBOSE_BUILD")=="1")
 
 
-def backward(q,k,q_voc,k_voc,out,k_lse,q_lse,u,dlse,*,direction,sm_scale=1.,return_preprocess=False,warp_specialized=False):
+def backward(q,k,q_voc,k_voc,out,k_lse,q_lse,u,dlse,*,direction,sm_scale=1.,return_preprocess=False,warp_specialized=False,vocab_symmetric=False,vocab_token_step=None,vocab_shared=None):
     """Dism-specific sparse embedding backward, currently single-warp baseline.
 
     out/U belong to the selected interpolation; dlse to the OPPOSITE branch.
     U and dlse are FP32. Returns FP32 (dq,dk,dq_voc,dk_voc), embedding terms only.
     Uses saved BF16 output for FP32 delta before BF16 U packing. No RNG.
+    vocab_symmetric=True selects the experimental 128-vocab CTA without P
+    mailboxes; requires warp_specialized=True. Default path is unchanged.
+    vocab_token_step selects 16/32/64 tokens per vocabulary scan step.
+    vocab_shared selects shared-resident vocab (symmetric D64 only).
     """
     if direction not in ("q_from_k","k_from_q"):
         raise ValueError("backward requires the saved fixed direction")
+    if not warp_specialized and (vocab_token_step is not None or vocab_shared is not None):
+        raise ValueError("vocab scan configuration requires warp_specialized")
+    d=q.shape[-1]
+    if vocab_token_step is None:
+        vocab_token_step=(32 if d==32 else 16) if vocab_symmetric else (32 if d==128 else 64)
+    if vocab_shared is None: vocab_shared=bool(warp_specialized and vocab_symmetric and d==64)
     if torch.is_grad_enabled() and any(t.requires_grad for t in (q,k,q_voc,k_voc,out,k_lse,q_lse,u,dlse)):
         raise NotImplementedError("higher-order embedding backward is not implemented")
     if direction=="q_from_k":
-        raw=_backward_extension().backward(k,q,k_voc,q_voc,out,u,k_lse,q_lse,dlse,float(sm_scale),warp_specialized)
+        raw=_backward_extension().backward(k,q,k_voc,q_voc,out,u,k_lse,q_lse,dlse,float(sm_scale),warp_specialized,vocab_symmetric,vocab_token_step,vocab_shared)
         result=(raw[1],raw[0],raw[3],raw[2])
     else:
-        raw=_backward_extension().backward(q,k,q_voc,k_voc,out,u,q_lse,k_lse,dlse,float(sm_scale),warp_specialized)
+        raw=_backward_extension().backward(q,k,q_voc,k_voc,out,u,q_lse,k_lse,dlse,float(sm_scale),warp_specialized,vocab_symmetric,vocab_token_step,vocab_shared)
         result=tuple(raw[:4])
     return result+tuple(raw[4:]) if return_preprocess else result

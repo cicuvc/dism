@@ -39,7 +39,8 @@
   仅warp8加载E_q/E_k共享双缓冲，producer group整体释放寄存器；初始dec40/inc232。
   词表槽须等两个组的score与PV读取全部结束才复用，无scan/组间边界依赖。
   D32/64/128完整CTA均零spill、无CALL，原生TMA与dec40/inc232已验证。
-  voc_dism通过embedding_backend="cuda"显式选择，默认仍为Triton；embedding反向继续Triton。
+  voc_dism通过embedding_backend="cuda"显式选择前向，默认仍为Triton。
+  embedding_backward_backend="cuda"/"cuda_symmetric"分别选择配对/对称CUDA WS反向，默认Triton。
   八项输出和反向保存状态必须来自同一次被选中的前向，不混用两个backend的LSE/插值。
   保留单warp双独立FA作数值基线，但它与WS的CTA行数不同，不能作为流量减半的受控性能证明。
   D32/64另有block_v=128低层实验选项，两个实例零spill；完整V较64略快但本批仍慢于Triton，
@@ -106,6 +107,14 @@
 - embedding 返回值顺序遵循 `InterpolationResult` 的定义，不按旧局部变量名猜测归属；直接 score 梯度与 embedding backward 梯度需要相加。
 
 ## 验证与协作
+
+- 用户最新授权：CUDA embedding反向不再修复或因spill暂停，先验证数值并按实测性能筛选
+  配对/对称、token步长16/32/64、D64词表register/shared配置。记录spill但不以零spill
+  作为候选准入条件；shared容量超限仍须排除。此约定覆盖下述历史“spill先停报”要求。
+  已完成20个配置及七组形状搜索：小CTA网格配对更优，大CTA网格D32/64对称可胜出，
+  D128本批仍配对领先；不要把CTA数量分界当作已确定的自动dispatch阈值。
+  embedding反向套件394通过/6个既有V1失败，全配置三类sanitizer各20项通过。
+  结果及资源见dism_v2/EMBEDDING_BACKWARD.md；随后已显式接入autograd，最终验证见AUTOGRAD.md。
 
 - 完整一阶autograd入口dism_v2.autograd.voc_dism，沿用Triton embedding wrappers，
   core梯度与embedding梯度FP32相加后才转输入dtype。实际输出顺序与LSE路由不能猜测。
