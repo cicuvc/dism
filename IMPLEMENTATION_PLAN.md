@@ -599,6 +599,110 @@ D64 reg/T32与shared/T16对称候选随形状互有胜负，spill不作为淘汰
 5. 先验证跨workload的边界/RNG、尾部及sanitizer，再比较NCU发射效率、pipeline利用和稳定阶段
    吞吐；检查SASS无CALL及资源变化。不将warp stall占比直接解释为可消除的墙钟时间。
 
+### 前向摘要 persistent 计划 P0–P5（2026-09-08，待实施）
+
+本轮仅制定计划；基线提交df561d7，NCU报告保留。范围仅摘要，output/passing/backward不改。
+
+**P0：固定基线与协议。** 参考src/dism_fwd_nope.cu的FixedLengthScheduler（763行起）、
+LoadSharedMemoryLayouts（875行起）、摘要producer/consumer（947–1088行）。
+沿用静态persistent推进、Q+首K预取、K ring、elect_leader及主循环unroll 1组织。
+旧版Prefetch/Default是union且task末有CTA同步，不能直接照搬为跨task重叠。
+先列清各槽owner、arrival计数、phase、释放点及退出drain；固定现有full/tanh性能基线。
+
+**P1：最优先完成persistent及Q/首K预取。** 12warp，dec40/inc232，每SM一个CTA。
+核心验收是上一workload收尾与下一workload的Q/K0加载重叠，不是task0启动预取。
+producer在当前任务最后若干tile仍进行HMMA/reduce/摘要写回时，提交下一任务Q及K0；
+不经过task结束的全CTA barrier才开始预取。Q可更早发射，但不能挤占当前K流水供给。
+任务切换时consumer等待的是此前已在途的Q/K0；task0仅是不可避免的pipeline prologue。
+warp8加载，9–11保留寄存器重分配角色；compute保持0,4,1,5,2,6,3,7逻辑行顺序。
+调度从旧版grid-stride开始，检查三角任务负载，必要时确定性长短交错；不默认增加atomic队列。
+RNG/checkpoint始终按逻辑batch/head/query-block索引。
+
+- 启动异步提交task0的Q和K0，并填充可用K槽。Q通过TMA进入shared输入槽再载入寄存器。
+- Q槽释放后，在当前task计算期间预取下一task Q；当前task所有K提交后，
+  利用已释放ring槽预取下一task K0，不等consumer开始新task才加载。
+  首K直接使用下一逻辑K slot，不默认增加复制槽；短task重叠窗口需实测。
+- K和mailbox按跨task单调tile序号推进phase，Q ready/free独立推进；
+  不能每task直接重置phase而复用未释放槽。无效warp仍参与协议，最后明确drain。
+- 两WG仅四对边界依赖，K读取结束及时释放，不增加逐task全CTA锁步；
+  安排一组reduce与另一组HMMA错位重叠。Q预取不能覆盖仍在使用的K。
+- 单独验证交错Q行映射和未padding尾部安全，不让TMA跨batch/head读入有效数据。
+
+**P2：访存流水与score简化。** 在P1正确基线上分别测量增量。
+
+- 审查Q/K、tau、query/key标签、行/列LSE、摘要写出及配对边界。
+  大块输入TMA；元数据提前发射寄存器load、延迟消费并shuffle复用，
+  区别于硬件异步copy，不为名义异步增加shared中转。tau等小标量允许普通load。
+  摘要先保留合并global store，输出异步staging只在必要且有收益时采用；通信仍用mailbox。
+- 加载后预算tau2=tau*LOG2E、scale2=scale*LOG2E；行LSE方向在Q元数据阶段算
+  bias2=(tau-lse_q)*LOG2E，列LSE方向在每K元数据阶段算bias2=(tau-lse_k)*LOG2E。
+  soft为fmaf(dot,scale2,bias2)，hard匹配为tau2，否则负无穷。
+  不重复换底，不混淆行列LSE；重排改变FP32舍入，检查边界及反向重算误差。
+- 方向、纯soft/纯hard用host dispatch/模板；混合行保留warp内RNG及必要谓词选择。
+  纯hard省去无用score MMA和Q/K数值加载作为独立优化，不改变标签匹配及递推。
+  完整严格下三角、对角及尾tiles分路径，避免每元素动态if链；控制模板及代码体积。
+  不删除负无穷/identity guard以换取少分支。
+
+**P3：发射及循环codegen。** P1起即遵守，随后系统检查。
+TMA/expect单线程操作用elect.sync或验证后的TK封装，在收敛warp处选举；
+保持正确active mask和arrival计数，不能只换lane0而漏掉其他lane的arrive。
+布局指定的owner（如lane31导出边界）不是任意单线程发射，不随意替换。
+编译期定长循环显式unroll，动态task/key主循环显式unroll 1。
+SASS检查单FFMA score、无冗余选举/重复换底、无CALL、原生TMA/USETMAXREG，
+记录分支、代码体积、寄存器/spill；新增spill先汇报，不自行扩大修复范围。
+
+**P4：扩大stage及shared配置。** K stage模板化，D64先比较2/3/4stage，再覆盖D32/D128。
+设置MaxDynamicSharedMemorySize及必要的PreferredSharedMemoryCarveout，查询实际opt-in上限；
+完整sizeof计入通信、barrier、对齐及硬件限制，不假设整64KiB均可分配。
+128行Q槽为256*D bytes，每个64行K槽为128*D bytes。
+D64的Q+4K=48KiB，D32的Q+4K=24KiB，均另计通信；
+D128的Q+2K=64KiB未计通信已无余量，不能直接套用。
+D128验证64行分段Q输入槽的消费/释放（下一task Q分段预取），
+使16KiB Q+2K=48KiB；若保留完整Q槽则减少K stage并说明回退原因。
+任何布局复用都须证明旧读者已结束；不为occupancy减预算，也不要求统一stage数。
+
+用户追加同步要求：上述四对payload仍独立存放，但mail ready/free改为WG级共享，
+每slot各128线程arrival，不再每对32线程独立phase。全组发布/消费后推进，
+尽量保持四warp步调一致，降低访存closure时间方差；不增加两组间的全CTA锁步。
+
+**P5：验收与归因。** 分别记录P1 persistent+预取、P2 score/元数据/分支、P4深stage收益。
+覆盖D32/64/128、两方向、hard端点/混合、尾部、长链、summary及保存W边界。
+专门强制每CTA多个task，覆盖跨head/batch、奇偶tile数、最后task及无效warps；
+运行memcheck/racecheck/synccheck，再跑九种D/DV全链路前后向回归。
+full/tanh分别比较同输入oracle，既有误差不放宽；检查score重排与未改反向重算的一致性。
+报告热身后kernel计时及同stream连续吞吐，重新采NCU比较发射效率、tensor利用率、
+load-use和barrier位置，结合SASS判断重叠；stall样本占比不是可消除的墙钟时间，
+仅存在双缓冲/TMA不足以证明HMMA与scan有效重叠。
+
+P1首版实测：已接入默认summary dispatch，Q独立TMA输入槽及跨任务Q/K0预取，
+任务间不再CTA同步；TK elect/TMA atom/寄存器分配/warp load与MMA。
+按用户追加要求mail ready/free已改WG粒度128 arrivals。D32/64三K槽，D128暂一K槽。
+full前向+codegen122项通过；首批D64混合tanh摘要CUPTI中位673.277→522.717us，
+约1.29x；这不是persistent与stage的单变量消融，也尚未证明HMMA/scan实际重叠。
+P2–P4、D128分段Q、多stage搜索和进一步NCU仍待做，原score语义未改。
+完整协议、测量条件、原始数据及最终验证见dism_v2/PERSISTENT_SUMMARY.md。
+
+free2/ready1实验已按用户授权撤回：D64/N257卡住，producer前后补syncwarp均未解决；
+CUDA调试器看到producer已到末尾CTA barrier、consumer在等Q ready。根因未确定。
+当前恢复ready32/free256及score后释放，WG mailbox128不变；baseline122项重新通过。
+随后Q改为128行TK tile+subtile读取，Q/K tensor-map外维直接覆盖所有swizzle panels，
+每workload Q及完整K tile各一次TMA。新版本122项通过，full/tanh各三个summary实例
+恰有两个TMA发射位置，零spill/无CALL。D64首轮523.101→522.718us，未建立显著收益。
+尾K仍标量安全加载；单线程发布同步优化暂搁置，详细验证记录见PERSISTENT_SUMMARY.md。
+
+P2首版：仅摘要接入方向特化、寄存器分布式key元数据预取、bias2/scale2/tau2预计算，
+score使用FFMA+显式selp；hard端点与tile特化暂未做，output/backward不改。
+full原121项及新增12项N513/rtau=ln(D)检查通过，full/tanh均无spill/CALL。
+D64混合tanh首轮两方向分别523.261→327.887us、512.237→337.854us；
+这是整组score优化的收益，未拆分归因。详情与最终验证见dism_v2/PREDICATED_SCORE.md。
+
+前向摘要补充实验：用户授权 `DISM_TILE_LSE=tanh_finite`，core 前后向使用
+`-1e6` log-zero 并移除 tile tanh 的 infinity 分支，完整 chunk passing 不变。
+默认配置未切换。66 个端到端相对 guarded tanh 的对照全部有限、tau 无新增符号反转；
+6 个长链输出相同，严格 analytic normalization 测试仍有原 tanh 近似误差失败。
+19 项 finite memcheck 零错误，27 项训练冒烟/重放检查通过。摘要两方向首测
+328/337us→227/247us；范围、限制与复现见 `dism_v2/FINITE_SENTINEL.md`。
+
 ## 阶段 6：varlen
 
 - 增加 packed tokens 与 sequence offsets 接口，定义与 fixed-length 逐序列调用等价的数学结果。

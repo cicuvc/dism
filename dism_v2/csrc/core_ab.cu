@@ -25,7 +25,7 @@ template<int D,int DV> struct Shared {
 __device__ __forceinline__ float2 coefficient(const Args& p,const float* delta,float w,float dot,
                                               int bh,int q,int k) {
     if(q>=p.n || k>=p.n) return {1,0};
-    if(w==-INFINITY) return {0,0};
+    if(w==LOG_ZERO) return {0,0};
     float t,x=w*0.3465735902799726547f;
     asm("tanh.approx.f32 %0,%1;":"=f"(t):"f"(x));
     return {fmaf(.5f,t,.5f),exp2f(w-p.normalizer[int64_t(bh)*p.n+q])*(dot-delta[int64_t(bh)*p.n+q])};

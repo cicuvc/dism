@@ -1,4 +1,9 @@
 #include <cuda.h>
+// This vendored TK does not auto-enable SM120 features. TMA declarations
+// also reference FP8 types; enabling those types does not change BF16 math.
+#define KITTENS_FEATURE_TMA
+#define KITTENS_FEATURE_FP8
+#define KITTENS_FEATURE_REG_INCDEC
 #include <kittens.cuh>
 #include "core_api.h"
 #include "log_affine.cuh"
@@ -32,9 +37,9 @@ template<int D,int DV,bool OUTPUT> struct Shared {
 
 __device__ __forceinline__ float score(const Args& p, float dot, int bh, int i, int j,
         bool hard, float cached_tau, float cached_lse, int64_t cached_label) {
-    if(i>=p.n || j>=p.n || j>i) return -INFINITY;
+    if(i>=p.n || j>=p.n || j>i) return LOG_ZERO;
     float tau=cached_tau;
-    if(hard) return cached_label==p.k_label[int64_t(bh)*p.n+j]?tau*LOG2E:-INFINITY;
+    if(hard) return cached_label==p.k_label[int64_t(bh)*p.n+j]?tau*LOG2E:LOG_ZERO;
     float l=p.column_lse?p.lse[int64_t(bh)*p.n+j]:cached_lse;
     return (dot*p.scale-l+tau)*LOG2E;
 }
@@ -154,8 +159,8 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
                     auto x=scalar.data[r][c].value; data.data[r][c]={x,x};
                     int i=qbase+(r*8+lane/4-(7-c)+16)%16;
                     int j=t*64+c+(lane&3)*8;
-                    if(i>=p.n || j>=p.n) { data.data[r][c].first.u0=0; data.data[r][c].second.u0=-INFINITY; }
-                    if(i>=p.n || j+32>=p.n) { data.data[r][c].first.u1=0; data.data[r][c].second.u1=-INFINITY; }
+                    if(i>=p.n || j>=p.n) { data.data[r][c].first.u0=0; data.data[r][c].second.u0=LOG_ZERO; }
+                    if(i>=p.n || j+32>=p.n) { data.data[r][c].first.u1=0; data.data[r][c].second.u1=LOG_ZERO; }
                 }
             }
             Buffer::HState top;
@@ -168,7 +173,7 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
                     int j=t*64+8*(lane&3)+6-lane/4;
                     int64_t off=(int64_t(bh)*p.checkpoints+checkpoint-1)*p.padded_n;
                     top.init[0].first={0,0};
-                    top.init[0].second={j>=0?p.boundary[off+j]:-INFINITY,p.boundary[off+j+32]};
+                    top.init[0].second={j>=0?p.boundary[off+j]:LOG_ZERO,p.boundary[off+j+32]};
                 }
             }
             Buffer::StatePair result;
@@ -230,8 +235,8 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
                         auto x=scalar.data[r][c].value;
                         auto pos=Buffer::layout(r,c,0);
                         // Padding identity transports state, but is not an attention weight.
-                        if(qbase+pos.first>=p.n || t*64+pos.second>=p.n) x.u0=-INFINITY;
-                        if(qbase+pos.first>=p.n || t*64+pos.second+32>=p.n) x.u1=-INFINITY;
+                        if(qbase+pos.first>=p.n || t*64+pos.second>=p.n) x.u0=LOG_ZERO;
+                        if(qbase+pos.first>=p.n || t*64+pos.second+32>=p.n) x.u1=LOG_ZERO;
                         scalar.data[r][c].value=x; m=fmaxf(m,fmaxf(x.u0,x.u1));
                     }
                     m=fmaxf(m,__shfl_xor_sync(0xffffffff,m,1));
@@ -266,18 +271,18 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
                     // A 32-row diagonal wholly beyond N is identity, not zero.
                     // Earlier padded endpoints still cross a masked valid cell.
                     int64_t off=(int64_t(bh)*p.checkpoints+checkpoint)*p.padded_n+j;
-                    reinterpret_cast<float2*>(p.summary)[off]=make_float2(j>=p.n+31?0.f:-INFINITY,-INFINITY);
+                    reinterpret_cast<float2*>(p.summary)[off]=make_float2(j>=p.n+31?0.f:LOG_ZERO,LOG_ZERO);
                 }
         } else {
             if(p.vertical)
                 for(int e=end/16;e<p.padded_n/16;++e)
                     for(int r=lane;r<16;r+=32) {
                         int i=qbase+r;
-                        if(i<p.padded_n) p.vertical[(int64_t(bh)*(p.padded_n/16)+e)*p.padded_n+i]=-INFINITY;
+                        if(i<p.padded_n) p.vertical[(int64_t(bh)*(p.padded_n/16)+e)*p.padded_n+i]=LOG_ZERO;
                     }
             if(p.horizontal && qbase%64==48 && qbase<p.padded_n)
                 for(int j=end+lane;j<p.padded_n;j+=32)
-                    p.horizontal[(int64_t(bh)*(p.padded_n/64)+qbase/64)*p.padded_n+j]=-INFINITY;
+                    p.horizontal[(int64_t(bh)*(p.padded_n/64)+qbase/64)*p.padded_n+j]=LOG_ZERO;
         }
         if constexpr(OUTPUT) {
             // One Newton-refined FP32 reciprocal per row, rather than per-element
@@ -308,7 +313,7 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
 __global__ void passing(Args p) {
     int d=int(blockIdx.x*blockDim.x+threadIdx.x)-(p.checkpoints-1)*32;
     if(d>=p.padded_n) return;
-    int bh=blockIdx.y; float x=-INFINITY;
+    int bh=blockIdx.y; float x=LOG_ZERO;
     for(int s=0;s<p.checkpoints;++s) {
         int j=d+s*32;
         if(j>=0 && j<p.padded_n) {
@@ -328,8 +333,9 @@ template<int D,int DV,bool OUTPUT> void launch(const Args& p,cudaStream_t stream
     if(err!=cudaSuccess) throw std::runtime_error(cudaGetErrorString(err));
     core<D,DV,OUTPUT><<<dim3((p.n+127)/128,p.batch_heads),384,sm,stream>>>(p,km,vm);
 }
+#include "summary_persistent.cuh"
 void launch_summary(const Args& p,int d,cudaStream_t stream) {
-    switch(d) { case 32: launch<32,32,false>(p,stream);break; case 64: launch<64,32,false>(p,stream);break; case 128: launch<128,32,false>(p,stream);break; }
+    switch(d) { case 32: launch_persistent_summary<32>(p,stream);break; case 64: launch_persistent_summary<64>(p,stream);break; case 128: launch_persistent_summary<128>(p,stream);break; }
 }
 void launch_passing(const Args& p,cudaStream_t stream) {
     passing<<<dim3((p.padded_n+(p.checkpoints-1)*32+127)/128,p.batch_heads),128,0,stream>>>(p);

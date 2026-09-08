@@ -31,7 +31,7 @@ def test_tanh_lse_formula_and_identity(tmp_path):
     subprocess.run([str(binary)],check=True)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available() or TILE_LSE!='tanh',
+@pytest.mark.skipif(not torch.cuda.is_available() or TILE_LSE not in ('tanh','tanh_finite'),
                    reason='experimental tanh precision regression; run with DISM_TILE_LSE=tanh')
 def test_tanh_tau_sign_at_dimension_bound():
     """Known failure remains an ordinary failure in the experimental suite."""

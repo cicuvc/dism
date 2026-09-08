@@ -1,7 +1,7 @@
 """NCU target: skip 10 matching launches, collect the 11th summary kernel.
 
 DISM_TILE_LSE=tanh python -m dism_v2.profile_forward_summary
-Filter mangled name regex:.*coreILi64ELi32ELb0.* . No kernel modifications.
+Filter mangled name regex:.*summary_persistentILi64E.* (both LSE directions).
 """
 import argparse
 import json

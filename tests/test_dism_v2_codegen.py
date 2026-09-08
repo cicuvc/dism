@@ -16,10 +16,19 @@ def test_sm120a_native_tma_and_register_reallocation():
     tool=Path(CUDA_HOME)/"bin/cuobjdump"
     binary=_extension().__file__
     sass=subprocess.check_output([str(tool),"--dump-sass",binary],text=True)
-    # Nine output and three summary specializations; passing does not reallocate.
-    assert sass.count("USETMAXREG.DEALLOC.CTAPOOL")==12
-    assert sass.count("USETMAXREG.TRY_ALLOC.CTAPOOL")==12
+    # Nine output and six summary (D x LSE direction) specializations.
+    assert sass.count("USETMAXREG.DEALLOC.CTAPOOL")==15
+    assert sass.count("USETMAXREG.TRY_ALLOC.CTAPOOL")==15
     assert "UTMALDG.5D" in sass
+    functions=re.split(r"Function : (\S+)",sass)
+    summaries={functions[i]:functions[i+1] for i in range(1,len(functions),2)
+               if "summary_persistent" in functions[i]}
+    assert len(summaries)==6
+    # One Q transfer per workload and one full-width K transfer per key tile,
+    # including D128; neither warp-row nor swizzle-panel emission loops remain.
+    assert all(body.count("UTMALDG.5D")==2 for body in summaries.values())
+    # Two query-label and two distributed key-label loads; no per-score LDG64.
+    assert all(body.count("LDG.E.64")==4 for body in summaries.values())
     assert not re.search(r"\bCALL(?:\.|\s)",sass)
     assert not re.search(r"\b(?:LDL|STL)(?:\.|\s)",sass)
     resources=subprocess.check_output([str(tool),"--dump-resource-usage",binary],text=True)

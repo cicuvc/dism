@@ -104,13 +104,29 @@ def test_dimensions(d,dv,direction,hard):
 def test_tails(n):
     check_case(64,64,n,"q_from_k",False)
 
-def check_case(d,dv,n,direction,hard,rng_seed=2**63+12345):
+@pytest.mark.parametrize("d",(32,64,128))
+@pytest.mark.parametrize("direction",("q_from_k","k_from_q"))
+@pytest.mark.parametrize("n",(65,257))
+@torch.no_grad()
+def test_persistent_workload_reuse(d,direction,n):
+    # More logical tasks than SMs, including differing K-loop lengths/phases.
+    batch=torch.cuda.get_device_properties(0).multi_processor_count//2+3
+    check_case(d,32,n,direction,.37,batch=batch)
+
+@pytest.mark.parametrize("d",(32,64,128))
+@pytest.mark.parametrize("direction",("q_from_k","k_from_q"))
+@pytest.mark.parametrize("hard",(0.,.37))
+@torch.no_grad()
+def test_score_reorder_tau_bound(d,direction,hard):
+    check_case(d,64,513,direction,hard,tau_bound=True)
+
+def check_case(d,dv,n,direction,hard,rng_seed=2**63+12345,batch=2,tau_bound=False):
     generator=torch.Generator(device="cuda").manual_seed(41+n+d+dv)
     def rand(shape): return torch.randn(shape,device="cuda",dtype=torch.bfloat16,generator=generator)
-    batch,heads=2,2
+    heads=2
     q,k,v=rand((batch,heads,n,d)),rand((batch,heads,n,d)),rand((batch,heads,n,dv))
     qvoc,kvoc=rand((heads,11,d)),rand((heads,11,d))
-    tau=torch.tensor([-0.5,0.5],device="cuda")
+    tau=torch.tensor([math.log(d)]*2 if tau_bound else [-0.5,0.5],device="cuda")
     scale=d**-0.5
     interp=interpolation_ref(q,k,qvoc,kvoc,scale)
     interp=replace(interp,q_from_k=interp.q_from_k.bfloat16().contiguous(),

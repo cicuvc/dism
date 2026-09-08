@@ -31,15 +31,17 @@ def metric(actual, expected):
 def main():
     p=argparse.ArgumentParser()
     p.add_argument('--baseline',type=Path,required=True)
+    p.add_argument('--write-baseline',action='store_true',help='Save current mode, e.g. tanh for finite-sentinel comparison')
     p.add_argument('--case',help='One case key, e.g. 128/32/139/q_from_k/0.0')
     p.add_argument('--tau-oracle',action='store_true',help='Same-embedding FP32 tau oracle for a selected pure-soft case')
     args=p.parse_args()
     if args.tau_oracle and (not args.case or not args.case.endswith('/0.0')):
         p.error('--tau-oracle requires one pure-soft --case')
     torch.backends.cuda.matmul.allow_tf32=False
-    if TILE_LSE=='full' and args.baseline.exists():
+    write_baseline=TILE_LSE=='full' or args.write_baseline
+    if write_baseline and args.baseline.exists():
         p.error('baseline already exists; choose a new path')
-    expected=torch.load(args.baseline,weights_only=True) if TILE_LSE!='full' else None
+    expected=None if write_baseline else torch.load(args.baseline,weights_only=True)
     saved={}
     shapes=list(itertools.product((32,64,128),repeat=2))
     cases=[(d,dv,139) for d,dv in shapes]+[(64,64,n) for n in (513,1024)]
@@ -83,7 +85,7 @@ def main():
                     dt=torch.autograd.grad(ref,tr,do.float())[0]
                     metrics['dtau'].update(full_values=b.tolist(),tanh_values=a.tolist(),
                         same_embedding_oracle=dt.tolist())
-                print(json.dumps(dict(case=key,metrics=metrics)),flush=True)
+                print(json.dumps(dict(tile_lse=TILE_LSE,case=key,metrics=metrics)),flush=True)
     if expected is None:
         torch.save(saved,args.baseline)
         print(json.dumps(dict(tile_lse=TILE_LSE,cases=len(saved),baseline=str(args.baseline))))

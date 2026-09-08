@@ -23,9 +23,10 @@ def _extension():
         sources=[str(root / "dism_v2/csrc" / f) for f in ("bindings.cpp", "core_fwd.cu")],
         extra_include_paths=[str(root / "include"), str(glx / "include")],
         extra_cflags=["-O2", "-std=c++20"],
-        extra_cuda_cflags=["-O3", "-std=c++20", "-lineinfo", "--extended-lambda",
+        extra_cuda_cflags=["-O3", "-std=c++20", "--extended-lambda",
                           "--expt-relaxed-constexpr", "-gencode=arch=compute_120a,code=sm_120a",
-                          "--ptxas-options=-v"] + LSE_FLAGS,
+                          "--ptxas-options=-v"] + LSE_FLAGS
+                          + (["-lineinfo"] if os.environ.get("DISM_LINEINFO", "0") == "1" else []),
         extra_ldflags=["-lcuda"], verbose=os.environ.get("DISM_VERBOSE_BUILD") == "1",
     )
 

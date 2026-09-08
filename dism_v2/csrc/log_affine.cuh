@@ -4,6 +4,11 @@
 
 namespace dism_v2 {
 constexpr float LOG2E = 1.4426950408889634f;
+#if defined(DISM_FINITE_SENTINEL) && DISM_FINITE_SENTINEL
+constexpr float LOG_ZERO = -1.e6f;
+#else
+constexpr float LOG_ZERO = -INFINITY;
+#endif
 __host__ __device__ __forceinline__ float logadd2(float x, float y) {
     if (x == -INFINITY) return y;
     if (y == -INFINITY) return x;
@@ -11,11 +16,14 @@ __host__ __device__ __forceinline__ float logadd2(float x, float y) {
 }
 // The approx() formula from /home/cicuvc/cs/projects/rl/lse.cu, NOT approx2.
 // Keep the source's rounding/order (maximum + amplitude, then FMA).
-// Explicit infinity guards preserve hard mismatches and the scan identity.
+// Exact-infinity modes keep guards. The opt-in bounded finite mode deliberately
+// uses an approximate log-zero/identity and removes these tile-only branches.
 __host__ __device__ __forceinline__ float tile_logadd2(float x, float y) {
 #if defined(DISM_TILE_LSE_TANH) && DISM_TILE_LSE_TANH
+#if !defined(DISM_FINITE_SENTINEL) || !DISM_FINITE_SENTINEL
     if (x == -INFINITY) return y;
     if (y == -INFINITY) return x;
+#endif
     constexpr float amplitude = 1.81089463f;
     float p = fmaf(fabsf(x-y), 0.34114549f, 0.48232999f);
     float value;
@@ -32,7 +40,7 @@ __host__ __device__ __forceinline__ float tile_logadd2(float x, float y) {
 }
 struct LogAffine {
     template<class T> __host__ __device__ __forceinline__ static glx::BinaryElement<T> identity() {
-        return {T{0.f}, T{-INFINITY}};
+        return {T{0.f}, T{LOG_ZERO}};
     }
     __host__ __device__ __forceinline__ static glx::BinaryElement<float> apply(
             glx::BinaryElement<float> x, glx::BinaryElement<float> y) {

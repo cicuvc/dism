@@ -21,6 +21,7 @@
 - reference 对外使用自然对数；kernel 可使用 log2/exp2，须明确接口、保存状态和梯度中的换底关系，避免重复乘 scale。
 - 反向必须覆盖 q、k、v、rtau、q_voc、k_voc。hard 标签选择不求导，但匹配项仍贡献 rtau 梯度并可沿递推传播梯度；不能跳过 hard 行的递推反向。
 - 近似 LSE 必须正确处理负无穷、零映射和 scan identity。禁止用有限负数悄悄替代 hard 不匹配语义。
+- 用户最新授权独立 `DISM_TILE_LSE=tanh_finite` 实验：core 前后向以 FP32 `-1e6` 表示不可达状态，tile tanh LSE 不检查 infinity；chunk passing 保留完整 LSE 公式。默认 full/tanh 不变。此为有界数值近似而非精确 affine identity，须显式记录上下文/score 范围、长链误差与对照结果，不将此结论外推到无界低层输入。
 
 ## 随机数与重算
 
@@ -32,6 +33,46 @@
 - reference 的显式 `hard_mask`/`interpolation` 可用于调试对照，但不是生产路径的预计算 mask 方案。调试导出的 mask 不得进入正式性能路径。
 
 ## 实现组件与布局
+
+- 当前摘要score已按行/列LSE编译期特化（D×方向共六实例），tau2/scale2及行bias2预计算，
+  每lane预取两个key标签、列方向再预取两个bias2，用shuffle分发，无shared元数据缓存。
+  逐元素为单FFMA+显式selp，保留hard/因果/identity的负无穷；未做hard端点/tile特化。
+  output与backward暂保留旧求值顺序，rtau=ln(D)重排回归不放宽容差。
+  full/tanh六摘要实例零spill、无CALL，各两处TMA/四处LDG.E.64；详见PREDICATED_SCORE.md。
+
+- 当前已按用户授权回退未定位的free2/ready1实验：K ready32/free256、score后释放，
+  WG mailbox各128 arrivals不变；不保留试探性named barrier及producer额外syncwarp。
+  单线程代表WG释放的后续实验仍必须先同步整组，不能漏掉未完成的读者。
+  D64/N257卡住的根因尚未确定，增加producer同步未解决；不把phase推断记为已证实原因。
+- 摘要Q改为TK st_bf<128,D>，每warp通过subtile读取对应的交错16行；
+  Q tensor-map box为[S,128,1,D/S,1]，K box为[S,2,4,8,D/S]，S=min(D,64)。
+  每个Q workload及完整K tile各一条TMA，包括D128；不再按warp或swizzle panel循环发射。
+  未padding K尾部暂仍走安全标量加载。full/tanh三shape均恢复零spill、无CALL，
+  codegen断言每个summary实例恰有两个UTMALDG.5D发射位置。
+
+- 优先使用ThunderKittens已有primitive（用户要求），自定义PTX/封装仅保留布局、工具链
+  或精确协议确有需要的部分，检查生成代码而不假设封装必然高效。
+- 当前摘要P1已改为summary_persistent：每SM至多一CTA，独立Q TMA输入槽，
+  当前任务收尾时producer提交下一任务Q/K0，任务间无CTA barrier。
+  D32/64三K槽，D128暂一K槽；WG级mail ready/free跨任务按累计tile计数推进。
+  此条覆盖旧摘要Q/K union staging和非persistent调度描述；output仍保留原实现。
+  score FFMA、元数据流水、分支特化及D128分段Q仍待做，详见dism_v2/PERSISTENT_SUMMARY.md。
+
+- 用户最新要求：摘要mail同步以两个warpgroup为粒度，不再四对warp各自同步。
+  四对边界payload布局不变，但每slot共用WG级ready/free（各128线程arrival）；
+  全组写完再发布，全组读完才可复用。组内四warp尽量步调一致，减少访存请求/响应收尾方差。
+  此条覆盖历史的逐对独立mailbarrier设计；不因此增加两WG间的全CTA锁步。
+
+- 摘要优化新增约定（2026-09-08）：访存尽量异步并排流水级，小尺寸例外需说明。
+  persistent及跨workload预取优先，参照src/dism_fwd_nope.cu：重点是上一workload收尾时
+  预取下一workload的Q和首块K，不是只优化task0启动加载。
+  预先计算scale2=scale*LOG2E、tau2=tau*LOG2E、bias2=(tau-lse)*LOG2E，
+  soft逐元素仅fmaf(dot,scale2,bias2)，hard匹配直接tau2；行/列LSE按各自复用范围预处理。
+  将方向、hard端点及完整tile判断移出逐元素动态分支；不删除负无穷、identity或尾部安全语义。
+  单线程发射用elect.sync或经SASS验证的封装，不固定lane再补选举；布局指定的owner lane除外。
+  编译期定长循环显式unroll，动态workload/key主循环显式#pragma unroll 1。
+  K stage模板化，按SM120约64KiB总shared预算并通过attribute启用较大配置，
+  必须计入Q预取、K ring、通信及对齐。实施顺序与验收见IMPLEMENTATION_PLAN.md的P0–P5。
 
 - **Shared memory使用标准（用户最新明确要求）**：能在寄存器中完成的操作必须在寄存器中完成。
   除以下三类外，其他操作不得写shared memory：

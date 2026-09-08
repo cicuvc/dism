@@ -1,9 +1,9 @@
 #pragma once
 // Independent score/W rescan for the key-owned operand-gradient kernel.
 __device__ __forceinline__ float transposed_score(const Args& p,float dot,int bh,int q,int k,bool hard) {
-    if(q>=p.n || k>=p.n || k>q) return -INFINITY;
+    if(q>=p.n || k>=p.n || k>q) return LOG_ZERO;
     float tau=p.tau[bh%p.heads];
-    if(hard) return p.q_label[int64_t(bh)*p.n+q]==p.k_label[int64_t(bh)*p.n+k]?tau*LOG2E:-INFINITY;
+    if(hard) return p.q_label[int64_t(bh)*p.n+q]==p.k_label[int64_t(bh)*p.n+k]?tau*LOG2E:LOG_ZERO;
     return (dot*p.scale-p.lse[int64_t(bh)*p.n+(p.column_lse?k:q)]+tau)*LOG2E;
 }
 
@@ -37,8 +37,8 @@ __device__ __forceinline__ void reconstruct(const Args& p,Shared& shared,int bh,
             for(int c=0;c<8;++c) {
                 auto x=scalar.data[r][c].value; data.data[r][c]={x,x};
                 int k=kb+(r*8+l-(7-c)+16)%16,q=qb+c+8*g;
-                if(k>=p.n || q>=p.n) { data.data[r][c].first.u0=0; data.data[r][c].second.u0=-INFINITY; }
-                if(k>=p.n || q+32>=p.n) { data.data[r][c].first.u1=0; data.data[r][c].second.u1=-INFINITY; }
+                if(k>=p.n || q>=p.n) { data.data[r][c].first.u0=0; data.data[r][c].second.u0=LOG_ZERO; }
+                if(k>=p.n || q+32>=p.n) { data.data[r][c].first.u1=0; data.data[r][c].second.u1=LOG_ZERO; }
             }
         }
         Buffer::HState top;
@@ -46,7 +46,7 @@ __device__ __forceinline__ void reconstruct(const Args& p,Shared& shared,int bh,
             int q=qb+8*g+6-l;
             int64_t off=(int64_t(bh)*(p.padded_n/16)+kb/16-1)*p.padded_n;
             top.init[0].first={0,0};
-            top.init[0].second={q>=0?p.vertical[off+q]:-INFINITY,p.vertical[off+q+32]};
+            top.init[0].second={q>=0?p.vertical[off+q]:LOG_ZERO,p.vertical[off+q+32]};
         }
         Buffer::VState left;
         if(qb>0 && g==3) {
@@ -65,5 +65,4 @@ __device__ __forceinline__ void reconstruct(const Args& p,Shared& shared,int bh,
         }
         scalar.template roll<false>();
 }
-
 

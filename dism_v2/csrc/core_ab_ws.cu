@@ -25,16 +25,16 @@ template<int D,int DV> struct Shared {
     Reverse::HState::SharedStorage mail[4][2];
 };
 __device__ __forceinline__ float transposed_score(const Args& p,float dot,int bh,int q,int k,bool hard) {
-    if(q>=p.n || k>=p.n || k>q) return -INFINITY;
+    if(q>=p.n || k>=p.n || k>q) return LOG_ZERO;
     float tau=p.tau[bh%p.heads];
-    if(hard) return p.q_label[int64_t(bh)*p.n+q]==p.k_label[int64_t(bh)*p.n+k]?tau*LOG2E:-INFINITY;
+    if(hard) return p.q_label[int64_t(bh)*p.n+q]==p.k_label[int64_t(bh)*p.n+k]?tau*LOG2E:LOG_ZERO;
     return (dot*p.scale-p.lse[int64_t(bh)*p.n+(p.column_lse?k:q)]+tau)*LOG2E;
 }
 
 __device__ __forceinline__ float2 reverse_coefficient(const Args& p,const float* delta,
         float w,float dot,int bh,int q,int k) {
     if(k>=p.n || q>=p.n) return {1,0};
-    if(w==-INFINITY) return {0,0};
+    if(w==LOG_ZERO) return {0,0};
     // sigmoid(W_natural) = (1 + tanh(W2 * ln(2) / 2)) / 2.
     float half_natural=w*0.3465735902799726547f,t;
     asm("tanh.approx.f32 %0,%1;":"=f"(t):"f"(half_natural));
@@ -151,8 +151,8 @@ __global__ __launch_bounds__(384,1) void run(
             for(int c=0;c<8;++c) {
                 auto x=scalar.data[r][c].value; data.data[r][c]={x,x};
                 int k=kb+(r*8+l-(7-c)+16)%16,q=qb+c+8*g;
-                if(k>=p.n || q>=p.n) { data.data[r][c].first.u0=0; data.data[r][c].second.u0=-INFINITY; }
-                if(k>=p.n || q+32>=p.n) { data.data[r][c].first.u1=0; data.data[r][c].second.u1=-INFINITY; }
+                if(k>=p.n || q>=p.n) { data.data[r][c].first.u0=0; data.data[r][c].second.u0=LOG_ZERO; }
+                if(k>=p.n || q+32>=p.n) { data.data[r][c].first.u1=0; data.data[r][c].second.u1=LOG_ZERO; }
             }
         }
         Buffer::HState top;
@@ -160,7 +160,7 @@ __global__ __launch_bounds__(384,1) void run(
             int q=qb+8*g+6-l;
             int64_t off=(int64_t(bh)*(p.padded_n/16)+kb/16-1)*p.padded_n;
             top.init[0].first={0,0};
-            top.init[0].second={q>=0?p.vertical[off+q]:-INFINITY,p.vertical[off+q+32]};
+            top.init[0].second={q>=0?p.vertical[off+q]:LOG_ZERO,p.vertical[off+q+32]};
         }
         Buffer::VState left;
         if(qb>0 && g==3 && kb<p.padded_n) {

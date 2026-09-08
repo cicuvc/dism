@@ -29,11 +29,12 @@ __device__ inline void tma5(const CUtensorMap* map, void* dst, uint64_t* bar, in
 __host__ __device__ constexpr int logical_row(int physical) {
     return physical/8 + ((physical/2)&3)*8 + (physical&1)*32;
 }
-template<int D> CUtensorMap permuted_map(const void* p, int rows) {
+template<int D, bool FULL_WIDTH=false> CUtensorMap permuted_map(const void* p, int rows) {
     constexpr int S = D==32?32:64;
     const cuuint64_t dims[]{S,2,4,cuuint64_t(rows),D/S};
     const cuuint64_t strides[]{32*D*2,8*D*2,D*2,S*2};
-    const cuuint32_t box[]{S,2,4,8,1}, elem[]{1,1,1,1,1};
+    // The outer dimension can cover every swizzle panel in one transfer.
+    const cuuint32_t box[]{S,2,4,8,FULL_WIDTH?D/S:1}, elem[]{1,1,1,1,1};
     CUtensorMap map{};
     auto status=cuTensorMapEncodeTiled(&map,CU_TENSOR_MAP_DATA_TYPE_BFLOAT16,5,const_cast<void*>(p),
         dims,strides,box,elem,CU_TENSOR_MAP_INTERLEAVE_NONE,
