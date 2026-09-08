@@ -480,6 +480,13 @@ pure soft、rtau=ln64逐元素精度失败，保留普通失败。reference FP32
   无新增失败；未运行全套前向/embedding测试，未测性能。日志见dism_v2/AB.md。
 
 - 接入现有 EmbInterpFunction，先复现并解决 embedding backward 的重复 dq/dk 写入问题。
+  最新接入已完成：dism_v2.autograd.voc_dism直接调用现有embedding forward/backward wrappers，
+  避免core FP32梯度在中间autograd BF16节点提前舍入，最后合并直接梯度后统一cast。
+  Phase B加pid_v==0归属保护；D128的num_stages=1避免前后向shared超限。
+  89项端到端接线/契约及三类sanitizer通过；另三步loss.backward/update smoke通过。
+  全部新增测试232项209通过/23普通精度失败（20个rtau幅值+3个独立V1 embedding）。
+  两oracle的62场景中rtau未观察反号，不能外推长期训练稳定性。
+  实测、资源、原始日志与限制见dism_v2/AUTOGRAD.md；性能/varlen/sm90仍未完成。
 - 正确传递插值 embedding 与 LSE 梯度，合并 score 的直接 q/k 梯度和 embedding 阶段梯度，完成六个输入的 autograd 接口。
 - 检查包导入、stride、dtype、sm_scale、词表 tail、top-1 tie 和随机调用语义。
 - 分别对照纯 torch interpolation 和 kernel interpolation，报告前级量化与 core 误差。

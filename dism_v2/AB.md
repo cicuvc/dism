@@ -2,7 +2,7 @@
 
 `backward.operand_gradient`当前接口返回已选方向core的FP32 `(dA,dB,dLSE,drtau)`。
 新增dLSE/drtau已通过同G归约验证，直接reference仍有精度失败；见本文末尾。
-不物化global W/P/E/G；不是完整backward/autograd，尚未接入embedding backward。
+不物化global W/P/E/G；本页为core低层接口，完整六输入autograd接线见[AUTOGRAD.md](AUTOGRAD.md)。
 q_from_k时dB是插值操作数的梯度，不能直接称dK。
 
 ```python

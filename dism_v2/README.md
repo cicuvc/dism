@@ -1,12 +1,18 @@
 # 当前 CUDA core 状态
 
+完整六输入的一阶autograd入口现为 `dism_v2.autograd.voc_dism`：
+直接使用现有Triton embedding前后向及CUDA WS core。
+已进行端到端接线、梯度/reference和sanitizer检查，仍有精度失败，
+范围、接口和已知限制见[AUTOGRAD.md](AUTOGRAD.md)。
+下文的`core.forward`仍是底层不接autograd的诊断入口。
+
 本目录保留用户的 `dism_ref.py` / `emb_kernel.py`，新 CUDA 实现在 `csrc/`，入口为 `core.forward`。
-这是 **支持固定/全局随机方向的 core 前向初版**，不是完整可训练的 voc_dism；不兼容旧接口。
+这是 **支持固定/全局随机方向的底层 core 前向接口**；六输入训练接口见上述autograd入口，不兼容旧接口。
 
 ## 已实现
 
 - dV可选融合真实dP/E和add-mul摘要；CUDA passing组合为32-key摘要并逆向传递状态。
-  调用和验证范围见[BACKWARD_SUMMARY.md](BACKWARD_SUMMARY.md)，完整score梯度与autograd仍未接入。
+  调用和验证范围见[BACKWARD_SUMMARY.md](BACKWARD_SUMMARY.md)，B3与训练接线另见[AB.md](AB.md)及[AUTOGRAD.md](AUTOGRAD.md)。
 
 - 独立FP32 dV入口`backward.value_gradient`：同前向状态的转置重算、key warp独占累积；
   BF16 P高位+残差两次MMA。正确性/精度/范围见[DV.md](DV.md)。
@@ -14,7 +20,7 @@
 - B3 `backward.operand_gradient`已实现dA/dB，默认12-warp specialization，
   可显式传入`warp_specialized=False`使用单warp诊断基线。验证见[AB.md](AB.md)。
   dLSE/drtau已接入（统一返回四输出），同G归约检查通过，直接reference仍有精度失败；
-  用户已允许保留新增spill。仍缺embedding backward接入和完整六输入autograd；
+  用户已允许保留新增spill。embedding backward和六输入autograd已通过独立入口接入；
   已测core分阶段串联不等于完整可训练链路已验证。
 
 - 三个 CUDA kernels：32行 affine 摘要、对角线 passing、重算 scan + online softmax + PV。

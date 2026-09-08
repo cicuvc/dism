@@ -88,10 +88,18 @@
 
 - 旧 CUDA 最终 bwd kernel 为空；跨 checkpoint 的前向传递仍有 Triton 阶段；输出尾部为 RMSNorm，不能直接作为 v2 的正确性基线。
 - 旧 CUDA 使用 `[B,N,H,D]`，而 v2 使用 `[B,H,N,D]`，不能混用 stride 或接口。
-- `dism_v2/emb_kernel.py::_interp_bwd` 的 Phase B 未按 pid_v 限制执行，多个 vocab blocks 会重复写 dq/dk；接入时先复现检查并修复写竞争。
+- `dism_v2/emb_kernel.py::_interp_bwd` 原Phase B多个vocab blocks重复写dq/dk，
+  端到端接入时已增加pid_v==0保护（原归属测试失败、修复后通过）。
+  D128前后向num_stages改为1以满足sm120 shared上限，没有重写插值算法。
 - embedding 返回值顺序遵循 `InterpolationResult` 的定义，不按旧局部变量名猜测归属；直接 score 梯度与 embedding backward 梯度需要相加。
 
 ## 验证与协作
+
+- 完整一阶autograd入口dism_v2.autograd.voc_dism，沿用Triton embedding wrappers，
+  core梯度与embedding梯度FP32相加后才转输入dtype。实际输出顺序与LSE路由不能猜测。
+  六输入端到端测试仍保留rtau幅值和独立V1 embedding精度失败；rtau单独检查非近零
+  oracle的符号（阈值1e-5），本批未反转不代表长期保证。见dism_v2/AUTOGRAD.md。
+  此前“embedding backward未接入/未验证”的条目为历史里程碑，不代表最新接口状态。
 
 - 本轮WS/双缓冲工作若出现spill，按用户明确要求先停止并汇报，不自行处理。用户授权比较单次BF16 P MMA、C/D顺序与tanh.approx sigmoid；当前源码为C→D+tanh，32/32和全部DV64四个实例零spill，其余五种仍有spill，不自行继续调参。单warp高位+残差基线不变。WS97项91通过/6已知P量化精度失败，保持普通失败；详情见IMPLEMENTATION_PLAN和dism_v2/DV.md。
 
