@@ -70,7 +70,7 @@ def test_backward_summary_tails(n,mode,record_property):
     run(64,128,n,"random",.37 if mode=="random" else 1.,record_property,mode,check_summary=True)
 
 
-def run(d,dv,n,direction,probability,record_property,mode="random",check_summary=False):
+def run(d,dv,n,direction,probability,record_property,mode="random",check_summary=False,warp_specialized=False):
     if torch.cuda.get_device_capability()!=(12,0): pytest.skip("sm120a only")
     batch,heads=(1,1) if n>513 else (2,2)
     gen=torch.Generator(device="cuda").manual_seed(741+n+d+dv)
@@ -91,12 +91,16 @@ def run(d,dv,n,direction,probability,record_property,mode="random",check_summary
     a,b,lse=(q,interp.q_from_k,interp.q_lse) if state.direction=="q_from_k" else (interp.k_from_q,k,interp.k_lse)
     dout=rand(v.shape)
     kwargs=dict(sm_scale=scale,rng_state=state)
+    ws_args=dict(v=v,delta=delta(dout,out),warp_specialized=True) if warp_specialized else {}
+    def compute_dv():
+        result=value_gradient(a,b,dout,lse,tau,interp.q_index,interp.k_index,norm,edges,**kwargs,**ws_args)
+        return result[0] if warp_specialized else result
     before=torch.cuda.get_rng_state(); explicit_before=gen.get_state()
     stream=torch.cuda.Stream(); stream.wait_stream(torch.cuda.current_stream())
-    with torch.cuda.stream(stream): actual=value_gradient(a,b,dout,lse,tau,interp.q_index,interp.k_index,norm,edges,**kwargs)
+    with torch.cuda.stream(stream): actual=compute_dv()
     torch.cuda.current_stream().wait_stream(stream)
     assert torch.equal(before,torch.cuda.get_rng_state()) and torch.equal(explicit_before,gen.get_state())
-    replay=value_gradient(a,b,dout,lse,tau,interp.q_index,interp.k_index,norm,edges,**kwargs)
+    replay=compute_dv()
     torch.testing.assert_close(actual,replay,atol=0,rtol=0)
     assert actual.dtype==torch.float32 and actual.shape==v.shape and torch.isfinite(actual).all()
     p32=torch.tensor(probability,dtype=torch.float32).item()
@@ -111,7 +115,7 @@ def run(d,dv,n,direction,probability,record_property,mode="random",check_summary
         dd=delta(dout,out)
         stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(stream):
-            fused,summary,boundary=value_gradient(a,b,dout,lse,tau,interp.q_index,interp.k_index,norm,edges,**kwargs,v=v,delta=dd)
+            fused,summary,boundary=value_gradient(a,b,dout,lse,tau,interp.q_index,interp.k_index,norm,edges,**kwargs,v=v,delta=dd,warp_specialized=warp_specialized)
         torch.cuda.current_stream().wait_stream(stream)
         assert torch.equal(before,torch.cuda.get_rng_state()) and torch.equal(explicit_before,gen.get_state())
         torch.testing.assert_close(fused,actual,atol=2e-6,rtol=2e-6)

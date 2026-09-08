@@ -9,13 +9,14 @@ namespace dism_v2 { void launch_backward_delta(const void*,const void*,float*,in
 namespace dism_v2 {
 void launch_value_backward(const Args&,int,int,const void*,float*,const float*,float2*,cudaStream_t);
 void launch_backward_passing(const float2*,float2*,float*,int,int,cudaStream_t);
+void launch_value_backward_ws(const Args&,int,int,const void*,const float*,float*,float2*,float*,cudaStream_t);
 }
 
 std::vector<torch::Tensor> value_gradient(torch::Tensor a,torch::Tensor b,torch::Tensor dout,
         torch::Tensor lse,torch::Tensor tau,torch::Tensor ql,torch::Tensor kl,
         torch::Tensor norm,torch::Tensor vertical,torch::Tensor horizontal,
         double scale,bool column_lse,double probability,uint64_t seed,uint64_t offset,
-        std::optional<torch::Tensor> value,std::optional<torch::Tensor> delta) {
+        std::optional<torch::Tensor> value,std::optional<torch::Tensor> delta,bool warp_specialized) {
     TORCH_CHECK(a.is_cuda() && a.dim()==4,"A must be CUDA [B,H,N,D]");
     for(const auto& x:{a,b,dout,lse,tau,ql,kl,norm,vertical,horizontal})
         TORCH_CHECK(x.device()==a.device() && x.is_contiguous(),"inputs must be contiguous on same CUDA device");
@@ -34,6 +35,7 @@ std::vector<torch::Tensor> value_gradient(torch::Tensor a,torch::Tensor b,torch:
     TORCH_CHECK(vertical.size(2)==np/16 && horizontal.size(2)==np/64,"boundary granularity mismatch");
     TORCH_CHECK(std::isfinite(scale) && std::isfinite(probability) && probability>=0 && probability<=1 && offset%4==0,"invalid scale/RNG metadata");
     TORCH_CHECK(bool(value)==bool(delta),"value and delta must be supplied together");
+    TORCH_CHECK(!warp_specialized || value.has_value(),"warp-specialized path requires V and delta");
     if(value) {
         TORCH_CHECK(value->device()==a.device() && value->is_contiguous() && value->sizes()==dout.sizes() && value->scalar_type()==at::kBFloat16,"V must match BF16 dO shape/device");
         TORCH_CHECK(delta->device()==a.device() && delta->is_contiguous() && delta->sizes()==norm.sizes() && delta->scalar_type()==at::kFloat,"delta must match FP32 normalizer shape/device");
@@ -50,10 +52,16 @@ std::vector<torch::Tensor> value_gradient(torch::Tensor a,torch::Tensor b,torch:
     p.scale=scale; p.column_lse=column_lse; p.hard_prob=probability; p.seed=seed; p.offset=offset;
     auto stream=c10::cuda::getCurrentCUDAStream();
     if(value) {
-        auto local=torch::empty({batch,heads,np/16,np,2},norm.options());
         auto summary=torch::empty({batch,heads,np/32,np,2},norm.options());
         auto boundary=torch::empty({batch,heads,np/32,np},norm.options());
         p.v=value->data_ptr();
+        if(warp_specialized) {
+            dism_v2::launch_value_backward_ws(p,d,dv,dout.data_ptr(),delta->data_ptr<float>(),output.data_ptr<float>(),
+                reinterpret_cast<float2*>(summary.data_ptr<float>()),boundary.data_ptr<float>(),stream);
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+            return {output,summary,boundary};
+        }
+        auto local=torch::empty({batch,heads,np/16,np,2},norm.options());
         dism_v2::launch_value_backward(p,d,dv,dout.data_ptr(),output.data_ptr<float>(),delta->data_ptr<float>(),reinterpret_cast<float2*>(local.data_ptr<float>()),stream);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
         dism_v2::launch_backward_passing(reinterpret_cast<float2*>(local.data_ptr<float>()),reinterpret_cast<float2*>(summary.data_ptr<float>()),boundary.data_ptr<float>(),np,batch*heads,stream);

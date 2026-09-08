@@ -11,7 +11,7 @@ from .core import RowRNGState, ScanBoundaries
 def _extension():
     source=Path(__file__).resolve().parent/"csrc"
     return load(name="dism_v2_backward_sm120a",
-        sources=[str(source/f) for f in ("backward_bindings.cpp","core_bwd.cu","core_dv.cu")],
+        sources=[str(source/f) for f in ("backward_bindings.cpp","core_bwd.cu","core_dv.cu","core_dv_ws.cu")],
         extra_include_paths=[str(source.parents[1]/"include"),
             str(Path(os.environ.get("GLX_ROOT","/home/cicuvc/cs/projects/glx"))/"include")],
         extra_cflags=["-O2","-std=c++20"],
@@ -33,14 +33,17 @@ def delta(dout,out):
 
 
 def value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,boundaries,*,sm_scale,rng_state,
-                   v=None,delta=None):
+                   v=None,delta=None,warp_specialized=False):
     """Compute FP32 dV using selected A/B/LSE and saved forward states.
 
     Replays the forward direction and row RNG without new generator consumption.
-    FP32 P is split into BF16 high/residual for two Tensor Core products; dV
-    accumulation is FP32, no atomics or global W/P. No autograd yet.
+    The single-warp baseline splits FP32 P into BF16 high/residual for two
+    Tensor Core products. The experimental WS path uses one BF16 P product
+    (known long-sequence precision tradeoff). dV accumulation is FP32,
+    no atomics or global W/P. No autograd yet.
     Caller must supply unchanged operands, scale and states from the same forward.
     Supplying both v and FP32 delta returns (dV, affine32_summary, G32_boundary).
+    warp_specialized=True selects the experimental12-warp/double-buffer path.
     """
     if not isinstance(rng_state,RowRNGState) or not isinstance(boundaries,ScanBoundaries):
         raise TypeError("saved RowRNGState and ScanBoundaries required")
@@ -52,9 +55,11 @@ def value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,boundaries,*,sm_s
         raise TypeError("sm_scale must be a scalar")
     if (v is None)!=(delta is None):
         raise ValueError("v and delta must be supplied together")
+    if warp_specialized and v is None:
+        raise ValueError("warp_specialized requires v and delta")
     if torch.is_grad_enabled() and any(x.requires_grad for x in (a,b,dout,lse,tau,normalizer,boundaries.vertical,boundaries.horizontal,*(() if v is None else (v,delta)))):
         raise NotImplementedError("higher-order backward is not implemented")
     result = _extension().value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,
         boundaries.vertical,boundaries.horizontal,float(sm_scale),rng_state.direction=="k_from_q",
-        rng_state.hard_prob,rng_state.seed,rng_state.offset,v,delta)
+        rng_state.hard_prob,rng_state.seed,rng_state.offset,v,delta,warp_specialized)
     return tuple(result) if v is not None else result[0]

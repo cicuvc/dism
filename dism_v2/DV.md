@@ -50,6 +50,29 @@ q_from_k/mixed的量化RMSE=9.46572e-4，kernel总RMSE=9.46272e-4。
 没有改score、scan、L₂、输入dtype或测试阈值；没有修改前向的PV量化策略。
 这增加了dV乘法的MMA工作量，尚未测量总性能，不预设为最终性能方案。
 
+### 实验WS路径：单次P量化的已知问题
+
+按用户授权，`warp_specialized=True`只使用`bf16(P).T @ dO`一次MMA，
+FP32累加。默认单warp路径仍使用上面的高位+残差修正；两条路径不能混称。
+WS的score重算、E及reverse affine数学没有改变。资源结果见IMPLEMENTATION_PLAN。
+
+`tests/test_dism_v2_dv_ws.py`固化85项，79通过、6项逐元素阈值失败，
+相对L2和cosine指标均满足原阈值。失败均为D64/DV128、N8193、rtau=ln64：
+
+| direction | hard_prob | max abs | RMSE | relative L2 | cosine |
+|---|---:|---:|---:|---:|---:|
+|q_from_k|0|0.0142975|0.000756807|0.000784015|0.999999693|
+|k_from_q|0|0.0107524|0.000681032|0.000705534|0.999999752|
+|q_from_k|0.37|0.0148525|0.000946272|0.00133605|0.999999109|
+|k_from_q|0.37|0.0122275|0.000942124|0.00131691|0.999999133|
+
+纯soft两种配置各有两个测试入口，因此4种配置对应6个失败项。保持普通失败，
+不放宽atol=.008/rtol=.012，不改为xfail。混合场景与reference P先量化BF16的
+RMSE分别为5.88987e-5/2.56627e-5，而P量化本身的RMSE为9.46572e-4/9.42100e-4；
+纯soft仍包含重算W差异经过BF16舍入阈值放大的影响，不能声称全部误差只来自单次舍入。
+85项整体最大relative L2=0.00178609，最小cosine=0.999998470。
+同一轮原单warp163项全部通过；日志`/tmp/dism-ws-single-p-tests.log`及同名XML。
+
 ## 数值回归
 
 `tests/test_dism_v2_dv.py`的85例，oracle为`voc_dism_ref`对v的autograd，

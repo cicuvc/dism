@@ -65,6 +65,8 @@
 
 ## 验证与协作
 
+- 本轮WS/双缓冲工作若出现spill，按用户明确要求先停止并汇报，不自行处理。用户授权比较单次BF16 P MMA、C/D顺序与tanh.approx sigmoid；当前源码为C→D+tanh，32/32和全部DV64四个实例零spill，其余五种仍有spill，不自行继续调参。单warp高位+残差基线不变。WS97项91通过/6已知P量化精度失败，保持普通失败；详情见IMPLEMENTATION_PLAN和dism_v2/DV.md。
+
 - 保留已有用户改动，不回滚或覆盖无关工作。外部 GLX、rl 源码默认作为依赖阅读，不因本仓库任务顺便修改它们。
 - 验证按阶段进行：布局/边界 → fixed-length 前向 → 核心反向 → embedding 全链路 → 性能 → varlen → sm90。
 - 覆盖九种 D/DV 组合、两个固定方向、hard_prob=0/1/混合、非对齐 N、跨 tile 对角线、全不匹配行、长匹配链及 rtau 不同取值。

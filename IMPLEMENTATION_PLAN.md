@@ -258,6 +258,127 @@ reference W的长程舍入差异单独记录，不把这项测试当成完整G�
 本轮没有重跑已有forward precision/embedding precision，既有量化失败继续保留。
 下一项为B3 reverse scan和dA/dB/dLSE/drtau，性能流水及状态buffer复用待后续完成。
 
+### WS双缓冲接入：编译后因spill暂停
+
+上一版已提交`1398426`。新增可选`warp_specialized=True`（需要v/delta），源文件`core_dv_ws.cu`；
+默认仍为已验证的单warp路径。12warps/CTA、producer group40、consumer groups232，
+只有warp8加载A/dO双槽；key块按0,4,1,5,2,6,3,7交错，score/W/dV/E独立重算，
+只在reverse reduce前由0–3等待4–7。双槽mailbox直接输出32-key摘要，passing不再组合16-key local。
+初始B/V shared staging与A/dO ring复用空间；B/V和dV跨tile保留寄存器，W跨PV/dP保留寄存器，
+没有将单warp版本的per-warp shared暂存直接扩充到8份。
+
+九种D/DV均编译成功，但全部出现spill。按用户最新指令已停止实现/调参，未执行WS数值测试或sanitizer。
+SASS无CALL，9实例各自保留原生UTMALDG.5D和USETMAXREG inc/dec；初始REG metadata=168，
+实际角色预算为40/232。32-key passing REG34、无spill。下表为ptxas编译报告，不是运行期累计访存量：
+
+| D | DV | stack bytes | spill stores bytes | spill loads bytes |
+|---|---|---:|---:|---:|
+|32|32|40|40|48|
+|32|64|16|16|16|
+|32|128|208|220|224|
+|64|32|32|32|32|
+|64|64|8|4|4|
+|64|128|200|236|228|
+|128|32|56|48|56|
+|128|64|32|32|40|
+|128|128|264|404|344|
+
+构建日志`/tmp/dism-ws-first-build.log`。新代码未提交；未修改spill策略、未放宽codegen断言。
+由于WS实例已编入backward扩展，原有全扩展零LDL/STL检查目前会因这些实验实例失败；
+不能把此前526项通过描述为新版WS已通过。以上为双MMA版本的历史结果。
+
+### WS单次BF16 P MMA实验（用户授权）
+
+仅WS路径取消P残差及第二次dV MMA；单warp基线保留高位+残差。
+不改score/W/E/反向affine、40/232预算或mailbox流水。新的ptxas结果：
+
+| D | DV | stack bytes | spill stores bytes | spill loads bytes |
+|---|---|---:|---:|---:|
+|32|32|8|8|16|
+|32|64|0|0|0|
+|32|128|48|68|72|
+|64|32|8|8|16|
+|64|64|0|0|0|
+|64|128|64|72|68|
+|128|32|24|20|28|
+|128|64|0|0|0|
+|128|128|144|224|180|
+
+三个DV64实例已零spill，其余不继续自行优化。32/32原先P构造/PV/dP交叠区域的
+8个寄存器spill已消除，只剩chunk索引及符号扩展的8-byte stack：入口STL、
+摘要输出分支两条LDL.64及一条STL。全部WS仍无CALL，原生TMA和40/232重分配保留。
+日志`/tmp/dism-ws-single-p-build.log`，SASS `/tmp/dism-ws-single-p.sass`。
+
+新增`tests/test_dism_v2_dv_ws.py`复用既有oracle及阈值：85项79通过、6项精度失败
+（4种不同长序列配置，纯soft在两个测试入口重复）；九维度和tails的65项还验证真实
+reverse摘要/边界，均通过。原单warp163项全部通过，合计242通过/6失败，
+XML `/tmp/dism-ws-single-p-tests.xml`。精度失败保留为普通失败，不改阈值或xfail；
+具体指标见`dism_v2/DV.md`。全扩展零spill codegen验收仍未通过。
+新增WS/passing的定向memcheck、racecheck、synccheck各65项通过，0 errors/hazards；
+过滤条件`--kernel-name kns=_ZN7dism_v22ws`，日志
+`/tmp/dism-ws-single-p-filtered-{memcheck,racecheck,synccheck}.log`。
+此前全进程插桩因过慢主动停止，未计入通过；本轮未做性能测量或完整前向精度回归。
+
+### WS D→C顺序与tanh sigmoid实验（历史对照）
+
+按用户要求先构造dP/E及reverse二元组，再做单次BF16 P的dV MMA；
+接着把sigmoid改为`fma(0.5,tanh.approx(W2*ln(2)/2),0.5)`。
+保持-inf返回(0,0)、padding返回(1,0)，默认单warp基线不改。
+仅调换顺序使32/32零spill，但大尺寸恶化；reverse二元组现需跨PV存活。
+下表前两列为stack bytes比较，后三列为当前tanh版ptxas报告：
+
+| D | DV | C→D stack | D→C旧sigmoid stack | 当前stack | 当前stores | 当前loads |
+|---|---|---:|---:|---:|---:|---:|
+|32|32|8|0|0|0|0|
+|32|64|0|8|8|8|8|
+|32|128|48|360|376|616|428|
+|64|32|8|8|8|8|16|
+|64|64|0|8|8|4|4|
+|64|128|64|448|408|704|496|
+|128|32|24|8|8|8|16|
+|128|64|0|128|104|112|112|
+|128|128|144|536|512|928|640|
+
+当前9实例均无CALL，各32条MUFU.TANH，sigmoid算术主链为FMUL/TANH/FFMA
+（常量MOV、分支和E运算另计）；TMA与40/232寄存器重分配保留。未继续调spill。
+构建/SASS：`/tmp/dism-ws-{d-before-c,tanh}-build.log`及同前缀`.sass`。
+两个版本原85项均79通过/6已知dV精度失败。
+65项同W摘要oracle最大(first,second,boundary)误差：旧sigmoid
+(5.07545e-8,2.49989e-6,2.49989e-6)，tanh
+(3.65359e-6,1.34495e-5,1.34495e-5)，均通过原阈值。
+D→C旧sigmoid版定向三类sanitizer各65项通过、零errors/hazards，
+日志`/tmp/dism-ws-d-before-c-{memcheck,racecheck,synccheck}.log`；
+tanh纯数学替换后尚未重跑sanitizer，不把上述结果冒充最新二进制验收。
+新增12项N1025/2049、双方向、chain/break/bounded_soft长程摘要回归全部通过，
+最大(first,second,boundary)误差为(6.50232e-6,7.82838e-5,2.90753e-4)。
+XML `/tmp/dism-ws-tanh-long-summary.xml`。当前97项合计91通过/6已知失败；
+尚未验证更长序列的tanh梯度passing误差或完整backward。
+
+### WS C→D + tanh（当前源码）
+
+按用户要求切回先dV后dP/E，保留单次BF16 P和tanh sigmoid，其他调度/预算不变。
+当前ptxas资源（bytes）：
+
+| D | DV | stack | spill stores | spill loads |
+|---|---|---:|---:|---:|
+|32|32|0|0|0|
+|32|64|0|0|0|
+|32|128|64|72|68|
+|64|32|8|8|16|
+|64|64|0|0|0|
+|64|128|104|112|108|
+|128|32|16|16|24|
+|128|64|0|0|0|
+|128|128|152|160|156|
+
+32/32和全部DV64实例零spill，其余五种仍有spill，未继续优化。
+相比D→C+tanh大尺寸明显改善；相比C→D旧sigmoid，DV128的stack增加，不能称全面胜出。
+九实例全部无CALL、各32条MUFU.TANH，原生TMA及40/232重分配保留。
+当前97项91通过/6原有P量化精度失败，包含12项长程摘要检查，未放宽阈值。
+日志`/tmp/dism-ws-c-before-d-tanh-build.log`、同前缀`.sass`、
+`/tmp/dism-ws-c-before-d-tanh-tests.{log,xml}`。
+本轮未重跑sanitizer或性能测试；源码保留此版本，未提交。
+
 ## 阶段 4：voc_dism 全链路
 
 - 接入现有 EmbInterpFunction，先复现并解决 embedding backward 的重复 dq/dk 写入问题。
