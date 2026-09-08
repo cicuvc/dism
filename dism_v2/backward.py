@@ -1,4 +1,4 @@
-"""Core delta, dV and affine summary/passing; B3 and autograd are not connected."""
+"""Core delta, dV, affine summary/passing and operand gradients; no autograd yet."""
 from functools import lru_cache
 from pathlib import Path
 import os
@@ -11,7 +11,7 @@ from .core import RowRNGState, ScanBoundaries
 def _extension():
     source=Path(__file__).resolve().parent/"csrc"
     return load(name="dism_v2_backward_sm120a",
-        sources=[str(source/f) for f in ("backward_bindings.cpp","core_bwd.cu","core_dv.cu","core_dv_ws.cu","core_ab.cu")],
+        sources=[str(source/f) for f in ("backward_bindings.cpp","core_bwd.cu","core_dv.cu","core_dv_ws.cu","core_ab.cu","core_ab_ws.cu","core_tau.cu")],
         extra_include_paths=[str(source.parents[1]/"include"),
             str(Path(os.environ.get("GLX_ROOT","/home/cicuvc/cs/projects/glx"))/"include")],
         extra_cflags=["-O2","-std=c++20"],
@@ -65,12 +65,15 @@ def value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,boundaries,*,sm_s
     return tuple(result) if v is not None else result[0]
 
 
-def operand_gradient(a,b,v,dout,lse,tau,q_label,k_label,normalizer,delta,boundaries,g_boundary,*,sm_scale,rng_state):
-    """B3: FP32 (dA,dB), no global G, single-warp32-key path.
+def operand_gradient(a,b,v,dout,lse,tau,q_label,k_label,normalizer,delta,boundaries,g_boundary,*,sm_scale,rng_state,warp_specialized=True):
+    """B3: FP32 (dA,dB,dLSE,drtau), no global G; defaults to 12-warp WS.
 
     Requires G32 boundaries from value_gradient(v=...,delta=...).
     Replays RNG; BF16 Gsoft MMA; dA uses TMA atomic add and is nondeterministic.
-    No dLSE/drtau or autograd integration yet. D128 spill accepted for validation.
+    dLSE [B,H,N] is for the selected direction's LSE; drtau [H] sums batches.
+    Scalar gradients reduce FP32 G before BF16 conversion, with no extra scale.
+    No autograd integration yet. D128 spill accepted for validation.
+    warp_specialized=False selects the single-warp32-key diagnostic baseline.
     """
     if not isinstance(rng_state,RowRNGState) or not isinstance(boundaries,ScanBoundaries):
         raise TypeError("saved RowRNGState and ScanBoundaries required")
@@ -89,4 +92,4 @@ def operand_gradient(a,b,v,dout,lse,tau,q_label,k_label,normalizer,delta,boundar
         raise RuntimeError("operand_gradient uses nondeterministic TMA atomic reduction")
     return tuple(_extension().operand_gradient(a,b,v,dout,lse,tau,q_label,k_label,normalizer,delta,
         boundaries.vertical,boundaries.horizontal,g_boundary,float(sm_scale),rng_state.direction=="k_from_q",
-        rng_state.hard_prob,rng_state.seed,rng_state.offset))
+        rng_state.hard_prob,rng_state.seed,rng_state.offset,warp_specialized))

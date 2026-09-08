@@ -10,6 +10,7 @@ namespace dism_v2 {
 namespace ab {
 namespace kt=kittens;
 #include "ab_rescan.cuh"
+#include "scalar_grad.cuh"
 using Reverse=glx::MMABuffer<16,64,glx::BinaryElement,glx::AffineComposeOp,glx::F32x2>;
 template<int D,int DV> struct Shared {
     kt::st_bf<16,D> key;
@@ -33,7 +34,7 @@ template<int D,int DV>
 __global__ void run(__grid_constant__ const Args p,__grid_constant__ const CUtensorMap qm,
                    __grid_constant__ const CUtensorMap dm,const __nv_bfloat16* dout,
                    const float* delta,const float* boundary,
-                   __grid_constant__ const CUtensorMap dam,float* db) {
+                   __grid_constant__ const CUtensorMap dam,float* db,float* dlse,float* tau_partial) {
     extern __shared__ __align__(128) unsigned char memory[];
     auto& shared=*reinterpret_cast<Shared<D,DV>*>(memory);
     int lane=threadIdx.x,chunk=blockIdx.x,bh=blockIdx.y,phase=0;
@@ -42,6 +43,7 @@ __global__ void run(__grid_constant__ const Args p,__grid_constant__ const CUten
     Reverse::VState right[2];
     kt::rt_fl<16,D> accumulated[2]={kt::rt_fl<16,D>{0.f},kt::rt_fl<16,D>{0.f}};
     int issued=0;
+    float tau_sum=0,key_lse[2][2]={{0,0},{0,0}};
     for(int qb=p.padded_n-64;qb>=0;qb-=64) {
         if(qb+64<=p.n) {
             if(lane==0) {
@@ -121,6 +123,7 @@ __global__ void run(__grid_constant__ const Args p,__grid_constant__ const CUten
                 for(int c=0;c<8;++c) scalar.data[r][c].value=rev.data[r][c].second;
             }
             scalar.template reverse_roll<false>();
+            scalar_gradients(p,scalar,bh,kb,qb,hard0,hard1,dlse,tau_sum,key_lse[half]);
             #pragma unroll
             for(int r=0;r<2;++r) {
                 #pragma unroll
@@ -216,30 +219,34 @@ __global__ void run(__grid_constant__ const Args p,__grid_constant__ const CUten
             }
         }
     }
+    #pragma unroll
+    for(int half=0;half<2;++half) store_key_lse(p,bh,chunk*32+half*16,dlse,key_lse[half]);
+    float total=warp_sum(tau_sum);
+    if(lane==0) tau_partial[int64_t(bh)*gridDim.x+chunk]=total;
     if(lane==0) asm volatile("cp.async.bulk.wait_group 0;" ::: "memory");
     __syncwarp();
 }
 
 template<int D,int DV> void launch(const Args& p,const void* dout,const float* delta,const float* boundary,
-                                  const CUtensorMap& dam,float* db,cudaStream_t stream) {
+                                  const CUtensorMap& dam,float* db,float* dlse,float* tau_partial,cudaStream_t stream) {
     auto qm=permuted_map<D>(p.a,p.batch_heads*p.n),dm=permuted_map<DV>(dout,p.batch_heads*p.n);
     constexpr int bytes=sizeof(Shared<D,DV>);
     auto err=cudaFuncSetAttribute(run<D,DV>,cudaFuncAttributeMaxDynamicSharedMemorySize,bytes);
     if(err!=cudaSuccess) throw std::runtime_error(cudaGetErrorString(err));
     run<D,DV><<<dim3(p.padded_n/32,p.batch_heads),32,bytes,stream>>>(p,qm,dm,
-        static_cast<const __nv_bfloat16*>(dout),delta,boundary,dam,db);
+        static_cast<const __nv_bfloat16*>(dout),delta,boundary,dam,db,dlse,tau_partial);
 }
 template<int D> void dispatch(const Args& p,int dv,const void* dout,const float* delta,const float* boundary,
-                             const CUtensorMap& dam,float* db,cudaStream_t stream) {
+                             const CUtensorMap& dam,float* db,float* dlse,float* tau_partial,cudaStream_t stream) {
     switch(dv) {
-        case 32:launch<D,32>(p,dout,delta,boundary,dam,db,stream);break;
-        case 64:launch<D,64>(p,dout,delta,boundary,dam,db,stream);break;
-        case 128:launch<D,128>(p,dout,delta,boundary,dam,db,stream);break;
+        case 32:launch<D,32>(p,dout,delta,boundary,dam,db,dlse,tau_partial,stream);break;
+        case 64:launch<D,64>(p,dout,delta,boundary,dam,db,dlse,tau_partial,stream);break;
+        case 128:launch<D,128>(p,dout,delta,boundary,dam,db,dlse,tau_partial,stream);break;
     }
 }
 }
 void launch_operand_backward(const Args& p,int d,int dv,const void* dout,const float* delta,
-                             const float* boundary,float* da,float* db,cudaStream_t stream) {
+                             const float* boundary,float* da,float* db,float* dlse,float* tau_partial,cudaStream_t stream) {
     CUtensorMap dam;
     cuuint64_t dims[3]={cuuint64_t(d),cuuint64_t(p.n),cuuint64_t(p.batch_heads)};
     cuuint64_t strides[2]={cuuint64_t(d)*4,cuuint64_t(d)*p.n*4};
@@ -249,9 +256,9 @@ void launch_operand_backward(const Args& p,int d,int dv,const void* dout,const f
         CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
     if(status!=CUDA_SUCCESS) throw std::runtime_error("dA tensor map encoding failed");
     switch(d) {
-        case 32:ab::dispatch<32>(p,dv,dout,delta,boundary,dam,db,stream);break;
-        case 64:ab::dispatch<64>(p,dv,dout,delta,boundary,dam,db,stream);break;
-        case 128:ab::dispatch<128>(p,dv,dout,delta,boundary,dam,db,stream);break;
+        case 32:ab::dispatch<32>(p,dv,dout,delta,boundary,dam,db,dlse,tau_partial,stream);break;
+        case 64:ab::dispatch<64>(p,dv,dout,delta,boundary,dam,db,dlse,tau_partial,stream);break;
+        case 128:ab::dispatch<128>(p,dv,dout,delta,boundary,dam,db,dlse,tau_partial,stream);break;
     }
 }
 }

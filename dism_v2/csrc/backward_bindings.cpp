@@ -7,7 +7,9 @@
 #include "core_api.h"
 namespace dism_v2 { void launch_backward_delta(const void*,const void*,float*,int,int,cudaStream_t); }
 namespace dism_v2 {
-void launch_operand_backward(const Args&,int,int,const void*,const float*,const float*,float*,float*,cudaStream_t);
+void launch_operand_backward(const Args&,int,int,const void*,const float*,const float*,float*,float*,float*,float*,cudaStream_t);
+void launch_operand_backward_ws(const Args&,int,int,const void*,const float*,const float*,float*,float*,float*,float*,cudaStream_t);
+void launch_tau_reduce(const float*,float*,int,int,int,cudaStream_t);
 void launch_value_backward(const Args&,int,int,const void*,float*,const float*,float2*,cudaStream_t);
 void launch_backward_passing(const float2*,float2*,float*,int,int,cudaStream_t);
 void launch_value_backward_ws(const Args&,int,int,const void*,const float*,float*,float2*,float*,cudaStream_t);
@@ -93,7 +95,7 @@ torch::Tensor delta(torch::Tensor dout,torch::Tensor out) {
 std::vector<torch::Tensor> operand_gradient(torch::Tensor a,torch::Tensor b,torch::Tensor v,torch::Tensor dout,
         torch::Tensor lse,torch::Tensor tau,torch::Tensor ql,torch::Tensor kl,torch::Tensor norm,
         torch::Tensor dd,torch::Tensor vertical,torch::Tensor horizontal,torch::Tensor boundary,
-        double scale,bool column_lse,double probability,uint64_t seed,uint64_t offset) {
+        double scale,bool column_lse,double probability,uint64_t seed,uint64_t offset,bool warp_specialized) {
     TORCH_CHECK(a.is_cuda() && a.dim()==4,"A must be CUDA [B,H,N,D]");
     for(const auto& x:{a,b,v,dout,lse,tau,ql,kl,norm,vertical,horizontal,dd,boundary})
         TORCH_CHECK(x.device()==a.device() && x.is_contiguous(),"inputs must be contiguous on same CUDA device");
@@ -121,15 +123,23 @@ std::vector<torch::Tensor> operand_gradient(torch::Tensor a,torch::Tensor b,torc
     TORCH_CHECK(prop.major==12 && prop.minor==0,"initial backward supports sm120 only");
     auto da=torch::zeros(a.sizes(),a.options().dtype(at::kFloat));
     auto db=torch::empty_like(da);
+    auto dlse=torch::zeros_like(lse),dtau=torch::empty_like(tau);
+    int partial_count=warp_specialized?((np+127)/128)*8:np/32;
+    auto tau_partial=torch::empty({batch,heads,partial_count},tau.options());
     dism_v2::Args p{};
     p.a=a.data_ptr();p.b=b.data_ptr();p.v=v.data_ptr();p.lse=lse.data_ptr<float>();p.tau=tau.data_ptr<float>();
     p.q_label=ql.data_ptr<int64_t>();p.k_label=kl.data_ptr<int64_t>();p.normalizer=norm.data_ptr<float>();
     p.vertical=vertical.data_ptr<float>();p.horizontal=horizontal.data_ptr<float>();
     p.n=n;p.padded_n=np;p.batch_heads=batch*heads;p.heads=heads;p.scale=scale;p.column_lse=column_lse;
     p.hard_prob=probability;p.seed=seed;p.offset=offset;
-    dism_v2::launch_operand_backward(p,d,dv,dout.data_ptr(),dd.data_ptr<float>(),boundary.data_ptr<float>(),
-        da.data_ptr<float>(),db.data_ptr<float>(),c10::cuda::getCurrentCUDAStream());
-    C10_CUDA_KERNEL_LAUNCH_CHECK();return {da,db};
+    auto launch=warp_specialized?dism_v2::launch_operand_backward_ws:dism_v2::launch_operand_backward;
+    launch(p,d,dv,dout.data_ptr(),dd.data_ptr<float>(),boundary.data_ptr<float>(),
+        da.data_ptr<float>(),db.data_ptr<float>(),dlse.data_ptr<float>(),tau_partial.data_ptr<float>(),
+        c10::cuda::getCurrentCUDAStream());
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    dism_v2::launch_tau_reduce(tau_partial.data_ptr<float>(),dtau.data_ptr<float>(),
+        batch,heads,partial_count,c10::cuda::getCurrentCUDAStream());
+    C10_CUDA_KERNEL_LAUNCH_CHECK();return {da,db,dlse,dtau};
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME,m) { m.def("delta",&delta); m.def("value_gradient",&value_gradient); m.def("operand_gradient",&operand_gradient); }

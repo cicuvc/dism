@@ -70,7 +70,7 @@ def test_backward_summary_tails(n,mode,record_property):
     run(64,128,n,"random",.37 if mode=="random" else 1.,record_property,mode,check_summary=True)
 
 
-def run(d,dv,n,direction,probability,record_property,mode="random",check_summary=False,warp_specialized=False,check_g=False,check_ab=False,check_reference=False):
+def run(d,dv,n,direction,probability,record_property,mode="random",check_summary=False,warp_specialized=False,check_g=False,check_ab=False,check_reference=False,ab_warp_specialized=False):
     if torch.cuda.get_device_capability()!=(12,0): pytest.skip("sm120a only")
     batch,heads=(1,1) if n>513 else (2,2)
     gen=torch.Generator(device="cuda").manual_seed(741+n+d+dv)
@@ -173,36 +173,46 @@ def run(d,dv,n,direction,probability,record_property,mode="random",check_summary
                     stream.wait_stream(torch.cuda.current_stream())
                     with torch.cuda.stream(stream):
                         fused_ab=operand_gradient(a,b,v,dout,lse,tau,interp.q_index,interp.k_index,norm,dd,
-                            edges,boundary,**kwargs)
+                            edges,boundary,**kwargs,warp_specialized=ab_warp_specialized)
                     torch.cuda.current_stream().wait_stream(stream)
                     replay_ab=operand_gradient(a,b,v,dout,lse,tau,interp.q_index,interp.k_index,norm,dd,
-                        edges,boundary,**kwargs)
-                    for x,y in zip(fused_ab,replay_ab):
-                        assert x.dtype==torch.float32 and x.shape==a.shape and torch.isfinite(x).all()
+                        edges,boundary,**kwargs,warp_specialized=ab_warp_specialized)
+                    assert len(fused_ab)==4
+                    for x,y,shape in zip(fused_ab,replay_ab,(a.shape,b.shape,lse.shape,tau.shape)):
+                        assert x.dtype==torch.float32 and x.shape==shape and torch.isfinite(x).all()
                         torch.testing.assert_close(x,y,atol=3e-5,rtol=3e-5)
+                    dense_g=actual_g[...,:n,:n].double()
+                    soft_g=dense_g*(~mask)
+                    expected_lse=-soft_g.sum(-2 if state.direction=="k_from_q" else -1)
+                    expected_tau=dense_g.sum((0,2,3))
+                    for name,x,y in zip(("dlse","dtau"),fused_ab[2:],(expected_lse,expected_tau)):
+                        record_property(name+"_same_g_max_abs",(x.double()-y).abs().max().item())
+                        torch.testing.assert_close(x.double(),y,atol=5e-4,rtol=2e-3)
                     if probability==1.:
-                        assert all(torch.count_nonzero(x)==0 for x in fused_ab)
+                        assert all(torch.count_nonzero(x)==0 for x in fused_ab[:3])
+                    if mode=="break": assert torch.count_nonzero(fused_ab[3])==0
                     if check_reference:
                         # Independent core operands: keep interpolation/LSE fixed,
                         # differentiate the reference's unrounded FP32 output.
                         with torch.enable_grad():
                             aa=a.detach().float().requires_grad_();bb=b.detach().float().requires_grad_()
-                            ri=replace(interp,q_from_k=bb) if state.direction=="q_from_k" else replace(interp,k_from_q=aa)
+                            ll=lse.detach().requires_grad_();tt=tau.detach().requires_grad_()
+                            ri=replace(interp,q_from_k=bb,q_lse=ll) if state.direction=="q_from_k" else replace(interp,k_from_q=aa,k_lse=ll)
                             ro=voc_dism_ref(aa if state.direction=="q_from_k" else q,
-                                bb if state.direction=="k_from_q" else reference_k,v.float(),tau,qvoc,kvoc,
+                                bb if state.direction=="k_from_q" else reference_k,v.float(),tt,qvoc,kvoc,
                                 sm_scale=scale,direction=state.direction,hard_prob=probability,
                                 interpolation=ri,hard_mask=mask)
-                            ra,rb=torch.autograd.grad(ro,(aa,bb),dout.float())
+                            ra,rb,rl,rt=torch.autograd.grad(ro,(aa,bb,ll,tt),dout.float())
                         alternate=None
-                        if mode=="bounded_soft":
+                        if check_reference:
                             # Diagnostic only: isolate using stored BF16 O for delta.
                             reference_dd=(ro.detach()*dout.float()).sum(-1).contiguous()
                             _,_,reference_boundary=value_gradient(a,b,dout,lse,tau,interp.q_index,interp.k_index,
                                 norm,edges,**kwargs,v=v,delta=reference_dd,warp_specialized=True)
                             alternate=operand_gradient(a,b,v,dout,lse,tau,interp.q_index,interp.k_index,norm,
-                                reference_dd,edges,reference_boundary,**kwargs)
+                                reference_dd,edges,reference_boundary,**kwargs,warp_specialized=ab_warp_specialized)
                         reference_checks=[]
-                        for name,x,y in zip(("da","db"),fused_ab,(ra,rb)):
+                        for index,(name,x,y) in enumerate(zip(("da","db","dlse","dtau"),fused_ab,(ra,rb,rl,rt))):
                             diff=x.double()-y.double();den=y.double().norm()
                             record_property(name+"_reference_max_abs",diff.abs().max().item())
                             rel=(diff.norm()/den).item() if den>0 else diff.norm().item()
@@ -210,14 +220,14 @@ def run(d,dv,n,direction,probability,record_property,mode="random",check_summary
                             record_property(name+"_reference_cosine",torch.nn.functional.cosine_similarity(
                                 x.double().flatten(),y.double().flatten(),dim=0).item() if den>0 else 1.)
                             if alternate is not None:
-                                alt=alternate[0 if name=="da" else 1].double()-y.double()
+                                alt=alternate[index].double()-y.double()
                                 record_property(name+"_reference_delta_max_abs",alt.abs().max().item())
                                 record_property(name+"_reference_delta_relative_l2",(alt.norm()/den).item() if den>0 else alt.norm().item())
                             reference_checks.append((x,y,rel))
                         for x,y,rel in reference_checks:
                             torch.testing.assert_close(x,y,atol=.008,rtol=.02)
                             assert rel<.02
-                check_gemm(actual_g,a,b,mask,scale,record_property,fused_ab=fused_ab)
+                check_gemm(actual_g,a,b,mask,scale,record_property,fused_ab=None if fused_ab is None else fused_ab[:2])
                 assert torch.equal(before,torch.cuda.get_rng_state()) and torch.equal(explicit_before,gen.get_state())
     difference=(actual-expected).double()
     denom=expected.double().norm()

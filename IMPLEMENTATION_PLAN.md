@@ -442,7 +442,42 @@ pure soft、rtau=ln64逐元素精度失败，保留普通失败。reference FP32
 最终AB149项143通过/6 reference精度失败；与dV/WS/G/梯度probe合并558项，
 546通过/12失败（另6项是旧WS P量化）。三类sanitizer各88项通过、零errors/hazards，
 仅插桩B3 namespace；API契约检查在普通回归中通过。日志见dism_v2/AB.md。
-融合实现及本轮验证尚未提交。
+融合实现及上述验证已提交：17f5674。用户接受当前精度，普通失败保持可见。
+
+### B3 warp specialization（当前执行）
+
+最新进度：dLSE/drtau已接入WS与单warp，两路径接口改为四输出。
+用户已授权保留WS D64/DV128新增56B stack及D128 spill，继续正确性验证，不优化。
+同G检查通过，直接reference暴露新增drtau精度失败；诊断指向saved BF16 O的delta误差。
+资源、数值与sanitizer范围见dism_v2/AB.md末尾。
+本轮四输出299项257通过/42普通reference失败；非reference的176数值/契约与
+3项codegen全部通过，三类sanitizer各179通过、零errors/hazards。
+8193闭式对照8项通过，并完成独立记录的sanitizer范围；
+旧路径/probe409项403通过/6原失败，delta/FP64公式75项通过。
+不将同G通过视为原始reference精度达标；生产delta保持不变。
+下方WS通过记录均为新增标量梯度之前的版本。
+
+- 独立 core_ab_ws.cu，按用户后续要求operand_gradient默认启用WS；
+  warp_specialized=False显式选择单warp诊断基线。dV入口默认策略未改。
+- 12 warps/CTA，8 compute各持16key，4 producer-group，40/232寄存器重分配。
+  128key交错分配0,4,1,5,2,6,3,7；A/dO双缓冲流式倒序加载64query。
+- W/dP/E独立重算；warp4–7载入下一32key的G32边界，inclusive reverse scan后
+  双槽mailbox传给0–3。边界在梯度GEMM前发布；不增加组内串行链。
+- dB每warp一个FP32 accumulator独占写回，G寄存器保留query物理permutation，
+  直接与TMA加载的A相乘。必须完成dB读取后才arrive input-free。
+- Gsoft同时以逻辑query列写shared，再col-layout转置读入寄存器供dA。
+  每warp2KiB union复用为Gsoft或两个16x16 FP32 dA输出槽；全CTA16KiB。
+  采用16x16而非单warp版16x32 TMA输出块，以限制shared占用。
+  每次union写G前wait_group.read0，输出槽复用wait_group.read1，
+  所有writer发布fence/syncwarp，退出wait_group0。
+- 首轮编译九实例通过，D32/64六实例零spill；D128对应DV32/64/128：
+  stack32/144/216 B，spill stores32/192/228 B，loads32/144/212 B。
+  ptxas CTA metadata168寄存器，不能误报为consumer角色寄存器数。
+  D128沿用用户授权，暂不优化。初版日志 /tmp/dism-ab-ws-build.log。
+- WS完整149项143通过/6原bounded-soft reference失败，同G/GEMM最大绝对误差
+  dA=5.22108e-6、dB=2.40658e-5。三类sanitizer各89项通过，零errors/hazards。
+  codegen强化检查40/232立即数后单独复跑通过。旧路径/probes558项546通过/12原失败，
+  无新增失败；未运行全套前向/embedding测试，未测性能。日志见dism_v2/AB.md。
 
 - 接入现有 EmbInterpFunction，先复现并解决 embedding backward 的重复 dq/dk 写入问题。
 - 正确传递插值 embedding 与 LSE 梯度，合并 score 的直接 q/k 梯度和 embedding 阶段梯度，完成六个输入的 autograd 接口。

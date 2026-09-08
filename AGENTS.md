@@ -71,8 +71,20 @@
   同独立G/GEMM对照通过；直接reference在6个rtau=ln64纯soft用例有逐元素精度失败，
   保留普通失败，详见dism_v2/AB.md。当前无dLSE/drtau归约和autograd，不外推12-warp资源。
 
-## 已知旧实现问题
+- B3 WS已新增core_ab_ws.cu，operand_gradient默认启用WS；warp_specialized=False保留单warp诊断。
+  每warp16key，一个dB accumulator；A/dO双缓冲需到dB读取后释放。
+  reverse inclusive scan按4→0配对双槽传G；Gsoft shared转置加载后，
+  每warp2KiB union改作两个16x16 FP32 dA TMA输出槽。改写G前drain旧TMA读取。
+  初版D32/64零spill，D128 stack32/144/216 B（DV32/64/128），按用户授权保留，
+  不自行优化。完整WS验证状态见IMPLEMENTATION_PLAN.md和dism_v2/AB.md。
 
+- operand_gradient返回FP32(dA,dB,dLSE,drtau)，两个B3路径共享FP32 G归约，
+  dLQ atomic、dLK独占、drtau warp partial后按head归约。用户已授权暂时保留
+  WS D64/DV128新增56B stack及D128 spill并继续验证，不自行优化。
+  同G数值检查通过，但直接reference新增drtau精度失败；reference FP32 O的delta诊断
+  大幅降低误差，不据此替换生产delta或放宽容差。实测与sanitizer范围见dism_v2/AB.md。
+
+## 已知旧实现问题
 
 - 旧 CUDA 最终 bwd kernel 为空；跨 checkpoint 的前向传递仍有 Triton 阶段；输出尾部为 RMSNorm，不能直接作为 v2 的正确性基线。
 - 旧 CUDA 使用 `[B,N,H,D]`，而 v2 使用 `[B,H,N,D]`，不能混用 stride 或接口。

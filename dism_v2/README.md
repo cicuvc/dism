@@ -9,7 +9,13 @@
   调用和验证范围见[BACKWARD_SUMMARY.md](BACKWARD_SUMMARY.md)，完整score梯度与autograd仍未接入。
 
 - 独立FP32 dV入口`backward.value_gradient`：同前向状态的转置重算、key warp独占累积；
-  BF16 P高位+残差两次MMA。正确性/精度/范围见[DV.md](DV.md)。其余core梯度及autograd尚未接入。
+  BF16 P高位+残差两次MMA。正确性/精度/范围见[DV.md](DV.md)。
+
+- B3 `backward.operand_gradient`已实现dA/dB，默认12-warp specialization，
+  可显式传入`warp_specialized=False`使用单warp诊断基线。验证见[AB.md](AB.md)。
+  dLSE/drtau已接入（统一返回四输出），同G归约检查通过，直接reference仍有精度失败；
+  用户已允许保留新增spill。仍缺embedding backward接入和完整六输入autograd；
+  已测core分阶段串联不等于完整可训练链路已验证。
 
 - 三个 CUDA kernels：32行 affine 摘要、对角线 passing、重算 scan + online softmax + PV。
 - 16x64 warp tile，128行/CTA，compute warps 按 `0,4,1,5,2,6,3,7` 交错。

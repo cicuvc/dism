@@ -1,4 +1,4 @@
-"""Fused non-materializing B3 dA/dB against independent G + gradient GEMMs."""
+"""12-warp B3: independent G/GEMM oracle, tails, raw reference and codegen."""
 import itertools
 import re
 import subprocess
@@ -10,7 +10,7 @@ from torch.utils.cpp_extension import CUDA_HOME
 from dism_v2.backward import _extension
 from test_dism_v2_dv import run,exact_oracle_matmul,pytestmark
 
-def test_ab_contract():
+def test_ab_ws_contract():
     from dism_v2.core import forward
     from dism_v2.backward import delta,value_gradient,operand_gradient
     if torch.cuda.get_device_capability()!=(12,0): pytest.skip("sm120a only")
@@ -23,8 +23,9 @@ def test_ab_contract():
     dd=delta(dout,out)
     kw=dict(sm_scale=32**-.5,rng_state=state)
     _,_,boundary=value_gradient(a,b,dout,lse,tau,labels,labels,norm,edges,**kw,v=v,delta=dd,warp_specialized=True)
+    import inspect
+    assert inspect.signature(operand_gradient).parameters["warp_specialized"].default is True
     args=[a,b,v,dout,lse,tau,labels,labels,norm,dd,edges,boundary]
-    kw["warp_specialized"]=False
     result=operand_gradient(*args,**kw)
     assert all(torch.count_nonzero(x)==0 for x in result)
     with pytest.raises(ValueError,match="offset"):
@@ -51,38 +52,47 @@ def test_ab_contract():
 @pytest.mark.parametrize("probability",(0.,.37,1.))
 def test_ab_dimensions(d,dv,direction,probability,record_property):
     run(d,dv,139,direction,probability,record_property,
-        check_summary=True,warp_specialized=True,check_g=True,check_ab=True)
+        check_summary=True,warp_specialized=True,check_g=True,check_ab=True,ab_warp_specialized=True)
 
 @pytest.mark.parametrize("n",(1,17,31,32,63,64,65,129,513,1025,2049))
 @pytest.mark.parametrize("mode",("chain","break","bounded_soft"))
 def test_ab_tails(n,mode,record_property):
     run(64,128,n,"random",0. if mode=="bounded_soft" else 1.,record_property,mode,
-        check_summary=True,warp_specialized=True,check_g=True,check_ab=True)
+        check_summary=True,warp_specialized=True,check_g=True,check_ab=True,ab_warp_specialized=True)
 
 @pytest.mark.parametrize("d,dv",itertools.product((32,64,128),repeat=2))
 @pytest.mark.parametrize("direction",("q_from_k","k_from_q"))
 @pytest.mark.parametrize("probability",(0.,.37,1.))
 def test_ab_reference_dimensions(d,dv,direction,probability,record_property):
     run(d,dv,139,direction,probability,record_property,
-        check_summary=True,warp_specialized=True,check_g=True,check_ab=True,check_reference=True)
+        check_summary=True,warp_specialized=True,check_g=True,check_ab=True,ab_warp_specialized=True,check_reference=True)
 
 @pytest.mark.parametrize("n",(17,65,139))
 @pytest.mark.parametrize("direction",("q_from_k","k_from_q"))
 def test_ab_reference_bounded_soft(n,direction,record_property):
     run(64,128,n,direction,0.,record_property,"bounded_soft",
-        check_summary=True,warp_specialized=True,check_g=True,check_ab=True,check_reference=True)
+        check_summary=True,warp_specialized=True,check_g=True,check_ab=True,ab_warp_specialized=True,check_reference=True)
 
 def test_codegen():
     sass=subprocess.check_output([str(Path(CUDA_HOME)/"bin/cuobjdump"),"-sass",_extension().__file__],text=True)
     count=0
     for block in sass.split('Function : ')[1:]:
-        dims=re.search(r'_ZN7dism_v22ab3runILi(\d+)ELi(\d+)',block.splitlines()[0])
+        dims=re.search(r'_ZN7dism_v25ab_ws3runILi(\d+)ELi(\d+)',block.splitlines()[0])
         if dims is None: continue
         count+=1
         assert not re.search(r'\bCALL\b',block)
         assert 'UTMALDG.5D' in block and 'UTMAREDG.3D.ADD' in block
+        assert re.search(r'USETMAXREG\.DEALLOC\.CTAPOOL\s+0x28',block)
+        assert re.search(r'USETMAXREG\.TRY_ALLOC\.CTAPOOL\s+UP\d+, 0xe8',block)
         assert 'MUFU.TANH' in block and 'LDSM.16.MT88' in block
-        if int(dims[1])<128:
+        if int(dims[1])<128 and (int(dims[1]),int(dims[2]))!=(64,128):
             assert not re.search(r'\b(?:LDL|STL)\b',block)
-        # D128 spill explicitly accepted for this correctness milestone.
+        # User accepts D128 and the new D64/DV128 scalar-gradient spill.
     assert count==9
+
+def test_tau_codegen():
+    sass=subprocess.check_output([str(Path(CUDA_HOME)/"bin/cuobjdump"),"-sass",_extension().__file__],text=True)
+    blocks=[b for b in sass.split("Function : ")[1:]
+        if "_ZN7dism_v210scalar_bwd10reduce_tau" in b.splitlines()[0]]
+    assert len(blocks)==1
+    assert not re.search(r'\b(?:CALL|LDL|STL)\b',blocks[0])
