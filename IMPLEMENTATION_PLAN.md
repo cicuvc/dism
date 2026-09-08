@@ -397,6 +397,53 @@ G九实例168–250registers、dB40/64/154，均零spill。尚未融合成不物
 同BF16 Gsoft下dA/dB误差2.84749e-6/1.89835e-6；FP32 Gsoft量化对照最大relative L2
 约0.00293/0.00295。具体口径及日志见实验README。下一步为不物化G的B3融合及资源验证。
 
+### B3单warp融合：D128 spill，按约定暂停
+
+验证阶段已提交`450168b`。新增`dism_v2/csrc/core_ab.cu`和`ab_rescan.cuh`，
+编入backward扩展，但尚未提供Python/C++ binding调用入口或运行测试。
+每CTA一个warp负责32key，query64逆序；真实W/dP/E→reverse scan→shared BF16 Gsoft，
+不在global物化G/W/P/E。两个16key dB FP32 accumulator跨循环保留；
+dB按feature32读取逻辑顺序query shared临时块计算，原permuted query staging保持不变。
+dA按16x32分块，经双槽FP32 shared向3D[N,D,batch-head] tensor map异步TMA reduce-add；
+最终dB独占写回。这里3D描述符按CUDA坐标实际为[D,N,batch-head]，
+与已验证的2D probe不同，尚未验证实际运行的多batch/head或tail行为。
+当前不含dLSE/drtau归约，不是完整autograd；不含12-warp producer流水。
+
+编译成功，资源如下（spill统计单位bytes，非动态访存量）：
+
+| D | DV | registers | stack | spill stores | spill loads |
+|---|---|---:|---:|---:|---:|
+|32|32|235|0|0|0|
+|32|64|224|0|0|0|
+|32|128|218|0|0|0|
+|64|32|242|0|0|0|
+|64|64|238|0|0|0|
+|64|128|242|0|0|0|
+|128|32|255|24|32|28|
+|128|64|255|24|24|24|
+|128|128|255|32|40|32|
+
+全部实例无CALL，原生UTMALDG.5D/UTMAREDG.3D.ADD/MUFU.TANH保留。
+按用户要求出现spill后停止，没有继续调整accumulator存储、寄存器预算或调度。
+尚未数值/sanitizer/性能测试，不能用诊断probe的通过替代融合版验收。
+日志`/tmp/dism-ab-first-build.log`，SASS `/tmp/dism-ab-first.sass`。本轮融合改动未提交。
+
+### B3继续验证（D128 spill已获授权保留）
+
+用户允许暂不处理D128 spill。已接入`backward.operand_gradient`及严格输入校验，
+返回FP32 dA/dB，dA zero-init后使用3D TMA reduce-add，dB独占写回，无global G。
+新增B3专属codegen允许D128 spill，仍要求其他六种零spill及所有实例无CALL/原生TMA。
+87个同独立G/GEMM数值用例加codegen通过，dA/dB误差约5.22e-6/1.61e-5；
+另有API参数、零dO、禁止higher-order/deterministic契约检查。
+直接reference autograd的54常规维度项通过，6个D64/DV128、N17/65/139、两方向
+pure soft、rtau=ln64逐元素精度失败，保留普通失败。reference FP32 O的delta诊断
+仅部分降低误差，没有改变生产delta语义。详见dism_v2/AB.md。
+当前未做性能优化/计时，未融合12-warp流水，未实现dLSE/drtau归约或embedding autograd。
+最终AB149项143通过/6 reference精度失败；与dV/WS/G/梯度probe合并558项，
+546通过/12失败（另6项是旧WS P量化）。三类sanitizer各88项通过、零errors/hazards，
+仅插桩B3 namespace；API契约检查在普通回归中通过。日志见dism_v2/AB.md。
+融合实现及本轮验证尚未提交。
+
 - 接入现有 EmbInterpFunction，先复现并解决 embedding backward 的重复 dq/dk 写入问题。
 - 正确传递插值 embedding 与 LSE 梯度，合并 score 的直接 q/k 梯度和 embedding 阶段梯度，完成六个输入的 autograd 接口。
 - 检查包导入、stride、dtype、sm_scale、词表 tail、top-1 tie 和随机调用语义。

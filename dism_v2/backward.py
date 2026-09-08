@@ -11,7 +11,7 @@ from .core import RowRNGState, ScanBoundaries
 def _extension():
     source=Path(__file__).resolve().parent/"csrc"
     return load(name="dism_v2_backward_sm120a",
-        sources=[str(source/f) for f in ("backward_bindings.cpp","core_bwd.cu","core_dv.cu","core_dv_ws.cu")],
+        sources=[str(source/f) for f in ("backward_bindings.cpp","core_bwd.cu","core_dv.cu","core_dv_ws.cu","core_ab.cu")],
         extra_include_paths=[str(source.parents[1]/"include"),
             str(Path(os.environ.get("GLX_ROOT","/home/cicuvc/cs/projects/glx"))/"include")],
         extra_cflags=["-O2","-std=c++20"],
@@ -63,3 +63,30 @@ def value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,boundaries,*,sm_s
         boundaries.vertical,boundaries.horizontal,float(sm_scale),rng_state.direction=="k_from_q",
         rng_state.hard_prob,rng_state.seed,rng_state.offset,v,delta,warp_specialized)
     return tuple(result) if v is not None else result[0]
+
+
+def operand_gradient(a,b,v,dout,lse,tau,q_label,k_label,normalizer,delta,boundaries,g_boundary,*,sm_scale,rng_state):
+    """B3: FP32 (dA,dB), no global G, single-warp32-key path.
+
+    Requires G32 boundaries from value_gradient(v=...,delta=...).
+    Replays RNG; BF16 Gsoft MMA; dA uses TMA atomic add and is nondeterministic.
+    No dLSE/drtau or autograd integration yet. D128 spill accepted for validation.
+    """
+    if not isinstance(rng_state,RowRNGState) or not isinstance(boundaries,ScanBoundaries):
+        raise TypeError("saved RowRNGState and ScanBoundaries required")
+    if rng_state.shape!=tuple(a.shape[:3]) or rng_state.direction not in ("q_from_k","k_from_q"):
+        raise ValueError("replay shape/direction mismatch")
+    if not (0<=rng_state.seed<2**64 and 0<=rng_state.offset<2**64 and rng_state.offset%4==0):
+        raise ValueError("invalid replay seed/offset")
+    if not isinstance(sm_scale,(int,float)):
+        raise TypeError("sm_scale must be a scalar")
+    if torch.is_grad_enabled() and any(x.requires_grad for x in
+            (a,b,v,dout,lse,tau,normalizer,delta,boundaries.vertical,boundaries.horizontal,g_boundary)):
+        raise NotImplementedError("higher-order backward is not implemented")
+    if torch.cuda.is_current_stream_capturing():
+        raise RuntimeError("CUDA Graph capture is not supported")
+    if torch.are_deterministic_algorithms_enabled():
+        raise RuntimeError("operand_gradient uses nondeterministic TMA atomic reduction")
+    return tuple(_extension().operand_gradient(a,b,v,dout,lse,tau,q_label,k_label,normalizer,delta,
+        boundaries.vertical,boundaries.horizontal,g_boundary,float(sm_scale),rng_state.direction=="k_from_q",
+        rng_state.hard_prob,rng_state.seed,rng_state.offset))

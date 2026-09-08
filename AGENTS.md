@@ -65,6 +65,11 @@
   从真实score/dP/E、前向W边界及生产G32边界恢复G；之后独立验证dA TMA和dB独占GEMM。
   149项及三类sanitizer通过，G probe168–250寄存器、零spill。完整G仅作诊断输出，
   生产B3不得物化；尚未完成dA/dB融合或dLSE/drtau归约，不外推12-warp资源。
+- B3融合`core_ab.cu`已接入`backward.operand_gradient`：单warp32key，Gsoft仅在shared交接，
+  两个dB accumulator常驻寄存器，dA用3D TMA FP32 reduce-add。D32/64六实例零spill，
+  D128三实例255寄存器、24–32B stack spill已获用户授权保留并继续正确性验证，不自行优化。
+  同独立G/GEMM对照通过；直接reference在6个rtau=ln64纯soft用例有逐元素精度失败，
+  保留普通失败，详见dism_v2/AB.md。当前无dLSE/drtau归约和autograd，不外推12-warp资源。
 
 ## 已知旧实现问题
 
