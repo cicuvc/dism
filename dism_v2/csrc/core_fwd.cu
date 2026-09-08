@@ -30,11 +30,12 @@ template<int D,int DV,bool OUTPUT> struct Shared {
     Buffer::HState::SharedStorage mail[4][STAGES];
 };
 
-__device__ __forceinline__ float score(const Args& p, float dot, int bh, int i, int j, bool hard) {
+__device__ __forceinline__ float score(const Args& p, float dot, int bh, int i, int j,
+        bool hard, float cached_tau, float cached_lse, int64_t cached_label) {
     if(i>=p.n || j>=p.n || j>i) return -INFINITY;
-    float tau=p.tau[bh%p.heads];
-    if(hard) return p.q_label[int64_t(bh)*p.n+i]==p.k_label[int64_t(bh)*p.n+j]?tau*LOG2E:-INFINITY;
-    float l=p.lse[int64_t(bh)*p.n+(p.column_lse?j:i)];
+    float tau=cached_tau;
+    if(hard) return cached_label==p.k_label[int64_t(bh)*p.n+j]?tau*LOG2E:-INFINITY;
+    float l=p.column_lse?p.lse[int64_t(bh)*p.n+j]:cached_lse;
     return (dot*p.scale-l+tau)*LOG2E;
 }
 
@@ -45,6 +46,8 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
     auto& shared=*reinterpret_cast<Shared<D,DV,OUTPUT>*>(bytes);
     int warp=threadIdx.x/32, lane=threadIdx.x&31;
     int bh=blockIdx.y, base=blockIdx.x*128;
+    // All roles use the same bound, including invalid warps in a partial CTA.
+    const int key_end=p.padded_n<base+128?p.padded_n:base+128;
     int checkpoint=blockIdx.x*4+(warp&3);
     int qbase=base+(warp&3)*32+(warp/4)*16;
     if(threadIdx.x==0) {
@@ -68,7 +71,7 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
         // join makes the compiler conservatively use the smaller budget.
         asm volatile("setmaxnreg.dec.sync.aligned.u32 40;" ::: "memory");
         if(warp==8) {
-        for(int t=0;t*64<p.padded_n;++t) {
+        for(int t=0;t*64<key_end;++t) {
             int s=t%STAGES;
             if(t>=STAGES) wait(&shared.free[s],((t/STAGES)-1)&1);
             auto& slot=shared.slot[s];
@@ -108,10 +111,20 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
             decision=row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qbase+lane,p.hard_prob);
         bool hard[2]={bool(__shfl_sync(0xffffffff,decision,lane/4)),
                       bool(__shfl_sync(0xffffffff,decision,8+lane/4))};
+        // Cache query-row invariants before the key loop. Column LSE remains
+        // indexed by key inside score(); the two directions are not equivalent.
+        float cached_tau=p.tau[bh%p.heads], cached_lse[2];
+        int64_t cached_label[2];
+        #pragma unroll
+        for(int r=0;r<2;++r) {
+            int i=qbase+r*8+lane/4;
+            cached_lse[r]=(i<p.n && !p.column_lse)?p.lse[int64_t(bh)*p.n+i]:0.f;
+            cached_label[r]=i<p.n?p.q_label[int64_t(bh)*p.n+i]:-1;
+        }
         Buffer::VState left;
         kt::rt_fl<16,DV> out{0.f};
         float maximum[2]{0,0}, denominator[2]{1,1};
-        for(int t=0;t*64<p.padded_n;++t) {
+        for(int t=0;t*64<key_end;++t) {
             int s=t%STAGES, phase=(t/STAGES)&1;
             wait(&shared.ready[s],phase);
             Scalar scalar;
@@ -126,7 +139,9 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
                     for(int c=0;c<8;++c) {
                         auto x=accum.tiles[0][c/2].data[r+2*(c&1)];
                         auto a=Buffer::layout(r,c,0), b=Buffer::layout(r,c,1);
-                        scalar.data[r][c].value={score(p,x.x,bh,qbase+a.first,t*64+a.second,hard[r]),score(p,x.y,bh,qbase+b.first,t*64+b.second,hard[r])};
+                        scalar.data[r][c].value={
+                            score(p,x.x,bh,qbase+a.first,t*64+a.second,hard[r],cached_tau,cached_lse[r],cached_label[r]),
+                            score(p,x.y,bh,qbase+b.first,t*64+b.second,hard[r],cached_tau,cached_lse[r],cached_label[r])};
                     }
                 }
             }
@@ -241,6 +256,28 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
                 kt::warp::wmma::mma_AB(out,weights,vreg,out);
                 arrive(&shared.free[s]);
             }
+        }
+        // Initialize omitted strictly upper-triangular state: passing and backward
+        // read dense checkpoint arrays, including these empty regions.
+        int end=base+128;
+        if constexpr(!OUTPUT) {
+            if(warp>=4 && checkpoint<p.checkpoints)
+                for(int j=end+lane;j<p.padded_n;j+=32) {
+                    // A 32-row diagonal wholly beyond N is identity, not zero.
+                    // Earlier padded endpoints still cross a masked valid cell.
+                    int64_t off=(int64_t(bh)*p.checkpoints+checkpoint)*p.padded_n+j;
+                    reinterpret_cast<float2*>(p.summary)[off]=make_float2(j>=p.n+31?0.f:-INFINITY,-INFINITY);
+                }
+        } else {
+            if(p.vertical)
+                for(int e=end/16;e<p.padded_n/16;++e)
+                    for(int r=lane;r<16;r+=32) {
+                        int i=qbase+r;
+                        if(i<p.padded_n) p.vertical[(int64_t(bh)*(p.padded_n/16)+e)*p.padded_n+i]=-INFINITY;
+                    }
+            if(p.horizontal && qbase%64==48 && qbase<p.padded_n)
+                for(int j=end+lane;j<p.padded_n;j+=32)
+                    p.horizontal[(int64_t(bh)*(p.padded_n/64)+qbase/64)*p.padded_n+j]=-INFINITY;
         }
         if constexpr(OUTPUT) {
             // One Newton-refined FP32 reciprocal per row, rather than per-element

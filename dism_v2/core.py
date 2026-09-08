@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import torch
 from torch.utils.cpp_extension import load
+from .kernel_config import LSE_SUFFIX, LSE_FLAGS
 
 
 @lru_cache(None)
@@ -18,13 +19,13 @@ def _extension():
     root = Path(__file__).resolve().parent.parent
     glx = Path(os.environ.get("GLX_ROOT", "/home/cicuvc/cs/projects/glx"))
     return load(
-        name="dism_v2_core_sm120a",
+        name="dism_v2_core_sm120a" + LSE_SUFFIX,
         sources=[str(root / "dism_v2/csrc" / f) for f in ("bindings.cpp", "core_fwd.cu")],
         extra_include_paths=[str(root / "include"), str(glx / "include")],
         extra_cflags=["-O2", "-std=c++20"],
         extra_cuda_cflags=["-O3", "-std=c++20", "-lineinfo", "--extended-lambda",
                           "--expt-relaxed-constexpr", "-gencode=arch=compute_120a,code=sm_120a",
-                          "--ptxas-options=-v"],
+                          "--ptxas-options=-v"] + LSE_FLAGS,
         extra_ldflags=["-lcuda"], verbose=os.environ.get("DISM_VERBOSE_BUILD") == "1",
     )
 

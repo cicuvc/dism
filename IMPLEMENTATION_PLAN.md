@@ -559,6 +559,46 @@ D64 reg/T32与shared/T16对称候选随形状互有胜负，spill不作为淘汰
 最终联合回归1508通过/77个既有类别精度失败（68项rtau幅值、9项V1词表量化）；
 486项六后端组合接线全通过，三类sanitizer各69项通过，480个reference用例无rtau反号。
 
+### 阶段5补充：前向裁剪/元数据缓存及tanh LSE训练评估（2026-09-08）
+
+- 已实现CTA因果key上界、query行元数据缓存，默认full LSE不改数学。
+  padding摘要保留identity；新增N191/255/1025回归。前向/codegen/原语111项通过，
+  full端到端相关513项通过，三类sanitizer各27项通过。
+- 显式`DISM_TILE_LSE=tanh`统一前向/反向重算，使用rl/lse.cu的approx（非approx2），
+  passing完整语义保留。前向全实例零spill/无CALL；B1 D64/DV64新增8B stack，未优化。
+- 3层D=DV64、V512、N1024、B64的3种子×1000步训练，full/tanh六次均完成且梯度有限。
+  本批tanh没有妨碍收敛，但D128/DV32纯soft固定输入发现tau相对FP32 oracle反号，
+  已加入实验模式普通失败回归，故不把tanh设为默认，也不宣称全形状精度验收。
+- full裁剪+缓存前向三kernel合计1.914ms，tanh为1.594ms（同配置CUPTI每kernel60样本）。
+  完整方法、精度/训练曲线、资源变化与性能见dism_v2/FORWARD_OPTIMIZATION.md。
+- 用户要求前后向同时近似后再次核对：原开关已覆盖两边，SASS确认B1/B3各新增60处TANH。
+  同配置seed0复跑1000步正常完成、hard准确率98.155%。重新计时full/tanh前向为
+  1.923/1.602ms、反向6.393/5.543ms；完整训练step68.777/65.455ms（30次采样），
+  输入吞吐提升5.1%。默认full及D128 tau反号已知问题不变；复测数据已固化。
+
+### 前向摘要性能诊断后的约束
+
+- NCU结果及旧版组织对照见dism_v2/SUMMARY_NCU.md；当前摘要SM吞吐约19.6%，
+  热点为Q标量搬运、key标签load-use、控制流等待，不能把低occupancy当成算法上限。
+- 用户新增shared使用标准：计算中间量仅计划内防spill staging、必须warp通信、输出布局整理
+  可写shared；其他能在寄存器完成的必须在寄存器完成。不默认新增key元数据shared缓存。
+- 用户最新指定摘要优化采用persistent CTA、每SM一个CTA；取消Q直载寄存器和提高occupancy
+  的建议。保留Q/K异步输入槽，在当前workload执行期间预取下一workload的Q。
+
+后续实施与验收顺序（本轮仅更新计划，尚未改kernel）：
+
+1. persistent调度保留逻辑(batch,head,query-block)身份与输出索引，平衡不同因果长度任务；
+   不把RNG/checkpoint身份绑定物理CTA或warp。以每SM一个CTA为主配置。
+2. 将Q改为TMA异步预取。先启动初始Q/K，在当前Q进入寄存器、其输入槽释放后，
+   producer预取下一workload Q并与当前任务的HMMA/scan重叠。
+   Q槽不能覆盖仍在使用的K ring；明确输入槽释放、ready、跨workload phase及退出drain协议。
+3. 保持两个compute warpgroup配对边界依赖，安排稳定阶段WG0 scan/reduce对应WG1 HMMA，
+   随后交换。细化数据/边界ready与K槽释放时机，不在不必要的全CTA barrier上锁步。
+4. key标签/column-LSE元数据用寄存器预取和复用，减少load-use串行链；
+   不为实现方便添加shared中间缓存。K多缓冲深度据重叠效果决定，不以stage数量验收。
+5. 先验证跨workload的边界/RNG、尾部及sanitizer，再比较NCU发射效率、pipeline利用和稳定阶段
+   吞吐；检查SASS无CALL及资源变化。不将warp stall占比直接解释为可消除的墙钟时间。
+
 ## 阶段 6：varlen
 
 - 增加 packed tokens 与 sequence offsets 接口，定义与 fixed-length 逐序列调用等价的数学结果。

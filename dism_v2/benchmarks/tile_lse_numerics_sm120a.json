@@ -1,0 +1,3293 @@
+{
+  "date": "2026-09-08",
+  "gpu": "RTX 5090",
+  "tau_sign_oracle_probe": {
+    "case": "128/32/139/q_from_k/0.0",
+    "full_values": [2.1424636840820312, -51.249778747558594],
+    "tanh_values": [-2.066699981689453, -42.569847106933594],
+    "same_embedding_fp32_oracle": [2.8577606678009033, -48.62312316894531]
+  },
+  "note": "tanh vs full on identical BF16 inputs, NOT vs FP32 reference; includes atomic rounding noise. B1 H2 vocab65 scale=D**-0.5 tau=ln(D). Nine D/DV combinations at N139 plus D64/DV64 N513/1024; two directions and hard_prob=0/.37/1. Cosine=1 for two exactly zero vectors.",
+  "summary": {
+    "out": {
+      "max_abs": 0.015625,
+      "max_relative_l2": 0.002094951616928089,
+      "min_cosine": 0.9999978068721334,
+      "all_finite": true
+    },
+    "dq": {
+      "max_abs": 0.03125,
+      "max_relative_l2": 0.005987221366925948,
+      "min_cosine": 0.9999820770496783,
+      "all_finite": true
+    },
+    "dk": {
+      "max_abs": 0.03125,
+      "max_relative_l2": 0.00814588966853183,
+      "min_cosine": 0.999966872716791,
+      "all_finite": true
+    },
+    "dv": {
+      "max_abs": 0.03125,
+      "max_relative_l2": 0.002164696684007733,
+      "min_cosine": 0.9999976776552442,
+      "all_finite": true
+    },
+    "dtau": {
+      "max_abs": 12.7236328125,
+      "max_relative_l2": 0.2269590628820219,
+      "min_cosine": 0.9748284442008519,
+      "all_finite": true,
+      "sign_flips": 1,
+      "nonzero_heads": 132
+    },
+    "dq_vocab": {
+      "max_abs": 0.03125,
+      "max_relative_l2": 0.006836234897557715,
+      "min_cosine": 0.9999766332490307,
+      "all_finite": true
+    },
+    "dk_vocab": {
+      "max_abs": 0.03125,
+      "max_relative_l2": 0.008748049757402487,
+      "min_cosine": 0.9999617901891783,
+      "all_finite": true
+    }
+  },
+  "cases": [
+    {
+      "case": "32/32/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0018203596354814835,
+          "cosine": 0.9999983436472812,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.003772230203042092,
+          "cosine": 0.9999928853285922,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0032227772820111176,
+          "cosine": 0.9999948395549314,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0017953545758296178,
+          "cosine": 0.9999983892692669,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.03897380828857422,
+          "relative_l2": 0.2269590628820219,
+          "cosine": 0.9748284442008519,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.004000621905658951,
+          "cosine": 0.9999920148995777,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0033212133377850893,
+          "cosine": 0.9999944956489935,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/32/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0006098942915971566,
+          "cosine": 0.9999998141411774,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0030032695428092453,
+          "cosine": 0.9999954905477066,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0031347520418907758,
+          "cosine": 0.9999951153229476,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.00102673815499992,
+          "cosine": 0.9999994731484321,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.04859447479248047,
+          "relative_l2": 0.004922058903738632,
+          "cosine": 0.9999968906898365,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.00340389199184085,
+          "cosine": 0.9999942141028938,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0033220932878277195,
+          "cosine": 0.9999944966508081,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/32/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 1.772859344683331e-05,
+          "cosine": 0.9999999998428518,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.00013065338134765625,
+          "relative_l2": 0.00010304120230613245,
+          "cosine": 0.9999999947117757,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/32/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0016481342878318817,
+          "cosine": 0.9999986418584289,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0033599799130842553,
+          "cosine": 0.9999943561681226,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0023654166930477446,
+          "cosine": 0.9999972046993745,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0017035259255066071,
+          "cosine": 0.9999985506146587,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.005493640899658203,
+          "relative_l2": 0.008462235754153478,
+          "cosine": 0.9999974061881327,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.003294008454172746,
+          "cosine": 0.9999945750511043,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.002990295339527679,
+          "cosine": 0.999995536080309,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/32/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0006382577451632693,
+          "cosine": 0.999999797019082,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0034103184443676255,
+          "cosine": 0.9999941866234711,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.002460905638011985,
+          "cosine": 0.9999970039984525,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0006238150251948922,
+          "cosine": 0.999999805434638,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.024501800537109375,
+          "relative_l2": 0.0026464065378549342,
+          "cosine": 0.9999992858135637,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0035883826572992252,
+          "cosine": 0.9999935637017558,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.003241002730865851,
+          "cosine": 0.9999947535266799,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/32/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 1.772859344683331e-05,
+          "cosine": 0.9999999998428518,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.00013065338134765625,
+          "relative_l2": 0.00010304120230613245,
+          "cosine": 0.9999999947117757,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/64/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0015671609117271792,
+          "cosine": 0.9999987723233041,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00146484375,
+          "relative_l2": 0.0029627240599496988,
+          "cosine": 0.9999956114558959,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003257783623452296,
+          "cosine": 0.9999946936083535,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0015945615292925672,
+          "cosine": 0.9999987287620121,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.03524160385131836,
+          "relative_l2": 0.013842452489661287,
+          "cosine": 0.9999986053528039,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0037228774851681867,
+          "cosine": 0.9999930706400824,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0031747485115715887,
+          "cosine": 0.9999949609046048,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/64/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0006834497290545433,
+          "cosine": 0.9999997664735476,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003194409074776477,
+          "cosine": 0.9999948999055094,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0032401055848150914,
+          "cosine": 0.9999947514212142,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0007486670798498545,
+          "cosine": 0.9999997198268968,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.14553260803222656,
+          "relative_l2": 0.006624652543652117,
+          "cosine": 0.9999830672851141,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003436289018412162,
+          "cosine": 0.9999941036375264,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0034273982515931694,
+          "cosine": 0.9999941405003798,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/64/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.001953125,
+          "relative_l2": 2.5749888858548803e-05,
+          "cosine": 0.9999999996684785,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0037784576416015625,
+          "relative_l2": 0.001057712136220099,
+          "cosine": 0.9999997277912724,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/64/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0017856726257145447,
+          "cosine": 0.9999984061226377,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0036743334899517833,
+          "cosine": 0.9999932803691248,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0019207542903861394,
+          "cosine": 0.9999981585130728,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0016604126464641357,
+          "cosine": 0.9999986230632176,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.027338027954101562,
+          "relative_l2": 0.014344800658967177,
+          "cosine": 0.9999145480894579,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0037586082940272536,
+          "cosine": 0.9999929675053885,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0028556127687366976,
+          "cosine": 0.9999959358171937,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/64/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0006658350964788754,
+          "cosine": 0.9999997785664322,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0026147375296903972,
+          "cosine": 0.9999966053175271,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0021351306543733036,
+          "cosine": 0.999997720843369,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0009553659264849709,
+          "cosine": 0.9999995454578258,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.07389450073242188,
+          "relative_l2": 0.0045403837868965916,
+          "cosine": 0.9999907987869193,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0027574433633376833,
+          "cosine": 0.9999962045595675,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.002772887566800108,
+          "cosine": 0.999996157091986,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/64/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.001953125,
+          "relative_l2": 2.5749888858548803e-05,
+          "cosine": 0.9999999996684785,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0037784576416015625,
+          "relative_l2": 0.001057712136220099,
+          "cosine": 0.9999997277912724,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/128/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0018277673375841903,
+          "cosine": 0.9999983297801771,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0035929059885421682,
+          "cosine": 0.9999936005822321,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0034414057948421706,
+          "cosine": 0.999994256919139,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0017010810974869622,
+          "cosine": 0.9999985539391423,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.043752193450927734,
+          "relative_l2": 0.0046865588107780345,
+          "cosine": 0.9999930122033018,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003998906672085742,
+          "cosine": 0.9999920518760128,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0034049662205047587,
+          "cosine": 0.9999944789436751,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/128/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0006426775040316133,
+          "cosine": 0.9999997936049927,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0029296875,
+          "relative_l2": 0.0032703678413156406,
+          "cosine": 0.9999946754546607,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003706997795239755,
+          "cosine": 0.9999931748400825,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0009555729904685181,
+          "cosine": 0.9999995460214994,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.11835479736328125,
+          "relative_l2": 0.01757917963344447,
+          "cosine": 0.9998923723774583,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0036840618465771606,
+          "cosine": 0.999993230180707,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0034943093940304213,
+          "cosine": 0.9999940205014719,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/128/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 4.866962431041501e-06,
+          "cosine": 0.9999999999881564,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0003108978271484375,
+          "relative_l2": 0.0007027550243957489,
+          "cosine": 0.999999978127037,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/128/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0019168412823293594,
+          "cosine": 0.999998167779511,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003322218951489208,
+          "cosine": 0.9999944892643393,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.002397621004767645,
+          "cosine": 0.9999971279209516,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0016027187285593844,
+          "cosine": 0.9999987156545126,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.03711891174316406,
+          "relative_l2": 0.004149203874784947,
+          "cosine": 0.9999914535973459,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0033224491549939832,
+          "cosine": 0.9999944871142153,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0030986714316898183,
+          "cosine": 0.9999952148879541,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/128/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0006114329095523545,
+          "cosine": 0.9999998132864739,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00244140625,
+          "relative_l2": 0.0030963066772799683,
+          "cosine": 0.9999952172797367,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.002197853119930599,
+          "cosine": 0.9999975912770551,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0008838198437722337,
+          "cosine": 0.9999996106395276,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0396270751953125,
+          "relative_l2": 0.0067010101481009615,
+          "cosine": 0.9999867081840605,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0029296875,
+          "relative_l2": 0.003393934605392666,
+          "cosine": 0.9999942553132783,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.00316672375951467,
+          "cosine": 0.9999949957054832,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "32/128/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 4.866962431041501e-06,
+          "cosine": 0.9999999999881564,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0003108978271484375,
+          "relative_l2": 0.0007027550243957489,
+          "cosine": 0.999999978127037,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/32/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.002030650020418914,
+          "cosine": 0.9999979408015626,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0037127699139944464,
+          "cosine": 0.9999931089666667,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003914904618116096,
+          "cosine": 0.999992512848344,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.001933529134424555,
+          "cosine": 0.999998130753914,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.04129981994628906,
+          "relative_l2": 0.023243159479113602,
+          "cosine": 0.9999888030086973,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.004135030719582735,
+          "cosine": 0.999991453600326,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003744996563910693,
+          "cosine": 0.9999932332076433,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/32/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0008238265737808303,
+          "cosine": 0.9999996606816001,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.004181989046517481,
+          "cosine": 0.9999914176611986,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0029296875,
+          "relative_l2": 0.004138002221922112,
+          "cosine": 0.9999914481320451,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0011651295572632175,
+          "cosine": 0.9999993279907056,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.09878063201904297,
+          "relative_l2": 0.00416352887202223,
+          "cosine": 0.9999961731467537,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.004388249137127441,
+          "cosine": 0.9999904811978145,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.004768931256908917,
+          "cosine": 0.9999886291371971,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/32/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 1.71661376953125e-05,
+          "relative_l2": 3.562351887744249e-05,
+          "cosine": 0.9999999999998466,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/32/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.001920162206710451,
+          "cosine": 0.9999981612780413,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.003281131149944276,
+          "cosine": 0.9999946391235583,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.002324510551381875,
+          "cosine": 0.9999973016686675,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.002164696684007733,
+          "cosine": 0.9999976776552442,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.028620243072509766,
+          "relative_l2": 0.013705216715473844,
+          "cosine": 0.9999076273926781,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.003519794909453677,
+          "cosine": 0.9999938449461127,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0029613561848733667,
+          "cosine": 0.9999956163641536,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/32/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0006630249248396734,
+          "cosine": 0.9999997809628558,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0037414543633890883,
+          "cosine": 0.9999930079807643,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0023579931316818764,
+          "cosine": 0.9999972341599037,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0007794739185449445,
+          "cosine": 0.9999996970843267,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.04354286193847656,
+          "relative_l2": 0.0016328871118429162,
+          "cosine": 0.9999996382065064,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0038932857646730196,
+          "cosine": 0.9999924328720503,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0029397395342070053,
+          "cosine": 0.9999957117203329,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/32/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 1.71661376953125e-05,
+          "relative_l2": 3.562351887744249e-05,
+          "cosine": 0.9999999999998466,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.001979746225058338,
+          "cosine": 0.9999980405896719,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.003402011215116265,
+          "cosine": 0.9999942210104147,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003638969266931154,
+          "cosine": 0.9999933795168903,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0017230075865770783,
+          "cosine": 0.9999985156303149,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.11248779296875,
+          "relative_l2": 0.021192332237673563,
+          "cosine": 0.9999981173282702,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0040601598218316,
+          "cosine": 0.999991768104791,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0036520891340468945,
+          "cosine": 0.9999933312063863,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0007040398092756403,
+          "cosine": 0.9999997536283384,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003438977425243274,
+          "cosine": 0.9999940938879566,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003406953969637382,
+          "cosine": 0.9999941975164097,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0008022712077739699,
+          "cosine": 0.9999996785585219,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.08179855346679688,
+          "relative_l2": 0.0038444106839120406,
+          "cosine": 0.9999926805053023,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0038347772355760584,
+          "cosine": 0.9999926477449765,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0035503323144846443,
+          "cosine": 0.9999937019018958,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0002193450927734375,
+          "relative_l2": 0.00040834909444669,
+          "cosine": 0.999999932828552,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.002094951616928089,
+          "cosine": 0.9999978068721334,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003727631009622522,
+          "cosine": 0.9999930543250473,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0026657818777558935,
+          "cosine": 0.9999964652144986,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.002013344062010772,
+          "cosine": 0.9999979748867874,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.08245182037353516,
+          "relative_l2": 0.050313722736939515,
+          "cosine": 0.9998193687878004,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003868475690669798,
+          "cosine": 0.9999925192129043,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0033869176170006044,
+          "cosine": 0.999994269143257,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0007674680418313499,
+          "cosine": 0.9999997058273746,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0030473357830002453,
+          "cosine": 0.999995401383611,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.002777253072732362,
+          "cosine": 0.9999962018804295,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0009929969104908111,
+          "cosine": 0.9999995081014073,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.16100597381591797,
+          "relative_l2": 0.008919947128568273,
+          "cosine": 0.9999749634629637,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.00305654090658877,
+          "cosine": 0.9999953331251192,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0033582214967064396,
+          "cosine": 0.9999945299936099,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0002193450927734375,
+          "relative_l2": 0.00040834909444669,
+          "cosine": 0.999999932828552,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/128/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0018840939727904431,
+          "cosine": 0.9999982253275559,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0033922789650294846,
+          "cosine": 0.999994246236258,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0034504575629109822,
+          "cosine": 0.9999940513789982,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0019268871803978435,
+          "cosine": 0.9999981444554078,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.1484661102294922,
+          "relative_l2": 0.01981521571279115,
+          "cosine": 0.9998680974886547,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0037332661173647167,
+          "cosine": 0.9999930363601839,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0034724375139933827,
+          "cosine": 0.9999939742267456,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/128/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0009139428886889018,
+          "cosine": 0.9999995838607502,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.00370557192863672,
+          "cosine": 0.9999931764874886,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003352121818989603,
+          "cosine": 0.9999944155497364,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.001301471319543085,
+          "cosine": 0.9999991551879214,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.1557769775390625,
+          "relative_l2": 0.003214352414199117,
+          "cosine": 0.9999995979911794,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003995746039641142,
+          "cosine": 0.9999920264018346,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.00347739668996824,
+          "cosine": 0.9999940388290864,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/128/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0002079010009765625,
+          "relative_l2": 9.481661750118973e-05,
+          "cosine": 0.9999999982704038,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/128/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0019192843549711617,
+          "cosine": 0.9999981582627557,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003416359564038322,
+          "cosine": 0.9999941771070333,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0028344678446911606,
+          "cosine": 0.9999959833880524,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0018558164650772575,
+          "cosine": 0.9999982797844214,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.16361713409423828,
+          "relative_l2": 0.024696882305630493,
+          "cosine": 0.9997102722571376,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0034940789393426985,
+          "cosine": 0.9999939049565358,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0035634477139049963,
+          "cosine": 0.9999936556408646,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/128/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.000931848241792415,
+          "cosine": 0.9999995660154681,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0032322127753930175,
+          "cosine": 0.9999947799467076,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0024471618738022005,
+          "cosine": 0.9999970071957467,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.03125,
+          "relative_l2": 0.0013349583251685197,
+          "cosine": 0.9999991183728552,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.15079116821289062,
+          "relative_l2": 0.0029367424056401577,
+          "cosine": 0.9999998761683172,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003373680078856251,
+          "cosine": 0.9999943328404183,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003057085782626798,
+          "cosine": 0.9999953287912552,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/128/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0002079010009765625,
+          "relative_l2": 9.481661750118973e-05,
+          "cosine": 0.9999999982704038,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/32/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0019386424445743899,
+          "cosine": 0.9999981391250948,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.01171875,
+          "relative_l2": 0.005987221366925948,
+          "cosine": 0.9999820770496783,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.00442083921089267,
+          "cosine": 0.9999902323650716,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.001932767707897532,
+          "cosine": 0.9999981514999347,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 8.679931640625,
+          "relative_l2": 0.1880642910354636,
+          "cosine": 0.9959265919052481,
+          "finite": true,
+          "sign_flips": 1,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.01171875,
+          "relative_l2": 0.006836234897557715,
+          "cosine": 0.9999766332490307,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.01171875,
+          "relative_l2": 0.004424122694784876,
+          "cosine": 0.999990217682605,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/32/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0007748541421866731,
+          "cosine": 0.9999997009599315,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0037029044920573774,
+          "cosine": 0.9999931513966382,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003281184812699272,
+          "cosine": 0.9999946378572764,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0007851348520916784,
+          "cosine": 0.9999996917850602,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.043082237243652344,
+          "relative_l2": 0.003132767810151372,
+          "cosine": 0.9999999701237443,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.004319728317158057,
+          "cosine": 0.9999906861557097,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0034462394751665917,
+          "cosine": 0.9999940830010785,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/32/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 1.4781951904296875e-05,
+          "relative_l2": 8.704830586886672e-05,
+          "cosine": 0.9999999962477855,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/32/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0018702766831666265,
+          "cosine": 0.9999982707953571,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.005119267785720483,
+          "cosine": 0.9999870245024737,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.00814588966853183,
+          "cosine": 0.999966872716791,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0019546938160073545,
+          "cosine": 0.9999980992983019,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 9.949441909790039,
+          "relative_l2": 0.11620854448588337,
+          "cosine": 0.9939317059937203,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.005319388942444171,
+          "cosine": 0.9999860359560357,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.008748049757402487,
+          "cosine": 0.9999617901891783,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/32/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0005697340790156914,
+          "cosine": 0.9999998378450805,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.002664969975040746,
+          "cosine": 0.9999964541692272,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0026230118328363773,
+          "cosine": 0.9999965615745158,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.001451357625994371,
+          "cosine": 0.9999989477667937,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.1410360336303711,
+          "relative_l2": 0.008678999635810376,
+          "cosine": 0.9999994337031427,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0028974000371763116,
+          "cosine": 0.9999958063268185,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.003234651202559135,
+          "cosine": 0.9999947686408417,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/32/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 1.4781951904296875e-05,
+          "relative_l2": 8.704830586886672e-05,
+          "cosine": 0.9999999962477855,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/64/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0015264501259999747,
+          "cosine": 0.9999988377456337,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.03125,
+          "relative_l2": 0.003439786211413138,
+          "cosine": 0.9999941398079841,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.03125,
+          "relative_l2": 0.0035263152918021947,
+          "cosine": 0.9999938326295117,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.00157285468118236,
+          "cosine": 0.9999987634378362,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 8.019134521484375,
+          "relative_l2": 0.04368278837088468,
+          "cosine": 0.9998521926436286,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.004097420206569824,
+          "cosine": 0.9999916678345182,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.017578125,
+          "relative_l2": 0.003628060973603022,
+          "cosine": 0.9999934782887783,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/64/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0007493021700131792,
+          "cosine": 0.9999997195291426,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0032644265569383188,
+          "cosine": 0.9999947019268229,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0030616903835020207,
+          "cosine": 0.9999953223455204,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0012447960475186718,
+          "cosine": 0.9999992289649948,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.20043563842773438,
+          "relative_l2": 0.010618338098399462,
+          "cosine": 0.9999623941903905,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0037145203589306302,
+          "cosine": 0.9999931115044784,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0032531770976120893,
+          "cosine": 0.9999947113522889,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/64/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 5.9604644775390625e-05,
+          "relative_l2": 8.706568500508763e-05,
+          "cosine": 0.9999999996275497,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/64/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0014712109311147445,
+          "cosine": 0.9999989178572821,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0234375,
+          "relative_l2": 0.0041392337816222825,
+          "cosine": 0.9999914334101301,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.003969751276928279,
+          "cosine": 0.9999921482215761,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0019097224889800702,
+          "cosine": 0.9999981840581916,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 6.634239196777344,
+          "relative_l2": 0.06566965238447674,
+          "cosine": 0.998394896051089,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.03125,
+          "relative_l2": 0.004154590689392206,
+          "cosine": 0.9999913735987171,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.004771414858344194,
+          "cosine": 0.9999886297976222,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/64/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.000744756464791698,
+          "cosine": 0.9999997231238869,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.005859375,
+          "relative_l2": 0.0035664457116447185,
+          "cosine": 0.9999936671391516,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0027881913691125194,
+          "cosine": 0.9999961265338022,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0013997068719221325,
+          "cosine": 0.9999990232559549,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.20407867431640625,
+          "relative_l2": 0.009323735752209697,
+          "cosine": 0.9999597131594856,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0036236537631104686,
+          "cosine": 0.9999935464690073,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003369814544630472,
+          "cosine": 0.9999943334748929,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/64/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 5.9604644775390625e-05,
+          "relative_l2": 8.706568500508763e-05,
+          "cosine": 0.9999999996275497,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/128/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0017742768983255773,
+          "cosine": 0.9999984299091482,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.03125,
+          "relative_l2": 0.003741323341538649,
+          "cosine": 0.9999930378568577,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.02734375,
+          "relative_l2": 0.003932766254793777,
+          "cosine": 0.9999922669525242,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.00170824228629059,
+          "cosine": 0.9999985500929067,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 12.7236328125,
+          "relative_l2": 0.045351572151585424,
+          "cosine": 0.9996476929374933,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.03125,
+          "relative_l2": 0.004527552762390278,
+          "cosine": 0.9999897970456876,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.03125,
+          "relative_l2": 0.003986966375322172,
+          "cosine": 0.9999920543504425,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/128/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0006576600122782945,
+          "cosine": 0.9999997846709363,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0034188111151371363,
+          "cosine": 0.9999942424334944,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003630391536651558,
+          "cosine": 0.9999935207117988,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0010777726835484967,
+          "cosine": 0.999999421003398,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0641021728515625,
+          "relative_l2": 0.00342013376717585,
+          "cosine": 0.9999970318669248,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.004053639559334324,
+          "cosine": 0.9999918724921005,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003724542752394076,
+          "cosine": 0.9999931632782137,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/128/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 8.659522081305306e-06,
+          "cosine": 0.9999999999625064,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.00095367431640625,
+          "relative_l2": 0.0010575813479375739,
+          "cosine": 0.9999994802950489,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/128/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0019054365256080813,
+          "cosine": 0.9999981846552081,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.03125,
+          "relative_l2": 0.0034568325933889517,
+          "cosine": 0.9999940303185924,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0032319858980686083,
+          "cosine": 0.9999947806743055,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.002085461196083976,
+          "cosine": 0.9999978260616396,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 4.584075927734375,
+          "relative_l2": 0.05488477000064503,
+          "cosine": 0.9993739283793256,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.017578125,
+          "relative_l2": 0.003518558421830644,
+          "cosine": 0.9999938164326365,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0038542767126231174,
+          "cosine": 0.9999925748166749,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/128/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0008029017086574938,
+          "cosine": 0.9999996777678304,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.002949981610623871,
+          "cosine": 0.9999956705219926,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0025134015263606475,
+          "cosine": 0.9999968428697756,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0007158416975954253,
+          "cosine": 0.9999997439525015,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.29729366302490234,
+          "relative_l2": 0.011899526934663542,
+          "cosine": 0.999937276710462,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0031083158276513853,
+          "cosine": 0.9999951825611351,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003070355511278981,
+          "cosine": 0.9999953067608678,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "128/128/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 8.659522081305306e-06,
+          "cosine": 0.9999999999625064,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.00095367431640625,
+          "relative_l2": 0.0010575813479375739,
+          "cosine": 0.9999994802950489,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/513/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.002021549333704725,
+          "cosine": 0.9999979567160391,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0035141378799483872,
+          "cosine": 0.9999938277640551,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0036465180649514085,
+          "cosine": 0.9999933623796238,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0018265389928403303,
+          "cosine": 0.9999983342078047,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.10691606998443604,
+          "relative_l2": 0.03971665274265752,
+          "cosine": 0.9992141475970233,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00146484375,
+          "relative_l2": 0.0039882226388405825,
+          "cosine": 0.9999920514883603,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003740233860023316,
+          "cosine": 0.9999930058875754,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/513/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0009667620116352517,
+          "cosine": 0.9999995328727449,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0031258454977098095,
+          "cosine": 0.9999951410107553,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003264490285919707,
+          "cosine": 0.9999946841430586,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0012606024720283383,
+          "cosine": 0.9999992060384215,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.37210750579833984,
+          "relative_l2": 0.037531719781427136,
+          "cosine": 0.9995715685620188,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003733893485278523,
+          "cosine": 0.9999930550658371,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003335631472390712,
+          "cosine": 0.9999944448923168,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/513/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.00015080242391171247,
+          "cosine": 0.9999999886367853,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.00012775293819432309,
+          "cosine": 0.9999999918395956,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.040854454040527344,
+          "relative_l2": 0.007827364102124769,
+          "cosine": 0.9999738854050504,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/513/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0020256300140998116,
+          "cosine": 0.9999979497392852,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00146484375,
+          "relative_l2": 0.003738153534658275,
+          "cosine": 0.9999930133704147,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.002523252273209496,
+          "cosine": 0.9999968177903901,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0021227547471257767,
+          "cosine": 0.9999977506088028,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0761866569519043,
+          "relative_l2": 0.01406208192705478,
+          "cosine": 0.9999516657291181,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00146484375,
+          "relative_l2": 0.00367742136433718,
+          "cosine": 0.9999932385277621,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.003252026779864125,
+          "cosine": 0.9999947129413379,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/513/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.000813443469972728,
+          "cosine": 0.9999996699379786,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0030385774137546033,
+          "cosine": 0.9999953846126549,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0025248824120532847,
+          "cosine": 0.9999968157546777,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0012871426087869542,
+          "cosine": 0.9999991716604043,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.33480167388916016,
+          "relative_l2": 0.05632930663364969,
+          "cosine": 0.9990481580579023,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003251146570853486,
+          "cosine": 0.9999947167137215,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003299535031218975,
+          "cosine": 0.999994557370004,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/513/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.00015080242391171247,
+          "cosine": 0.9999999886367853,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.00012775293819432309,
+          "cosine": 0.9999999918395956,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.040854454040527344,
+          "relative_l2": 0.007827364102124769,
+          "cosine": 0.9999738854050504,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/1024/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.002064757254252139,
+          "cosine": 0.9999978683974565,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0036899215687935948,
+          "cosine": 0.9999931927110617,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0029296875,
+          "relative_l2": 0.0038168754239993434,
+          "cosine": 0.9999927295704917,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.00193937224509698,
+          "cosine": 0.99999812003195,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.05637645721435547,
+          "relative_l2": 0.023207338411766892,
+          "cosine": 0.9999038241383102,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.004252139406453629,
+          "cosine": 0.9999909600565038,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003865158102275578,
+          "cosine": 0.9999925838239951,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/1024/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0009723565187821748,
+          "cosine": 0.9999995283183352,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0033385098260796855,
+          "cosine": 0.9999944294952422,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.00348297507813545,
+          "cosine": 0.9999939347411929,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.03125,
+          "relative_l2": 0.001341691156537487,
+          "cosine": 0.9999991011799849,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.37790679931640625,
+          "relative_l2": 0.010160787266673051,
+          "cosine": 0.999999996817148,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0038121453892464552,
+          "cosine": 0.9999927337539215,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003656248729970503,
+          "cosine": 0.9999933274136262,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/1024/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0003028248887626085,
+          "cosine": 0.9999999542752064,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0002650081988952075,
+          "cosine": 0.9999999648942615,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.09882545471191406,
+          "relative_l2": 0.007009392003841056,
+          "cosine": 0.9999927455454789,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/1024/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.002037035192123047,
+          "cosine": 0.9999979253947716,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0037308521950088183,
+          "cosine": 0.9999930403630218,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.002483495290785233,
+          "cosine": 0.9999969161569322,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0018749723019498893,
+          "cosine": 0.9999982444658645,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.030147552490234375,
+          "relative_l2": 0.01978215806270812,
+          "cosine": 0.9998693627480943,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0038178290611378353,
+          "cosine": 0.9999927136858118,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0032312291873538815,
+          "cosine": 0.9999947851852974,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/1024/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0009983630610598535,
+          "cosine": 0.9999995024742768,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003576920410215764,
+          "cosine": 0.9999936706326558,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.002618426738771168,
+          "cosine": 0.9999965821903694,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0011776238215739092,
+          "cosine": 0.9999993067875604,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.22269821166992188,
+          "relative_l2": 0.004278874622487236,
+          "cosine": 0.9999988881035544,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.003779451314261943,
+          "cosine": 0.9999928969060652,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.0031924832629450037,
+          "cosine": 0.9999949224712973,
+          "finite": true
+        }
+      }
+    },
+    {
+      "case": "64/64/1024/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0003028248887626085,
+          "cosine": 0.9999999542752064,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0002650081988952075,
+          "cosine": 0.9999999648942615,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.09882545471191406,
+          "relative_l2": 0.007009392003841056,
+          "cosine": 0.9999927455454789,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0,
+          "relative_l2": 0.0,
+          "cosine": 1.0,
+          "finite": true
+        }
+      }
+    }
+  ]
+}

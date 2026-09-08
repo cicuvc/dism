@@ -33,6 +33,28 @@
 
 ## 实现组件与布局
 
+- **Shared memory使用标准（用户最新明确要求）**：能在寄存器中完成的操作必须在寄存器中完成。
+  除以下三类外，其他操作不得写shared memory：
+  1. 计划内、为了防止spill的shared memory staging；
+  2. 设计中必须的warp间通信；
+  3. 输出结果的布局整理。
+  不得为了编码方便、统一接口或便利的中间布局而增加shared中转。
+  新增或保留一处shared写入时须说明其属于哪一类、为何必要、生命周期和同步协议；
+  “可能更快”或“方便TMA/布局”本身不是例外。已有实现不因本条自动获得改写授权，
+  按当前任务范围逐处审查；不能把本条理解为允许未经验证地删除必要通信或既定staging。
+  用户随后明确要求的Q/K异步输入流水按指定设计保留：Q不直接global→寄存器，
+  使用persistent CTA在当前workload计算期间预取下一workload的Q到TMA输入槽。
+  这是明确指定的异步数据入口，不据此允许额外计算中间量写shared。
+  key元数据优先寄存器预取/复用及lane shuffle，不默认给key标签增加shared缓存。
+
+- 当前摘要性能主方案为persistent kernel、每SM一个CTA，不以提高occupancy为优化目标，
+  不为增加resident CTA数压缩寄存器预算或牺牲tile/指令级并行。
+  尽量异步加载并将延迟藏在计算后面；下一workload的Q应在开始计算前预取就绪，
+  不沿用每个workload开头compute warp标量搬Q后全CTA等待的路径。
+  双compute warpgroup有意错开阶段：尽量使一组CUDA-core scan/reduce与另一组HMMA重叠，
+  不能只证明“用了双缓冲/warp specialization”就认为发生了实际重叠。
+  以稳定阶段的吞吐、发射效率和时间线验证；NCU低occupancy是描述，不是当前优化目标。
+
 - CUDA embedding前向已实现（计划dism_v2/EMBEDDING_CUDA_PLAN.md，实测dism_v2/EMBEDDING_CUDA.md）：
   每CTA同一64个token，WG0四warp各16行acc_qo=softmax(k E_k^T) E_q，
   WG1四warp各16行acc_ko=softmax(q E_q^T) E_k。8compute+4producer组成12warp，
@@ -107,6 +129,15 @@
 - embedding 返回值顺序遵循 `InterpolationResult` 的定义，不按旧局部变量名猜测归属；直接 score 梯度与 embedding backward 梯度需要相加。
 
 ## 验证与协作
+
+- 前向已按CTA因果范围裁剪key循环，并提前加载tau/query标签/query行LSE；
+  column-LSE方向仍按key索引。所有角色共享循环上界，无效warp继续参与协议。
+  被裁剪摘要在全padding的32行对角线写identity，其余上三角写零映射；保存W边界写负无穷。
+- `DISM_TILE_LSE=tanh`为进程启动前设置的实验开关，默认`full`。
+  前向与反向重算共用`rl/lse.cu::approx`的tanh系数及FMA顺序，明确处理负无穷；
+  不是`approx2`或旧版多项式。跨chunk passing仍调用完整logadd2。
+  禁止在同一进程中切换模式或混用不同模式的前向状态；反向仍用原递推梯度，
+  不对tanh拟合公式本身求导。训练对照与局限见`dism_v2/FORWARD_OPTIMIZATION.md`。
 
 - 用户最新授权：CUDA embedding反向不再修复或因spill暂停，先验证数值并按实测性能筛选
   配对/对称、token步长16/32/64、D64词表register/shared配置。记录spill但不以零spill

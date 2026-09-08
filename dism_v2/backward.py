@@ -5,18 +5,19 @@ import os
 import torch
 from torch.utils.cpp_extension import load
 from .core import RowRNGState, ScanBoundaries
+from .kernel_config import LSE_SUFFIX, LSE_FLAGS
 
 
 @lru_cache(None)
 def _extension():
     source=Path(__file__).resolve().parent/"csrc"
-    return load(name="dism_v2_backward_sm120a",
+    return load(name="dism_v2_backward_sm120a" + LSE_SUFFIX,
         sources=[str(source/f) for f in ("backward_bindings.cpp","core_bwd.cu","core_dv.cu","core_dv_ws.cu","core_ab.cu","core_ab_ws.cu","core_tau.cu")],
         extra_include_paths=[str(source.parents[1]/"include"),
             str(Path(os.environ.get("GLX_ROOT","/home/cicuvc/cs/projects/glx"))/"include")],
         extra_cflags=["-O2","-std=c++20"],
         extra_cuda_cflags=["-O3","-std=c++20","-lineinfo","--extended-lambda","--expt-relaxed-constexpr",
-            "-gencode=arch=compute_120a,code=sm_120a","--ptxas-options=-v"],
+            "-gencode=arch=compute_120a,code=sm_120a","--ptxas-options=-v"] + LSE_FLAGS,
         extra_ldflags=["-lcuda"],
         verbose=os.environ.get("DISM_VERBOSE_BUILD")=="1")
 

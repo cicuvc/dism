@@ -29,7 +29,7 @@ def test_philox_known_answer():
 def test_mixed_rng(d,dv,direction):
     check_case(d,dv,139,direction,0.37)
 
-@pytest.mark.parametrize("n",(1,33,65,129,257,513))
+@pytest.mark.parametrize("n",(1,33,65,129,191,255,257,513,1025))
 @torch.no_grad()
 def test_mixed_rng_tails(n):
     check_case(64,64,n,"q_from_k",0.63)

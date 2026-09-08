@@ -178,7 +178,8 @@ core 106项、codegen 1项、环境/oracle 81项，总计188项通过。
 ## 未完成
 
 - 广播 hard_prob、一般 stride、varlen、sm90、backward、embedding 全链路集成。
-- 当前遍历全部 key tiles（包括因果上三角的 masked 工作），尚未进行因果裁剪、单/双缓冲比较或性能测量。
+- 已按CTA因果范围裁剪完整上三角tile并缓存行元数据；单/双缓冲比较仍未完成。
+  tile内tanh LSE为显式实验选项，默认完整LSE，详见`FORWARD_OPTIMIZATION.md`。
 - 当前每次调用建立 TMA descriptors；CUDA Graph capture 明确拒绝，graph-safe RNG 尚未实现。
 - 摘要和边界是矩形存储，空间 `12*B*H*ceil(N/32)*padded_N` bytes；仍是二次增长。
 # 反向准备：可选扫描边界保存

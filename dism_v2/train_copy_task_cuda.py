@@ -13,6 +13,7 @@ import sys
 import time
 import torch
 from .autograd import voc_dism
+from .kernel_config import TILE_LSE
 
 
 def main():
@@ -21,10 +22,16 @@ def main():
     parser.add_argument('--seed',type=int,default=0)
     parser.add_argument('--data-seed',type=int,default=12345)
     parser.add_argument('--layers',type=int,default=1)
+    parser.add_argument('--batch',type=int,default=64)
+    parser.add_argument('--seq-len',type=int,default=128)
+    parser.add_argument('--head-dim',type=int,choices=(32,64,128),default=32)
+    parser.add_argument('--qk-vocab',type=int,default=256)
     parser.add_argument('--embedding-backward',choices=['cuda','cuda_symmetric','triton'],default='cuda')
     parser.add_argument('--log-every',type=int,default=25)
     opts=parser.parse_args()
     if min(opts.steps,opts.layers,opts.log_every)<=0: parser.error('positive steps/layers/log-every required')
+    if min(opts.batch,opts.qk_vocab)<=0 or opts.seq_len<2 or opts.seq_len%2:
+        parser.error('positive batch/vocab and positive even seq-len required')
     # copy_task uses a script-local absolute emb_kernel import.
     sys.path.insert(0,str(Path(__file__).resolve().parent))
     try:
@@ -41,10 +48,12 @@ def main():
             embedding_backend='cuda',embedding_backward_backend=opts.embedding_backward)
     task.voc_dism=cuda_dism
     task.TOTAL_STEPS=opts.steps
+    cls=task.DismMHAttentionV3
+    task.DismMHAttentionV3=lambda dm,heads,vocab,hd,**kw:cls(dm,heads,opts.qk_vocab,hd,**kw)
     torch.set_default_device('cuda')
     torch.manual_seed(opts.seed)
     random.seed(opts.seed)
-    b,n,voc,d_model=64,128,128,128
+    b,n,voc,d_model=opts.batch,opts.seq_len,128,4*opts.head_dim
     token_embedding=torch.nn.Embedding(voc,d_model)
     blocks=[task.DismTransformerBlock(d_model) for _ in range(opts.layers)]
     model=torch.nn.Sequential(token_embedding,*blocks,torch.nn.RMSNorm(d_model),torch.nn.Linear(d_model,voc))
@@ -83,8 +92,8 @@ def main():
                      accuracy_by_position=torch.stack(positions).mean(0).tolist())
         emit('eval_hard',**metrics)
         return metrics
-    emit('config',**vars(opts),gpu=torch.cuda.get_device_name(),batch=b,n=n,heads=4,d=32,dv=32,
-         vocab=256,token_vocab=voc,sm_scale=1.,rtau_clamped=False,
+    emit('config',**vars(opts),tile_lse=TILE_LSE,gpu=torch.cuda.get_device_name(),n=n,heads=4,d=opts.head_dim,dv=opts.head_dim,
+         vocab=opts.qk_vocab,token_vocab=voc,sm_scale=1.,rtau_clamped=False,
          parameters=sum(p.numel() for p in model.parameters()))
     start=time.perf_counter()
     initial=evaluate(-1)
@@ -108,7 +117,7 @@ def main():
         if step%100==0 or step==opts.steps-1: evals.append(evaluate(step))
     torch.cuda.synchronize()
     emit('result',initial_eval=initial,final_eval=evals[-1],last_100_loss=sum(losses[-100:])/len(losses[-100:]),
-         max_grad_norm=max_grad,max_rtau=max_tau,rtau_target_bound=math.log(32),
+         max_grad_norm=max_grad,max_rtau=max_tau,rtau_target_bound=math.log(opts.head_dim),
          calls=calls,elapsed_s=time.perf_counter()-start,
          peak_allocated_bytes=torch.cuda.max_memory_allocated())
 
