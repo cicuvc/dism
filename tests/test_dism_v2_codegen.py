@@ -32,6 +32,14 @@ def test_sm120a_native_tma_and_register_reallocation(record_property):
         split_q='Li128ELi128E' in name
         assert body.count('UTMALDG.5D')==(4 if split_q else 3),name
         assert 'STG.E.U16' not in body,name
+        output_tma=(os.environ.get('DISM_OUTPUT_TMA','0')=='1'
+                    and 'coreILi64ELi64E' in name)
+        assert body.count('UTMASTG.5D')==int(output_tma),name
+        if output_tma:
+            store=body.index('UTMASTG.5D')
+            release=body.index('SYNCS.ARRIVE',store)
+            assert 'UTMACMDFLUSH' in body[store:release],name
+            assert 'DEPBAR.LE' in body[store:release],name
     # One Q transfer per workload and one full-width K transfer per key tile,
     # including D128; neither warp-row nor swizzle-panel emission loops remain.
     assert all(body.count("UTMALDG.5D")==2 for body in summaries.values())

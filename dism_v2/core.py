@@ -22,14 +22,19 @@ def _extension():
     if alias not in ("none", "kv", "k"):
         raise ValueError("DISM_OUTPUT_Q_ALIAS must be none, kv or k")
     alias_flags = [] if alias == "none" else [f"-DDISM_OUTPUT_Q_ALIAS={1 if alias == 'kv' else 2}"]
+    output_tma = os.environ.get("DISM_OUTPUT_TMA", "0")
+    if output_tma not in ("0", "1") or (output_tma == "1" and alias != "kv"):
+        raise ValueError("DISM_OUTPUT_TMA=1 requires DISM_OUTPUT_Q_ALIAS=kv")
+    store_flags = ["-DDISM_OUTPUT_TMA=1"] if output_tma == "1" else []
     return load(
-        name="dism_v2_core_sm120a" + LSE_SUFFIX + ("" if alias == "none" else "_qalias_" + alias),
+        name="dism_v2_core_sm120a" + LSE_SUFFIX + ("" if alias == "none" else "_qalias_" + alias)
+             + ("_otma" if output_tma == "1" else ""),
         sources=[str(root / "dism_v2/csrc" / f) for f in ("bindings.cpp", "core_fwd.cu")],
         extra_include_paths=[str(root / "include"), str(glx / "include")],
         extra_cflags=["-O2", "-std=c++20"],
         extra_cuda_cflags=["-O3", "-std=c++20", "--extended-lambda",
                           "--expt-relaxed-constexpr", "-gencode=arch=compute_120a,code=sm_120a",
-                          "--ptxas-options=-v"] + LSE_FLAGS + alias_flags
+                          "--ptxas-options=-v"] + LSE_FLAGS + alias_flags + store_flags
                           + (["-lineinfo"] if os.environ.get("DISM_LINEINFO", "0") == "1" else []),
         extra_ldflags=["-lcuda"], verbose=os.environ.get("DISM_VERBOSE_BUILD") == "1",
     )

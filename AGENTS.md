@@ -40,6 +40,15 @@
 
 ## 实现组件与布局
 
+- OUTPUT BF16 O异步写回实验：DISM_OUTPUT_TMA=1仅D64/DV64且Q_ALIAS=kv，
+  原KV1在全部PV读取完成后改作128x64 BF16 O，next Q复用KV2、next KV0独立。
+  warp9 elected线程发一条TK TMA store，oready256/ofree1按workload传递；
+  每writer fence后发布，read-wait后允许覆盖，退出前full-wait。next KV1才等待
+  old O读完；短N未用KV1也须保护上次O。数据区48KiB，额外同步及对齐128B。
+  full/finite各60项direct-store逐位对照、各507项选定端到端与三类sanitizer各10项通过；
+  D64/DV64零spill无CALL。mixed N1024两方向耗时增加约1%，默认仍0；
+  summary不改，其他维度不套用，详见dism_v2/OUTPUT_TMA.md。
+
 - OUTPUT新增D64/DV64的Q存储复用实验，进程首次构建前设置DISM_OUTPUT_Q_ALIAS=kv/k，
   用户因主要工况为mixed选择默认kv；none/k仍可显式选择，其他维度保留原实现。kv为Q/KV2 union三级流水、最后PV后预取下一任务；
   k为Q覆盖SoA的K1/K2，V独立，K读取经WG同步后释放并允许下一Q预取。

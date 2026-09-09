@@ -816,6 +816,16 @@ summary零spill，OUTPUT已接受spill未变化。hard_bits含embedding前向总
 0.14%/0.07%，全前反向0.56%/0.23%，未锁频且存在波动，保留默认0。
 数据、边界语义及复现命令见dism_v2/FORWARD_SCALAR_BITSET.md；未提交。
 
+### OUTPUT BF16 O TMA实验（已完成，2026-09-09）
+
+前置OUTPUT O TMA实验已完成：D64/DV64复用KV1存BF16 O，warp9异步输出，
+next Q/KV0与O共用48KiB数据区但地址互不重叠；next KV1等待旧O TMA read完成。
+full core133、重放12、finite重放/bitset/标签129、full/finite直接写回对照各60、
+选定端到端各507、codegen及三类sanitizer各10通过；D64/DV64无新增spill/CALL。
+mixed N1024三轮90样本中位数q406.222→410.576us、k447.198→451.038us，
+因此保留DISM_OUTPUT_TMA=0默认，不基于短N单轮收益自动dispatch。
+实现、协议与实测见dism_v2/OUTPUT_TMA.md；本实验未提交。
+
 ## 阶段 6：varlen
 
 - 增加 packed tokens 与 sequence offsets 接口，定义与 fixed-length 逐序列调用等价的数学结果。

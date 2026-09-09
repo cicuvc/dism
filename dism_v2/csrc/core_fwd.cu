@@ -12,6 +12,9 @@
 #ifndef DISM_OUTPUT_Q_ALIAS
 #define DISM_OUTPUT_Q_ALIAS 0
 #endif
+#ifndef DISM_OUTPUT_TMA
+#define DISM_OUTPUT_TMA 0
+#endif
 
 namespace dism_v2 {
 namespace kt=kittens;
@@ -50,10 +53,24 @@ template<int D,int DV,bool OUTPUT> struct Shared {
 template<> struct Shared<64,64,true> {
     static constexpr int QROWS=128,QPHASES=1,SLOTS=3;
 #if DISM_OUTPUT_Q_ALIAS == 1
+#if DISM_OUTPUT_TMA
+    Slot<64,64,true> first0;
+    // Output-layout staging only: old KV1 becomes BF16 O after every PV reader
+    // finishes. Next Q (KV2) and next KV0 occupy disjoint input storage.
+    union { Slot<64,64,true> kv; kt::st_bf<128,64> o; } first1;
+    uint64_t oready, ofree;
+    __device__ __forceinline__ auto& output() { return first1.o; }
+#else
     Slot<64,64,true> first[2];
+#endif
     union { kt::st_bf<128,64> q; Slot<64,64,true> third; } reuse;
+#if DISM_OUTPUT_TMA
+    __device__ __forceinline__ auto& key(int s) { return s==2?reuse.third.k:(s==0?first0.k:first1.kv.k); }
+    __device__ __forceinline__ auto& value(int s) { return s==2?reuse.third.v:(s==0?first0.v:first1.kv.v); }
+#else
     __device__ __forceinline__ auto& key(int s) { return s==2?reuse.third.k:first[s].k; }
     __device__ __forceinline__ auto& value(int s) { return s==2?reuse.third.v:first[s].v; }
+#endif
 #else
     kt::st_bf<64,64> k0;
     union { kt::st_bf<128,64> q; kt::st_bf<64,64> k12[2]; } reuse;
@@ -94,12 +111,17 @@ __device__ __forceinline__ void summary_tma(const CUtensorMap *map, void *dst,
 template<int D,int DV,bool OUTPUT,bool COLUMN_LSE,int MODE,typename Label>
 __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __grid_constant__ const CUtensorMap km,
                      __grid_constant__ const CUtensorMap vm,
-                     __grid_constant__ const CUtensorMap qm) {
+                     __grid_constant__ const CUtensorMap qm
+#if DISM_OUTPUT_TMA
+                     , __grid_constant__ const CUtensorMap om
+#endif
+                     ) {
     constexpr int STAGES=Shared<D,DV,OUTPUT>::SLOTS;
     constexpr int QROWS=Shared<D,DV,OUTPUT>::QROWS;
     constexpr int QPHASES=Shared<D,DV,OUTPUT>::QPHASES;
     constexpr bool ALIAS=DISM_OUTPUT_Q_ALIAS && D==64 && DV==64;
     constexpr bool SPLIT=DISM_OUTPUT_Q_ALIAS==2 && D==64 && DV==64;
+    constexpr bool STORE_TMA=DISM_OUTPUT_TMA && D==64 && DV==64;
     extern __shared__ __align__(128) unsigned char bytes[];
     auto& shared=*reinterpret_cast<Shared<D,DV,OUTPUT>*>(bytes);
     int warp=threadIdx.x/32,lane=threadIdx.x&31;
@@ -109,6 +131,10 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
     if(warp==0 && kt::warp::elect_leader()) {
         init_bar(&shared.qready,1); init_bar(&shared.qfree,256);
         if constexpr(ALIAS) init_bar(&shared.done,256);
+        if constexpr(STORE_TMA) {
+            init_bar(&shared.oready,256);
+            init_bar(&shared.ofree,1);
+        }
 #pragma unroll
         for(int s=0;s<STAGES;++s) {
             init_bar(&shared.ready[s],1);
@@ -155,6 +181,10 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
                     if constexpr(ALIAS) {
                         // Every task starts at slot0. Q aliases KV2 or K1/K2.
                         if(SPLIT?s>=1:s==2) wait(&shared.qfree,qepoch&1);
+                    }
+                    if constexpr(STORE_TMA) {
+                        // Only next KV1 is blocked by old O; Q/KV0 were issued.
+                        if(t==1 && task_round) wait(&shared.ofree,(task_round-1)&1);
                     }
                     auto& key=shared.key(s);
                     auto& value=shared.value(s);
@@ -231,6 +261,24 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
                 }
             }
         }
+#if DISM_OUTPUT_TMA
+        if constexpr(STORE_TMA) {
+            if(warp==9 && leader) {
+#pragma unroll 1
+                for(int task=blockIdx.x;task<total;task+=gridDim.x,++task_round) {
+                    wait(&shared.oready,task_round&1);
+                    kt::tma::atoms::store_async_atom<kt::cache_policy::NORMAL>(
+                        reinterpret_cast<uint64_t>(&om),smaddr(shared.output().data),
+                        {(task%blocks)*128,task/blocks,0,0});
+                    // The TK atom commits its group. Free the shared source
+                    // after read completion, not merely after store issue.
+                    kt::tma::store_async_read_wait<0>();
+                    arrive(&shared.ofree);
+                }
+                kt::tma::store_async_wait<0>();
+            }
+        }
+#endif
     } else {
         kt::warpgroup::increase_registers<232>();
 #pragma unroll 1
@@ -475,6 +523,12 @@ bool hard[2];
                     p.horizontal[(int64_t(bh)*(p.padded_n/64)+qbase/64)*p.padded_n+j]=LOG_ZERO;
         }
         if constexpr(OUTPUT) {
+            if constexpr(STORE_TMA) {
+                // A fast consumer cannot overwrite KV1 while another WG is
+                // still reading it. Also cover N<=64 tasks that never use KV1.
+                wait(&shared.done,task_round&1);
+                if(task_round) wait(&shared.ofree,(task_round-1)&1);
+            }
             // One Newton-refined FP32 reciprocal per row, rather than per-element
             // IEEE division (ptxas outlines its exceptional slow path as CALL).
             float inverse[2]{normal_reciprocal(denominator[0]),normal_reciprocal(denominator[1])};
@@ -485,13 +539,22 @@ bool hard[2];
                     int i=qbase+(k%2)*8+lane/4,j=c*16+(k/2)*8+(lane%4)*2;
                     if(i<p.n) {
                         auto x=out.tiles[0][c].data[k];
-                        auto* dest=static_cast<__nv_bfloat16*>(p.output)+(int64_t(bh)*p.n+i)*DV+j;
+                        __nv_bfloat16* dest;
+                        if constexpr(STORE_TMA)
+                            dest=reinterpret_cast<__nv_bfloat16*>(&shared.output()[int2{i-base,j}]);
+                        else dest=static_cast<__nv_bfloat16*>(p.output)+(int64_t(bh)*p.n+i)*DV+j;
                         // j is even: pack the adjacent BF16 pair into one
                         // aligned32-bit store instead of two half-width writes.
                         *reinterpret_cast<__nv_bfloat162*>(dest)=__floats2bfloat162_rn(
                             x.x*inverse[k%2],x.y*inverse[k%2]);
                     }
                 }
+            }
+            if constexpr(STORE_TMA) {
+                // Every writer publishes its own generic-proxy writes before
+                // the 256-arrival epoch makes them visible to warp9's TMA.
+                asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
+                arrive(&shared.oready);
             }
             #pragma unroll
             for(int r=0;r<2;++r) {
@@ -534,7 +597,16 @@ void launch(const Args& p,cudaStream_t stream) {
     status=cudaDeviceGetAttribute(&sms,cudaDevAttrMultiProcessorCount,device);
     if(status!=cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));
     int tasks=((p.n+127)/128)*p.batch_heads;
+#if DISM_OUTPUT_TMA
+    CUtensorMap om{};
+    if constexpr(D==64 && DV==64) {
+        auto op=p; op.a=p.output;
+        om=output_q_map<64,128>(op);
+    }
+    core<D,DV,OUTPUT,COLUMN_LSE,MODE,Label><<<std::min(tasks,sms),384,sm,stream>>>(p,km,vm,qm,om);
+#else
     core<D,DV,OUTPUT,COLUMN_LSE,MODE,Label><<<std::min(tasks,sms),384,sm,stream>>>(p,km,vm,qm);
+#endif
 }
 #include "summary_persistent.cuh"
 void launch_summary(const Args& p,int d,cudaStream_t stream) {

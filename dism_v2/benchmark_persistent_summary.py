@@ -2,6 +2,7 @@
 import argparse
 import importlib.util
 import json
+import os
 import statistics
 import torch
 from . import core
@@ -58,6 +59,8 @@ def main():
     assert len(times)==30,[(e.name,e.device_time_total) for e in prof.events()
                          if e.device_type==torch.autograd.DeviceType.CUDA][:20]
     print(json.dumps(dict(**vars(args),tile_lse=TILE_LSE,b=64,h=4,vocab=512,
+        output_tma=os.environ.get('DISM_OUTPUT_TMA','0'),
+        output_q_alias=os.environ.get('DISM_OUTPUT_Q_ALIAS','kv'),
         gpu=torch.cuda.get_device_name(),samples_us=times,median_us=statistics.median(times),
         finite=bool(torch.isfinite(result[0]).all()))))
 
