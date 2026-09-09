@@ -1,0 +1,68 @@
+[
+  {
+    "kernel": "void ws::value_backward<64, 64>(Args, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, const __nv_bfloat16 *, const float *, float *, float2 *)",
+    "metrics": {
+      "gpu__time_duration.sum": {
+        "value": "0.915104",
+        "unit": "ms"
+      },
+      "sm__throughput.avg.pct_of_peak_sustained_elapsed": {
+        "value": "40.695851",
+        "unit": "%"
+      },
+      "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+        "value": "40.695851",
+        "unit": "%"
+      },
+      "launch__shared_mem_per_block_dynamic": {
+        "value": "36.992000",
+        "unit": "Kbyte/block"
+      },
+      "launch__registers_per_thread": {
+        "value": "168",
+        "unit": "register/thread"
+      },
+      "derived__local_spilling_requests": {
+        "value": "2567480",
+        "unit": ""
+      },
+      "smsp__warps_eligible.avg.per_cycle_active": {
+        "value": "0.665224",
+        "unit": "warp"
+      }
+    }
+  },
+  {
+    "kernel": "void ab_ws::run<64, 64>(Args, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, const __nv_bfloat16 *, const float *, const float *, CUtensorMap_st, float *, float *, float *)",
+    "metrics": {
+      "gpu__time_duration.sum": {
+        "value": "2.115776",
+        "unit": "ms"
+      },
+      "sm__throughput.avg.pct_of_peak_sustained_elapsed": {
+        "value": "26.914935",
+        "unit": "%"
+      },
+      "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+        "value": "22.726930",
+        "unit": "%"
+      },
+      "launch__shared_mem_per_block_dynamic": {
+        "value": "53.376000",
+        "unit": "Kbyte/block"
+      },
+      "launch__registers_per_thread": {
+        "value": "168",
+        "unit": "register/thread"
+      },
+      "derived__local_spilling_requests": {
+        "value": "2671952",
+        "unit": ""
+      },
+      "smsp__warps_eligible.avg.per_cycle_active": {
+        "value": "0.406032",
+        "unit": "warp"
+      }
+    }
+  }
+]

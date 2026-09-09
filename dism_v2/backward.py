@@ -11,13 +11,23 @@ from .kernel_config import LSE_SUFFIX, LSE_FLAGS
 @lru_cache(None)
 def _extension():
     source=Path(__file__).resolve().parent/"csrc"
-    return load(name="dism_v2_backward_sm120a" + LSE_SUFFIX,
+    optimization=os.environ.get('DISM_BWD_OPT','0')
+    if optimization not in ('0','1','2','3','4','5'):
+        raise ValueError('DISM_BWD_OPT must be between 0 and 5')
+    suffix='' if optimization=='0' else ('_opt' if optimization=='1' else '_opt'+optimization)
+    stages=os.environ.get('DISM_BWD_STAGES','2')
+    if stages not in ('1','2','3') or (int(optimization)<4 and stages!='2'):
+        raise ValueError('DISM_BWD_STAGES=1/3 requires DISM_BWD_OPT>=4')
+    if stages!='2':suffix+='_s'+stages
+    return load(name="dism_v2_backward_sm120a" + LSE_SUFFIX + suffix,
         sources=[str(source/f) for f in ("backward_bindings.cpp","core_bwd.cu","core_dv.cu","core_dv_ws.cu","core_ab.cu","core_ab_ws.cu","core_tau.cu")],
         extra_include_paths=[str(source.parents[1]/"include"),
             str(Path(os.environ.get("GLX_ROOT","/home/cicuvc/cs/projects/glx"))/"include")],
         extra_cflags=["-O2","-std=c++20"],
         extra_cuda_cflags=["-O3","-std=c++20","-lineinfo","--extended-lambda","--expt-relaxed-constexpr",
-            "-gencode=arch=compute_120a,code=sm_120a","--ptxas-options=-v"] + LSE_FLAGS,
+            "-gencode=arch=compute_120a,code=sm_120a","--ptxas-options=-v"] + LSE_FLAGS
+            + (["-DDISM_BWD_OPT="+optimization] if optimization!='0' else [])
+            + (["-DDISM_BWD_STAGES="+stages] if stages!='2' else []),
         extra_ldflags=["-lcuda"],
         verbose=os.environ.get("DISM_VERBOSE_BUILD")=="1")
 

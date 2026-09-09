@@ -226,6 +226,19 @@
 
 ## 验证与协作
 
+- 当前反向优化目标覆盖WS summary+dV与WS dA/dB/dLSE/dtau两个kernel；
+  参照前向的基线profile、元数据/分支、TMA、persistent/预取与流水线流程。
+  用户明确允许遇到spill先记录再继续，覆盖历史反向spill停报条款；不放宽容差。
+- 反向优化阶段1通过DISM_BWD_OPT=1实验接入两WS kernel寄存器元数据缓存、selp、
+  FTZ EX2，默认仍0。单FFMA score新增两项严格BF16 GEMM失败，因此暂保留旧score
+  算术顺序；当前full失败集合与冻结基线同14项，full/finite选定端到端各507通过，
+  三类sanitizer各6项通过。新增spill保留；后续因果裁剪/persistent/预取/WG mail
+  尚未实现，不把阶段1收益当作完整goal验收。见dism_v2/BACKWARD_OPTIMIZATION.md。
+- 反向后续实验已接入OPT2因果裁剪、OPT3 persistent与held B/V跨workload TMA、
+  OPT4 WG级reverse mail128。所有full/finite新重放/边界/跨任务检查通过，原14项
+  严格精度失败保持可见；spill记录继续。默认仍0。首块A/dO仍在held B/V寄存器加载
+  后才提交，不能声称已与下一held B/V同时预取；阶段数/首块预取等仍待完成。
+
 - 前向已按CTA因果范围裁剪key循环，并提前加载tau/query标签/query行LSE；
   column-LSE方向仍按key索引。所有角色共享循环上界，无效warp继续参与协议。
   被裁剪摘要在全padding的32行对角线写identity，其余上三角写零映射；保存W边界写负无穷。

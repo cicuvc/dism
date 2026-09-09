@@ -1,10 +1,17 @@
 // B3: paired reverse scan, producer input ring and asynchronous dA reduction.
 #include <cuda.h>
+#if DISM_BWD_OPT >= 3
+#define KITTENS_FEATURE_TMA
+#define KITTENS_FEATURE_FP8
+#define KITTENS_FEATURE_REG_INCDEC
+#endif
 #include <kittens.cuh>
 #include "core_api.h"
 #include "log_affine.cuh"
 #include "pipeline.cuh"
 #include "row_rng.cuh"
+#include "backward_metadata.cuh"
+#include "backward_input.cuh"
 namespace dism_v2 {
 namespace ab_ws {
 namespace kt=kittens;
@@ -16,13 +23,46 @@ union Scratch {
     alignas(128) float da[2][16][16];
 };
 template<int D,int DV> struct Shared {
+    static constexpr int REQUESTED=DISM_BWD_STAGES;
+    static constexpr int INPUT_BYTES=128*(D+DV);
+    static constexpr int CANDIDATE_BYTES=(REQUESTED>2?REQUESTED:2)*INPUT_BYTES
+        +8*sizeof(Scratch)+4*REQUESTED*sizeof(Reverse::HState::SharedStorage)+512;
+    // Keep the old two-stage allocation if a requested variant exceeds the
+    // conservative63-KiB budget; do not enlarge already-large baseline shapes.
+    static constexpr int SLOTS=DISM_BWD_OPT>=4 && CANDIDATE_BYTES<=63*1024?REQUESTED:2;
     union {
+#if DISM_BWD_OPT >= 3
+        struct { kt::st_bf<128,D> key; kt::st_bf<128,DV> value; } initial;
+#else
         struct { kt::st_bf<16,D> key[8]; kt::st_bf<16,DV> value[8]; } initial;
-        Slot<D,DV> slot[2];
+#endif
+        Slot<D,DV> slot[SLOTS];
     };
     Scratch scratch[8];
-    uint64_t ready[2],free[2],mail_ready[4][2],mail_free[4][2];
-    Reverse::HState::SharedStorage mail[4][2];
+    uint64_t ready[SLOTS],free[SLOTS];
+#if DISM_BWD_OPT >= 4
+    uint64_t mail_ready[SLOTS],mail_free[SLOTS];
+#else
+    uint64_t mail_ready[4][SLOTS],mail_free[4][SLOTS];
+#endif
+    __device__ __forceinline__ uint64_t* mail_ready_at(int w,int s) {
+#if DISM_BWD_OPT >= 4
+        return &mail_ready[s];
+#else
+        return &mail_ready[w][s];
+#endif
+    }
+    __device__ __forceinline__ uint64_t* mail_free_at(int w,int s) {
+#if DISM_BWD_OPT >= 4
+        return &mail_free[s];
+#else
+        return &mail_free[w][s];
+#endif
+    }
+#if DISM_BWD_OPT >= 3
+    uint64_t held_ready,held_free;
+#endif
+    Reverse::HState::SharedStorage mail[4][SLOTS];
 };
 __device__ __forceinline__ float transposed_score(const Args& p,float dot,int bh,int q,int k,bool hard) {
     if(q>=p.n || k>=p.n || k>q) return LOG_ZERO;
@@ -46,24 +86,44 @@ __device__ __forceinline__ float2 reverse_coefficient(const Args& p,const float*
 template<int D,int DV>
 __global__ __launch_bounds__(384,1) void run(
         __grid_constant__ const Args p,__grid_constant__ const CUtensorMap qm,
-        __grid_constant__ const CUtensorMap dm,const __nv_bfloat16* dout,
+        __grid_constant__ const CUtensorMap dm,
+#if DISM_BWD_OPT >= 3
+        __grid_constant__ const CUtensorMap bm,__grid_constant__ const CUtensorMap vm,
+#endif
+        const __nv_bfloat16* dout,
         const float* delta,const float* boundary,
         __grid_constant__ const CUtensorMap dam,float* db,float* dlse,float* tau_partial) {
     extern __shared__ __align__(128) unsigned char bytes[];
     auto& shared=*reinterpret_cast<Shared<D,DV>*>(bytes);
+    constexpr int SLOTS=Shared<D,DV>::SLOTS;
     int warp=threadIdx.x/32,lane=threadIdx.x&31,g=lane&3,l=lane/4;
     int bh=blockIdx.y,chunk=blockIdx.x*4+(warp&3);
     int kb=chunk*32+(warp/4)*16;
-    if(threadIdx.x==0) {
-        for(int s=0;s<2;++s) {
+    // Uniform CTA bound: all q below the smallest key are noncausal.
+    const int query_begin=DISM_BWD_OPT>=2?int(blockIdx.x)*128:0;
+    const int blocks=(p.padded_n+127)/128;
+    int tile=0;
+    if(warp==0 && kt::warp::elect_leader()) {
+#if DISM_BWD_OPT >= 3
+        init_bar(&shared.held_ready,1); init_bar(&shared.held_free,256);
+#endif
+        #pragma unroll
+        for(int s=0;s<SLOTS;++s) {
             init_bar(&shared.ready[s],32); init_bar(&shared.free[s],256);
+#if DISM_BWD_OPT >= 4
+            init_bar(&shared.mail_ready[s],128);
+            init_bar(&shared.mail_free[s],128);
+#else
+            #pragma unroll
             for(int w=0;w<4;++w) {
                 init_bar(&shared.mail_ready[w][s],32);
                 init_bar(&shared.mail_free[w][s],32);
             }
+#endif
         }
         asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
     }
+#if DISM_BWD_OPT < 3
     if(warp<8) {
         for(int x=lane;x<16*D;x+=32) {
             int k=kb+x/D;
@@ -84,20 +144,47 @@ __global__ __launch_bounds__(384,1) void run(
         kt::warp::load(values,shared.initial.value[warp]);
     }
     __syncthreads(); // Held keys/values are now registers; initial staging may be reused.
+#else
+    __syncthreads(); // Initialization only; tasks use mbarrier epochs.
+#endif
     if(warp>=8) {
         asm volatile("setmaxnreg.dec.sync.aligned.u32 40;" ::: "memory");
-        if(warp==8) for(int t=0;t*64<p.padded_n;++t) {
-            int s=t%2,qb=p.padded_n-64-t*64;
-            if(t>=2) wait(&shared.free[s],((t/2)-1)&1);
+        bool leader=kt::warp::elect_leader();
+        if(warp==8) {
+#if DISM_BWD_OPT >= 3
+        int task_round=0;
+        #pragma unroll 1
+        for(int task=blockIdx.x;task<blocks*p.batch_heads;task+=gridDim.x,++task_round) {
+            int bh=task/blocks,query_begin=(task%blocks)*128;
+            // Reuse the existing input union only after every old A/dO reader
+            // finishes. Held B/V can overlap old reverse/dA and final writes.
+            #pragma unroll
+            for(int s=0;s<SLOTS;++s) if(tile>s) wait(&shared.free[s],((tile-1-s)/SLOTS)&1);
+            if(leader) {
+                expect(&shared.held_ready,sizeof(shared.initial));
+                bwd_input::load(&bm,shared.initial.key.data,&shared.held_ready,{query_begin,bh,0,0});
+                bwd_input::load(&vm,shared.initial.value.data,&shared.held_ready,{query_begin,bh,0,0});
+            }
+            wait(&shared.held_free,task_round&1);
+#endif
+        #pragma unroll 1
+        for(int t=0;t*64<p.padded_n-query_begin;++t,++tile) {
+            int s=tile%SLOTS,qb=p.padded_n-64-t*64;
+            if(tile>=SLOTS) wait(&shared.free[s],((tile/SLOTS)-1)&1);
             auto& slot=shared.slot[s];
             if(qb+64<=p.n) {
-                if(lane==0) {
+                if(leader) {
                     expect(&shared.ready[s],sizeof(slot.query)+sizeof(slot.dout));
+#if DISM_BWD_OPT >= 3
+                    bwd_input::load(&qm,slot.query.data,&shared.ready[s],{0,0,bh*p.n+qb,0});
+                    bwd_input::load(&dm,slot.dout.data,&shared.ready[s],{0,0,bh*p.n+qb,0});
+#else
                     constexpr int Q=D==32?32:64,V=DV==32?32:64;
                     #pragma unroll
                     for(int c=0;c<D/Q;++c) tma5(&qm,slot.query.data+c*64*Q,&shared.ready[s],bh*p.n+qb,c);
                     #pragma unroll
                     for(int c=0;c<DV/V;++c) tma5(&dm,slot.dout.data+c*64*V,&shared.ready[s],bh*p.n+qb,c);
+#endif
                 } else arrive(&shared.ready[s]);
             } else {
                 for(int x=lane;x<64*D;x+=32) {
@@ -113,14 +200,38 @@ __global__ __launch_bounds__(384,1) void run(
                 arrive(&shared.ready[s]); // Every writer publishes its tail stores.
             }
         }
+#if DISM_BWD_OPT >= 3
+        }
+#endif
+        }
     } else {
         asm volatile("setmaxnreg.inc.sync.aligned.u32 232;" ::: "memory");
+#if DISM_BWD_OPT >= 3
+        int task_round=0;
+        #pragma unroll 1
+        for(int task=blockIdx.x;task<blocks*p.batch_heads;task+=gridDim.x,++task_round) {
+            int bh=task/blocks,key_cta=task%blocks,chunk=key_cta*4+(warp&3);
+            int kb=chunk*32+(warp/4)*16,query_begin=key_cta*128;
+            wait(&shared.held_ready,task_round&1);
+            kt::rt_bf<16,D> keys;
+            kt::rt_bf<16,DV> values;
+            auto key_view=shared.initial.key.template subtile<16,D>({(warp&3)*2+warp/4,0});
+            auto value_view=shared.initial.value.template subtile<16,DV>({(warp&3)*2+warp/4,0});
+            kt::warp::load(keys,key_view); kt::warp::load(values,value_view);
+            arrive(&shared.held_free);
+#else
+        int key_cta=blockIdx.x;
+#endif
         kt::rt_fl<16,D> accumulated{0.f};
         int issued=0;
         float tau_sum=0,key_lse[2]={0,0};
         Reverse::VState right;
-        for(int t=0;t*64<p.padded_n;++t) {
-            int s=t%2,phase=(t/2)&1,qb=p.padded_n-64-t*64;
+#if DISM_BWD_OPT
+        bwd_metadata::Key key_meta(p,bh,kb);
+#endif
+        #pragma unroll 1
+        for(int t=0;t*64<p.padded_n-query_begin;++t,++tile) {
+            int s=tile%SLOTS,phase=(tile/SLOTS)&1,qb=p.padded_n-64-t*64;
 uint32_t hard0,hard1;
             if(p.hard_bits) {
                 const int words=(p.n+31)/32;
@@ -132,22 +243,37 @@ uint32_t hard0,hard1;
             hard1=__ballot_sync(0xffffffff,qb+lane+32<p.n &&
                 row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qb+lane+32,p.hard_prob));
             }
+#if DISM_BWD_OPT
+            bwd_metadata::Query query_meta(p,delta,bh,qb);
+#endif
             wait(&shared.ready[s],phase);
         Scalar scalar;
         {
             // Keys remain in registers across query tiles.
-            kt::rt_bf<64,D> queries;
             kt::rt_fl<16,64> dot{0.f};
+#if DISM_BWD_OPT >= 5
+            kt::rt_bf<D,64,kt::ducks::rt_layout::col> queries;
+            bwd_input::load_rhs(queries,shared.slot[s].query);
+            kt::warp::wmma::mma_AB(dot,keys,queries,dot);
+#else
+            kt::rt_bf<64,D> queries;
             kt::warp::load(queries,shared.slot[s].query);
             kt::warp::wmma::mma_ABt(dot,keys,queries,dot);
+#endif
             #pragma unroll
             for(int r=0;r<2;++r) {
                 #pragma unroll
                 for(int c=0;c<8;++c) {
                     auto x=dot.tiles[0][c/2].data[r+2*(c&1)];
                     auto pos=Buffer::layout(r,c,0);
+#if DISM_BWD_OPT
+                    scalar.data[r][c].value={
+                        bwd_metadata::score<0>(p,key_meta,query_meta,x.x,r,pos.second,qb+pos.second,kb+pos.first,(hard0>>pos.second)&1),
+                        bwd_metadata::score<1>(p,key_meta,query_meta,x.y,r,pos.second,qb+pos.second+32,kb+pos.first,(hard1>>pos.second)&1)};
+#else
                     scalar.data[r][c].value={transposed_score(p,x.x,bh,qb+pos.second,kb+pos.first,(hard0>>pos.second)&1),
                         transposed_score(p,x.y,bh,qb+pos.second+32,kb+pos.first,(hard1>>pos.second)&1)};
+#endif
                 }
             }
         }
@@ -190,9 +316,15 @@ uint32_t hard0,hard1;
             {
                 kt::rt_fl<16,64> dp{0.f};
                 {
+#if DISM_BWD_OPT >= 5
+                    kt::rt_bf<DV,64,kt::ducks::rt_layout::col> derivatives;
+                    bwd_input::load_rhs(derivatives,shared.slot[s].dout);
+                    kt::warp::wmma::mma_AB(dp,values,derivatives,dp);
+#else
                     kt::rt_bf<64,DV> derivatives;
                     kt::warp::load(derivatives,shared.slot[s].dout);
                     kt::warp::wmma::mma_ABt(dp,values,derivatives,dp);
+#endif
                 }
                 #pragma unroll
                 for(int r=0;r<2;++r) {
@@ -202,8 +334,13 @@ uint32_t hard0,hard1;
                         auto w=scalar.data[r][c].value;
                         auto dot=dp.tiles[0][c/2].data[r+2*(c&1)];
                         int k=kb+pos.first,q=qb+pos.second;
+#if DISM_BWD_OPT
+                        auto x=bwd_metadata::coefficient<0>(p,query_meta,w.u0,dot.x,pos.second,q,k);
+                        auto y=bwd_metadata::coefficient<1>(p,query_meta,w.u1,dot.y,pos.second,q+32,k);
+#else
                         auto x=reverse_coefficient(p,delta,w.u0,dot.x,bh,q,k);
                         auto y=reverse_coefficient(p,delta,w.u1,dot.y,bh,q+32,k);
+#endif
                         reverse.data[r][c]={{x.x,y.x},{x.y,y.y}};
                     }
                 }
@@ -218,16 +355,16 @@ uint32_t hard0,hard1;
                     q+32<p.padded_n?boundary[off+q+32]:0};
             }
             if(warp<4) {
-                wait(&shared.mail_ready[warp][s],phase);
+                wait(shared.mail_ready_at(warp,s),phase);
                 bottom=Reverse::HState::load_shared(shared.mail[warp][s]);
-                arrive(&shared.mail_free[warp][s]);
+                arrive(shared.mail_free_at(warp,s));
             }
             auto state=reverse.reverse_inclusive_scan(right,bottom);
             right=state.first;
             if(warp>=4) {
-                if(t>=2) wait(&shared.mail_free[warp-4][s],phase^1);
+                if(tile>=SLOTS) wait(shared.mail_free_at(warp-4,s),phase^1);
                 state.second.store_shared(shared.mail[warp-4][s]);
-                arrive(&shared.mail_ready[warp-4][s]);
+                arrive(shared.mail_ready_at(warp-4,s));
             }
             // Publish paired boundary before gradient GEMMs.
             #pragma unroll
@@ -316,23 +453,40 @@ uint32_t hard0,hard1;
         }
         store_key_lse(p,bh,kb,dlse,key_lse);
         float total=warp_sum(tau_sum);
-        if(lane==0) tau_partial[(int64_t(bh)*gridDim.x+blockIdx.x)*8+warp]=total;
+        if(lane==0) tau_partial[(int64_t(bh)*blocks+key_cta)*8+warp]=total;
         if(lane==0) asm volatile("cp.async.bulk.wait_group 0;" ::: "memory");
         __syncwarp();
     }
+#if DISM_BWD_OPT >= 3
+    }
+    kt::warpgroup::sync(1+warp/4); // Retire register groups independently.
+#else
     __syncthreads(); // Invalid compute warps also drain the full protocol.
+#endif
 }
 
 
 template<int D,int DV> void launch(const Args& p,const void* dout,const float* delta,
         const float* boundary,const CUtensorMap& dam,float* db,float* dlse,float* tau_partial,cudaStream_t stream) {
-    auto qm=permuted_map<D>(p.a,p.batch_heads*p.n);
-    auto dm=permuted_map<DV>(dout,p.batch_heads*p.n);
+    auto qm=permuted_map<D,(DISM_BWD_OPT>=3)>(p.a,p.batch_heads*p.n);
+    auto dm=permuted_map<DV,(DISM_BWD_OPT>=3)>(dout,p.batch_heads*p.n);
     constexpr int sm=sizeof(Shared<D,DV>);
     auto err=cudaFuncSetAttribute(run<D,DV>,cudaFuncAttributeMaxDynamicSharedMemorySize,sm);
     if(err!=cudaSuccess) throw std::runtime_error(cudaGetErrorString(err));
+#if DISM_BWD_OPT >= 3
+    auto bm=bwd_input::held_map<D>(p,p.b),vm=bwd_input::held_map<DV>(p,p.v);
+    int device,sms;
+    auto status=cudaGetDevice(&device);
+    if(status!=cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));
+    status=cudaDeviceGetAttribute(&sms,cudaDevAttrMultiProcessorCount,device);
+    if(status!=cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));
+    int tasks=((p.padded_n+127)/128)*p.batch_heads;
+    run<D,DV><<<std::min(tasks,sms),384,sm,stream>>>(
+        p,qm,dm,bm,vm,static_cast<const __nv_bfloat16*>(dout),delta,boundary,dam,db,dlse,tau_partial);
+#else
     run<D,DV><<<dim3((p.padded_n+127)/128,p.batch_heads),384,sm,stream>>>(
         p,qm,dm,static_cast<const __nv_bfloat16*>(dout),delta,boundary,dam,db,dlse,tau_partial);
+#endif
 }
 template<int D> void dispatch(const Args& p,int dv,const void* dout,const float* delta,
         const float* boundary,const CUtensorMap& dam,float* db,float* dlse,float* tau_partial,cudaStream_t stream) {

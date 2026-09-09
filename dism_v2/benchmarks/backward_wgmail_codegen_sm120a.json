@@ -1,0 +1,480 @@
+{
+  "full": {
+    "binary": "/home/cicuvc/.cache/torch_extensions/py312_cu130/dism_v2_backward_sm120a_opt4/dism_v2_backward_sm120a_opt4.so",
+    "rows": [
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:392 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 231,
+          "CALL": 0,
+          "LDL": 147,
+          "STL": 129
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 231,
+          "CALL": 0,
+          "LDL": 24,
+          "STL": 13
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:24 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 239,
+          "CALL": 0,
+          "LDL": 12,
+          "STL": 9
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:256 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 231,
+          "CALL": 0,
+          "LDL": 88,
+          "STL": 83
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 231,
+          "CALL": 0,
+          "LDL": 22,
+          "STL": 12
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 239,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:160 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 231,
+          "CALL": 0,
+          "LDL": 55,
+          "STL": 44
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:32 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 231,
+          "CALL": 0,
+          "LDL": 14,
+          "STL": 11
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 239,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:368 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 389,
+          "CALL": 0,
+          "LDL": 110,
+          "STL": 139
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:288 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 389,
+          "CALL": 0,
+          "LDL": 80,
+          "STL": 85
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:208 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 389,
+          "CALL": 0,
+          "LDL": 55,
+          "STL": 59
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:80 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 340,
+          "CALL": 0,
+          "LDL": 21,
+          "STL": 21
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 341,
+          "CALL": 0,
+          "LDL": 1,
+          "STL": 1
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 341,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 325,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 325,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 325,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      }
+    ]
+  },
+  "tanh_finite": {
+    "binary": "/home/cicuvc/.cache/torch_extensions/py312_cu130/dism_v2_backward_sm120a_tanh_finite_opt4/dism_v2_backward_sm120a_tanh_finite_opt4.so",
+    "rows": [
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:432 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 110,
+          "CALL": 0,
+          "LDL": 154,
+          "STL": 130
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:72 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 110,
+          "CALL": 0,
+          "LDL": 33,
+          "STL": 21
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 118,
+          "CALL": 0,
+          "LDL": 4,
+          "STL": 4
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:320 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 110,
+          "CALL": 0,
+          "LDL": 106,
+          "STL": 90
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 110,
+          "CALL": 0,
+          "LDL": 23,
+          "STL": 13
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 118,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:256 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 110,
+          "CALL": 0,
+          "LDL": 82,
+          "STL": 72
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 110,
+          "CALL": 0,
+          "LDL": 19,
+          "STL": 12
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1696 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 27,
+          "BRA": 118,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:288 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 269,
+          "CALL": 0,
+          "LDL": 86,
+          "STL": 110
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:200 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 269,
+          "CALL": 0,
+          "LDL": 57,
+          "STL": 58
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:184 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 269,
+          "CALL": 0,
+          "LDL": 49,
+          "STL": 53
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:104 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 221,
+          "CALL": 0,
+          "LDL": 27,
+          "STL": 27
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 221,
+          "CALL": 0,
+          "LDL": 10,
+          "STL": 10
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 221,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:48 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 205,
+          "CALL": 0,
+          "LDL": 11,
+          "STL": 11
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 205,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_S3_S3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1944 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 29,
+          "BRA": 205,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma_load": 4,
+        "bar_sync": 2
+      }
+    ]
+  }
+}

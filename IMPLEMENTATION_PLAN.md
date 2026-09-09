@@ -826,6 +826,26 @@ mixed N1024三轮90样本中位数q406.222→410.576us、k447.198→451.038us，
 因此保留DISM_OUTPUT_TMA=0默认，不基于短N单轮收益自动dispatch。
 实现、协议与实测见dism_v2/OUTPUT_TMA.md；本实验未提交。
 
+### 反向WS kernel优化（进行中，2026-09-09）
+
+新增反向优化goal进行中，完整阶段见dism_v2/BACKWARD_OPTIMIZATION.md。
+已冻结两WS kernel基线并采集NCU；DISM_BWD_OPT=1实验接入寄存器元数据缓存、
+selp及FTZ EX2。单FFMA score产生两项新增BF16 GEMM对照失败，恢复旧算术顺序
+后回到基线192通过/14既有失败；full/finite选定端到端各507通过。
+D64/DV64新增spill已记录并继续。主工况三轮中位数B1加速1.73–1.78x，
+B3加速1.14–1.16x，但尚未实现因果裁剪/persistent/跨任务预取/WG mail与stage实验，
+目标仍active，暂不切默认或宣称完成。
+
+随后已验证OPT2 CTA因果裁剪（dense摘要补零/identity）、OPT3 persistent及held B/V
+TMA预取、完整A/dO单TMA、OPT4 WG mail128。full331通过/14相同已知失败，
+finite139通过；含九维度108项相等性和30项多workload重放，端到端各507通过。
+两轮主工况OPT4 B1约685us，B3约1443–1562us；NCU报告和spill表见上述文档。
+第一块A/dO尚未跨workload预取，阶段数/首块预取、布局/特化和最终全范围验收仍待推进。
+
+OPT5已加入score/dP直接RHS LDSM加载；新增DISM_BWD_STAGES=1/2/3实验入口，
+按shared预算回退双槽，dA输出仍独立双槽。finite默认双槽及请求三槽各139通过；
+OPT5全模式/sanitizer/性能与单槽验证尚未完成，默认仍OPT0。详见反向优化文档。
+
 ## 阶段 6：varlen
 
 - 增加 packed tokens 与 sequence offsets 接口，定义与 fixed-length 逐序列调用等价的数学结果。
