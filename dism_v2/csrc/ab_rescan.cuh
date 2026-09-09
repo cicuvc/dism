@@ -3,7 +3,7 @@
 __device__ __forceinline__ float transposed_score(const Args& p,float dot,int bh,int q,int k,bool hard) {
     if(q>=p.n || k>=p.n || k>q) return LOG_ZERO;
     float tau=p.tau[bh%p.heads];
-    if(hard) return p.q_label[int64_t(bh)*p.n+q]==p.k_label[int64_t(bh)*p.n+k]?tau*LOG2E:LOG_ZERO;
+    if(hard) return p.query_label(int64_t(bh)*p.n+q)==p.key_label(int64_t(bh)*p.n+k)?tau*LOG2E:LOG_ZERO;
     return (dot*p.scale-p.lse[int64_t(bh)*p.n+(p.column_lse?k:q)]+tau)*LOG2E;
 }
 
@@ -65,4 +65,3 @@ __device__ __forceinline__ void reconstruct(const Args& p,Shared& shared,int bh,
         }
         scalar.template roll<false>();
 }
-

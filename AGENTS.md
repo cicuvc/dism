@@ -26,6 +26,7 @@
 ## 随机数与重算
 
 - 生产路径在 warp 内生成行决策所需随机数，不预先生成或保存 global-memory 行随机数/行 mask 数组。
+- 用户最新授权 bitset A/B 实验：`DISM_ROW_BITSET=1` 在 CUDA embedding 收尾生成每32行一个 uint32，core 前后向复用；RNG 身份和消费约定不变。此为上述“不保存行 mask”约定的明确实验例外，默认保留重算路径。
 - 使用可重放的 counter-based RNG 或等价方案，将逻辑 `(sequence/batch, head, query row)` 映射到随机数。不得使用会随 CTA 调度、warp 所属或 key tile 改变的随机身份。
 - 同一行在不同 key tiles、前向摘要、前向重算和反向重算中的决策必须一致。只保存 seed、offset、选定的全局 direction 等少量元数据；反向不再消耗新的随机数。
 - 与 PyTorch generator 的 seed/offset 管理方式、每次调用的随机数消费约定必须显式记录并测试。
@@ -33,6 +34,11 @@
 - reference 的显式 `hard_mask`/`interpolation` 可用于调试对照，但不是生产路径的预计算 mask 方案。调试导出的 mask 不得进入正式性能路径。
 
 ## 实现组件与布局
+
+- 摘要元数据新版：int32/int64 标签由 host 分发，soft/hard/mixed 编译期特化；
+  soft 不加载标签，hard 不加载 LSE，int64 诊断输入不截断。D×方向×5 共30个摘要实例，
+  加9个output共39处寄存器重分配。高层保留 embedding 的 int32 标签，不再转 long；
+  output/backward 通过类型标记读取，摘要逐元素无标签宽度判断。此条覆盖下述六实例计数。
 
 - 当前摘要score已按行/列LSE编译期特化（D×方向共六实例），tau2/scale2及行bias2预计算，
   每lane预取两个key标签、列方向再预取两个bias2，用shuffle分发，无shared元数据缓存。

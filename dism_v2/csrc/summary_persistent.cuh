@@ -37,7 +37,32 @@ __device__ __forceinline__ float summary_select(bool pred, float yes, float no) 
         : "=f"(result) : "f"(yes), "f"(no), "r"(int(pred)));
     return result;
 }
-template <int D, bool COLUMN_LSE>
+
+template<int ROWS, int COLS>
+__device__ __forceinline__ void load_rhs_tile(kt::rt_bf<COLS, ROWS, kt::ducks::rt_layout::col>& dst, const kt::st_bf<ROWS, COLS>& src){
+    int warp_laneid = ::kittens::laneid();
+
+    uint32_t shared_addr = static_cast<uint32_t>(__cvta_generic_to_shared(&src.data[0]));
+
+    #pragma unroll
+    for (int c = 0; c < dst.height; c++) {
+        #pragma unroll
+        for (int r = 0; r < dst.width; r++) {
+            kittens::bf16_2 tmp[4];
+
+            int row = 16 * r + (warp_laneid / 16) * 8 + (warp_laneid % 8);
+            int col = 16 * c + ((warp_laneid / 8) % 2) * 8;
+
+            kt::move<kt::bf16_2>::ldsm4(tmp[0], tmp[2], tmp[1], tmp[3], src.idx(shared_addr, {row, col}));
+            dst.tiles[c][r].data[0] = tmp[0];
+            dst.tiles[c][r].data[1] = tmp[1];
+            dst.tiles[c][r].data[2] = tmp[2];
+            dst.tiles[c][r].data[3] = tmp[3];
+        }
+    }
+}
+// MODE: 0 soft, 1 hard, 2 mixed. Label width is a host dispatch decision.
+template <int D, bool COLUMN_LSE, int MODE, typename Label>
 __global__ __launch_bounds__(384, 1) void summary_persistent(__grid_constant__ const Args p,
                                                              __grid_constant__ const CUtensorMap qm,
                                                              __grid_constant__ const CUtensorMap km) {
@@ -118,23 +143,32 @@ __global__ __launch_bounds__(384, 1) void summary_persistent(__grid_constant__ c
             kt::warp::load(qreg, qview);
             arrive(&shared.qfree);
             // One lane per query row generates a decision, before the key loop.
-            int decision = 0;
-            if (lane < 16 && qbase + lane < p.n)
-                decision = row_hard(p.seed, p.offset, uint64_t(bh) * p.n + qbase + lane, p.hard_prob);
-            bool hard[2] = {bool(__shfl_sync(0xffffffff, decision, lane / 4)),
-                            bool(__shfl_sync(0xffffffff, decision, 8 + lane / 4))};
+            bool hard[2];
+            if constexpr(MODE!=2) {hard[0]=hard[1]=MODE==1;}
+            else if(p.hard_bits) {
+                uint32_t bits=qbase<p.n?p.hard_bits[int64_t(bh)*((p.n+31)/32)+qbase/32]:0;
+                hard[0]=(bits>>((qbase%32)+lane/4))&1;
+                hard[1]=(bits>>((qbase%32)+8+lane/4))&1;
+            } else {
+                int decision=0;
+                if(lane<16 && qbase+lane<p.n)
+                    decision=row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qbase+lane,p.hard_prob);
+                hard[0]=__shfl_sync(0xffffffff,decision,lane/4,32);
+                hard[1]=__shfl_sync(0xffffffff,decision,8+lane/4,32);
+            }
             // Cache query-row invariants before the key loop. Column LSE remains
             // indexed by key inside score(); the two directions are not equivalent.
             const float tau = p.tau[bh % p.heads];
             const float tau2 = tau * LOG2E, scale2 = p.scale * LOG2E;
             float row_bias2[2];
-            int64_t cached_label[2];
+            Label cached_label[2];
 #pragma unroll
             for (int r = 0; r < 2; ++r) {
                 int i = qbase + r * 8 + lane / 4;
-                if constexpr (!COLUMN_LSE)
+                if constexpr (!COLUMN_LSE && MODE!=1)
                     row_bias2[r] = i < p.n ? (tau-p.lse[int64_t(bh)*p.n+i])*LOG2E : 0.f;
-                cached_label[r] = i < p.n ? p.q_label[int64_t(bh) * p.n + i] : -1;
+                if constexpr(MODE!=0)
+                    cached_label[r] = i < p.n ? reinterpret_cast<const Label*>(p.q_label)[int64_t(bh) * p.n + i] : -1;
             }
             Buffer::VState left;
 #pragma unroll 1
@@ -145,20 +179,21 @@ __global__ __launch_bounds__(384, 1) void summary_persistent(__grid_constant__ c
                     // Distributed registers: lane l owns columns l and l+32.
                     // Launch metadata loads BEFORE the input wait and MMA;
                     // no global load is hidden inside per-element selection.
-                    long long key_label[2];
+                    Label key_label[2];
                     float key_bias2[2];
                     #pragma unroll
                     for (int e=0;e<2;++e) {
                         int j=t*64+lane+e*32;
-                        key_label[e]=j<p.n ? p.k_label[int64_t(bh)*p.n+j] : -1;
-                        if constexpr(COLUMN_LSE)
+                        if constexpr(MODE!=0)
+                            key_label[e]=j<p.n ? reinterpret_cast<const Label*>(p.k_label)[int64_t(bh)*p.n+j] : -1;
+                        if constexpr(COLUMN_LSE && MODE!=1)
                             key_bias2[e]=j<p.n ? (tau-p.lse[int64_t(bh)*p.n+j])*LOG2E : 0.f;
                     }
                     wait(&shared.ready[s], phase);
-                    kt::rt_bf<64, D> kreg;
+                    kt::rt_bf<D, 64, kt::ducks::rt_layout::col> kreg;
                     kt::rt_fl<16, 64> accum{0.f};
-                    kt::warp::load(kreg, shared.slot[s].k);
-                    kt::warp::wmma::mma_ABt(accum, qreg, kreg, accum);
+                    load_rhs_tile(kreg, shared.slot[s].k);
+                    kt::warp::wmma::mma_AB(accum, qreg, kreg, accum);
 #pragma unroll
                     for (int r = 0; r < 2; ++r) {
 #pragma unroll
@@ -168,16 +203,22 @@ __global__ __launch_bounds__(384, 1) void summary_persistent(__grid_constant__ c
                             float values[2];
                             #pragma unroll
                             for(int e=0;e<2;++e) {
-                                long long label=__shfl_sync(0xffffffff,key_label[e],col);
-                                float bias;
-                                if constexpr(COLUMN_LSE)
-                                    bias=__shfl_sync(0xffffffff,key_bias2[e],col);
-                                else bias=row_bias2[r];
-                                float soft=fmaf(e==0?x.x:x.y,scale2,bias);
-                                float hard_score=summary_select(cached_label[r]==label,tau2,LOG_ZERO);
+                                float score;
+                                if constexpr(MODE!=1) {
+                                    float bias;
+                                    if constexpr(COLUMN_LSE) bias=__shfl_sync(0xffffffff,key_bias2[e],col, 32);
+                                    else bias=row_bias2[r];
+                                    score=fmaf(e==0?x.x:x.y,scale2,bias);
+                                }
+                                if constexpr(MODE!=0) {
+                                    Label label=__shfl_sync(0xffffffff,key_label[e],col, 32);
+                                    float hs=summary_select(cached_label[r]==label,tau2,LOG_ZERO);
+                                    if constexpr(MODE==1) score=hs;
+                                    else score=summary_select(hard[r],hs,score);
+                                }
                                 int j=t*64+col+e*32;
                                 values[e]=summary_select(i<p.n && j<p.n && j<=i,
-                                    summary_select(hard[r],hard_score,soft),LOG_ZERO);
+                                    score,LOG_ZERO);
                             }
                             scalar.data[r][c].value={values[0],values[1]};
                         }
@@ -244,10 +285,10 @@ __global__ __launch_bounds__(384, 1) void summary_persistent(__grid_constant__ c
     }
     __syncthreads(); // Final drain only, not a workload boundary.
 }
-template <int D, bool COLUMN_LSE> void launch_persistent_summary_direction(const Args &p, cudaStream_t stream) {
+template <int D, bool COLUMN_LSE, int MODE, typename Label> void launch_persistent_summary_variant(const Args &p, cudaStream_t stream) {
     auto qm = summary_q_map<D>(p), km = permuted_map<D, true>(p.b, p.batch_heads * p.n);
     constexpr int sm = sizeof(SummaryShared<D>);
-    auto e = cudaFuncSetAttribute(summary_persistent<D,COLUMN_LSE>, cudaFuncAttributeMaxDynamicSharedMemorySize, sm);
+    auto e = cudaFuncSetAttribute(summary_persistent<D,COLUMN_LSE,MODE,Label>, cudaFuncAttributeMaxDynamicSharedMemorySize, sm);
     if (e != cudaSuccess)
         throw std::runtime_error(cudaGetErrorString(e));
     int device, sms;
@@ -258,7 +299,16 @@ template <int D, bool COLUMN_LSE> void launch_persistent_summary_direction(const
     if (e != cudaSuccess)
         throw std::runtime_error(cudaGetErrorString(e));
     int tasks = ((p.n + 127) / 128) * p.batch_heads;
-    summary_persistent<D,COLUMN_LSE><<<std::min(tasks, sms), 384, sm, stream>>>(p, qm, km);
+    summary_persistent<D,COLUMN_LSE,MODE,Label><<<std::min(tasks, sms), 384, sm, stream>>>(p, qm, km);
+}
+template<int D,bool C,typename Label> void launch_persistent_summary_mode(const Args& p,cudaStream_t s) {
+    if(p.hard_prob==0) launch_persistent_summary_variant<D,C,0,int>(p,s);
+    else if(p.hard_prob==1) launch_persistent_summary_variant<D,C,1,Label>(p,s);
+    else launch_persistent_summary_variant<D,C,2,Label>(p,s);
+}
+template<int D,bool C> void launch_persistent_summary_direction(const Args& p,cudaStream_t s) {
+    if(p.label32) launch_persistent_summary_mode<D,C,int>(p,s);
+    else launch_persistent_summary_mode<D,C,long long>(p,s);
 }
 template <int D> void launch_persistent_summary(const Args &p, cudaStream_t stream) {
     if(p.column_lse) launch_persistent_summary_direction<D,true>(p,stream);

@@ -13,7 +13,8 @@ std::tuple<std::vector<torch::Tensor>,uint64_t,uint64_t,bool> core_forward(
         torch::Tensor a,torch::Tensor b,torch::Tensor v,torch::Tensor lse,torch::Tensor tau,
         torch::Tensor q_label,torch::Tensor k_label,double scale,bool column_lse,double hard_prob,
         std::optional<at::Generator> generator,std::optional<std::pair<uint64_t,uint64_t>> replay,
-        std::optional<std::vector<torch::Tensor>> alternative, bool save_boundaries) {
+        std::optional<std::vector<torch::Tensor>> alternative, bool save_boundaries,
+        std::optional<torch::Tensor> hard_bits) {
     TORCH_CHECK(a.dim()==4 && a.is_cuda(),"A must be CUDA [B,H,N,D]");
     for(const auto& x:{a,b,v,lse,tau,q_label,k_label})
         TORCH_CHECK(x.device()==a.device() && x.is_contiguous(),"inputs must be contiguous on the same CUDA device");
@@ -24,7 +25,7 @@ std::tuple<std::vector<torch::Tensor>,uint64_t,uint64_t,bool> core_forward(
     TORCH_CHECK((d==32||d==64||d==128) && (dv==32||dv==64||dv==128),"D/DV must be 32,64,128");
     TORCH_CHECK(a.scalar_type()==at::kBFloat16 && b.scalar_type()==at::kBFloat16 && v.scalar_type()==at::kBFloat16,"A/B/V must be BF16");
     TORCH_CHECK(lse.scalar_type()==at::kFloat && tau.scalar_type()==at::kFloat,"LSE/tau must be FP32");
-    TORCH_CHECK(q_label.scalar_type()==at::kLong && k_label.scalar_type()==at::kLong,"labels must be int64");
+    TORCH_CHECK((q_label.scalar_type()==at::kLong || q_label.scalar_type()==at::kInt) && k_label.scalar_type()==q_label.scalar_type(),"labels must have matching int32/int64 dtype");
     for(const auto& x:{lse,q_label,k_label}) TORCH_CHECK(x.dim()==3 && x.size(0)==batch && x.size(1)==heads && x.size(2)==n,"metadata must be [B,H,N]");
     TORCH_CHECK(tau.dim()==1 && tau.numel()==heads,"tau must be [H]");
     // A random-direction call supplies q_from_k operands first and
@@ -76,13 +77,40 @@ std::tuple<std::vector<torch::Tensor>,uint64_t,uint64_t,bool> core_forward(
     auto vertical=torch::empty({batch,heads,save_boundaries?np/16:0,np},lse.options());
     auto horizontal=torch::empty({batch,heads,save_boundaries?np/64:0,np},lse.options());
     dism_v2::Args p{a.data_ptr(),b.data_ptr(),v.data_ptr(),lse.data_ptr<float>(),tau.data_ptr<float>(),
-        q_label.data_ptr<int64_t>(),k_label.data_ptr<int64_t>(),summary.data_ptr<float>(),boundary.data_ptr<float>(),
+        reinterpret_cast<const int64_t*>(q_label.data_ptr()),reinterpret_cast<const int64_t*>(k_label.data_ptr()),summary.data_ptr<float>(),boundary.data_ptr<float>(),
         norm.data_ptr<float>(),out.data_ptr(),int(batch*heads),int(heads),int(n),np,cp,float(scale),column_lse,float(hard_prob),seed,offset};
     if(save_boundaries) { p.vertical=vertical.data_ptr<float>(); p.horizontal=horizontal.data_ptr<float>(); }
+    p.label32=q_label.scalar_type()==at::kInt;
+    if(hard_bits) {
+        TORCH_CHECK(replay && hard_prob>0 && hard_prob<1,"bitset requires mixed replay state");
+        TORCH_CHECK(hard_bits->device()==a.device() && hard_bits->scalar_type()==at::kInt &&
+            hard_bits->is_contiguous() && hard_bits->sizes()==torch::IntArrayRef({batch,heads,(n+31)/32}),"invalid hard bitset");
+        p.hard_bits=reinterpret_cast<const uint32_t*>(hard_bits->data_ptr<int>());
+    }
     auto stream=c10::cuda::getCurrentCUDAStream();
     dism_v2::launch_summary(p,d,stream); C10_CUDA_KERNEL_LAUNCH_CHECK();
     dism_v2::launch_passing(p,stream); C10_CUDA_KERNEL_LAUNCH_CHECK();
     dism_v2::launch_output(p,d,dv,stream); C10_CUDA_KERNEL_LAUNCH_CHECK();
     return {{out,norm,summary,boundary,vertical,horizontal},seed,offset,column_lse};
 }
-PYBIND11_MODULE(TORCH_EXTENSION_NAME,m) { m.def("forward",&core_forward); }
+std::tuple<uint64_t,uint64_t,bool> reserve_rows(torch::Tensor q,bool random_direction,
+        bool column_lse,double probability,std::optional<at::Generator> generator) {
+    TORCH_CHECK(q.is_cuda() && std::isfinite(probability) && probability>=0 && probability<=1,"invalid RNG inputs");
+    const c10::cuda::CUDAGuard guard(q.device());
+    cudaStreamCaptureStatus capture;
+    C10_CUDA_CHECK(cudaStreamIsCapturing(c10::cuda::getCurrentCUDAStream(),&capture));
+    TORCH_CHECK(capture==cudaStreamCaptureStatusNone,"CUDA graph capture is not supported yet");
+    if(generator) TORCH_CHECK(generator->device().is_cuda() &&
+        (!generator->device().has_index() || generator->device()==q.device()),"generator device mismatch");
+    uint64_t seed=0,offset=0,increment=(random_direction?4:0)+((probability>0 && probability<1)?4:0);
+    if(increment) {
+        auto g=generator.value_or(at::cuda::detail::getDefaultCUDAGenerator(q.get_device()));
+        auto* impl=g.get<at::CUDAGeneratorImpl>();
+        std::lock_guard<std::mutex> lock(impl->mutex_);
+        TORCH_CHECK(impl->get_offset()<=UINT64_MAX-increment,"RNG offset overflow");
+        auto state=impl->philox_engine_inputs(increment);seed=state.first;offset=state.second;
+    }
+    if(random_direction) {column_lse=(dism_v2::row_bits(seed,offset,0)&1u)!=0;offset+=4;}
+    return {seed,offset,column_lse};
+}
+PYBIND11_MODULE(TORCH_EXTENSION_NAME,m) { m.def("forward",&core_forward);m.def("reserve_rows",&reserve_rows); }

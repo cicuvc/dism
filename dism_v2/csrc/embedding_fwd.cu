@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <climits>
 #include "pipeline.cuh"
+#include "row_rng.cuh"
 namespace kt=kittens;
 namespace dism_v2::embedding {
 __device__ __forceinline__ float reciprocal(float x) {
@@ -167,6 +168,9 @@ struct FusedArgs {
     int *ik,*iq;
     int h,n,voc;
     float scale;
+    uint32_t* hard_bits;
+    uint64_t seed,offset;
+    float probability;
 };
 template<int D,int BV> struct FusedScratch {
     struct Slot { kt::st_bf<BV,D> eq,ek; };
@@ -257,6 +261,20 @@ template<int D,int BV> __global__ __launch_bounds__(384,1) void fused(
         store_result(acc,m,l,arg,warp<4?a.oq:a.ok,warp<4?a.lk:a.lq,
                      warp<4?a.pk:a.pq,warp<4?a.ik:a.iq,row0,bh,a.n,lane);
     }
+    // One owner warp produces two words per 64-token CTA, after its accumulator
+    // stores. No shared staging, atomics, or duplicate WG writers.
+    if(warp==0 && a.hard_bits) {
+        #pragma unroll
+        for(int part=0;part<2;++part) {
+            int row=blockIdx.x*64+part*32+lane;
+            bool hard=row<a.n && row_hard(a.seed,a.offset,uint64_t(bh)*a.n+row,a.probability);
+            uint32_t word=__ballot_sync(0xffffffff,hard);
+            int elected;
+            asm volatile("{ .reg .pred p; elect.sync _|p, 0xffffffff; selp.u32 %0, 1, 0, p; }":"=r"(elected));
+            if(elected && blockIdx.x*64+part*32<a.n)
+                a.hard_bits[int64_t(bh)*((a.n+31)/32)+blockIdx.x*2+part]=word;
+        }
+    }
     __syncthreads(); // Keep producer group alive until consumers are done.
 }
 template<int D,int BV> void launch_fused(FusedArgs a,int bh,cudaStream_t stream) {
@@ -283,11 +301,12 @@ void launch_embedding(const void* x,const void* k,const void* v,void* out,float*
 }
 void launch_embedding_fused(const void* q,const void* k,const void* eq,const void* ek,
         void* oq,void* ok,float* lk,float* lq,float* pk,float* pq,int* ik,int* iq,
-        int bh,int h,int n,int voc,int d,int block_v,float scale,cudaStream_t stream) {
+        int bh,int h,int n,int voc,int d,int block_v,float scale,cudaStream_t stream,
+        uint32_t* hard_bits,uint64_t seed,uint64_t offset,float probability) {
     using namespace dism_v2::embedding;
     FusedArgs a{(const __nv_bfloat16*)q,(const __nv_bfloat16*)k,(const __nv_bfloat16*)eq,
                 (const __nv_bfloat16*)ek,(__nv_bfloat16*)oq,(__nv_bfloat16*)ok,
-                lk,lq,pk,pq,ik,iq,h,n,voc,scale};
+                lk,lq,pk,pq,ik,iq,h,n,voc,scale,hard_bits,seed,offset,probability};
     if(d==32 && block_v==128) launch_fused<32,128>(a,bh,stream);
     else if(d==64 && block_v==128) launch_fused<64,128>(a,bh,stream);
     else if(d==32) launch_fused<32,64>(a,bh,stream);

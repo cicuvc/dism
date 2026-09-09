@@ -53,7 +53,7 @@ class ScanBoundaries:
 
 def forward(a, b, v, lse, tau, q_label, k_label, *, sm_scale, direction,
             hard_prob=0.0, return_debug=False, generator=None, rng_state=None,
-            return_rng_state=False, save_boundaries=False):
+            return_rng_state=False, save_boundaries=False, hard_bits=None):
     """Return (BF16 O, FP32 log2 normalizer); optional checkpoint diagnostics.
 
     direction='q_from_k': a=q, b=q_from_k, lse=q_lse.
@@ -104,7 +104,7 @@ def forward(a, b, v, lse, tau, q_label, k_label, *, sm_scale, direction,
     tensors, seed, offset, column_lse = _extension().forward(
         a,b,v,lse,tau,q_label,k_label,float(sm_scale),direction=="k_from_q",float(hard_prob),
         generator, None if rng_state is None else (rng_state.seed, rng_state.offset), alternative,
-        save_boundaries)
+        save_boundaries, hard_bits)
     result = tuple(tensors[:4]) if return_debug else tuple(tensors[:2])
     if save_boundaries:
         result = (*result, ScanBoundaries(*tensors[4:6]))

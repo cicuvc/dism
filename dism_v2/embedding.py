@@ -24,17 +24,19 @@ def _extension():
         verbose=os.environ.get("DISM_VERBOSE_BUILD") == "1")
 
 
-def forward(q, k, q_voc, k_voc, sm_scale=1.0, *, warp_specialized=True, block_v=64):
+def forward(q, k, q_voc, k_voc, sm_scale=1.0, *, warp_specialized=True, block_v=64, row_rng=None):
     """Return the same eight outputs/order as emb_fwd_wrapper.
 
     Defaults to fused 12-warp/two-slot CUDA forward. Set warp_specialized=False
     for two independent single-warp FA launches. End-to-end voc_dism still
     defaults to Triton embedding; opt in with embedding_backend="cuda" there.
     block_v=128 is an experimental WS option for D=32/64 only.
+    row_rng=(seed,offset,probability) optionally appends an int32 packed hard-row
+    bitset as a ninth output (WS/mixed probability only); does not consume RNG.
     """
     if torch.is_grad_enabled() and any(x.requires_grad for x in (q, k, q_voc, k_voc)):
         raise NotImplementedError("CUDA embedding forward has no autograd wrapper yet")
-    return tuple(_extension().forward(q, k, q_voc, k_voc, float(sm_scale), warp_specialized, block_v))
+    return tuple(_extension().forward(q, k, q_voc, k_voc, float(sm_scale), warp_specialized, block_v, row_rng))
 
 
 @lru_cache(None)

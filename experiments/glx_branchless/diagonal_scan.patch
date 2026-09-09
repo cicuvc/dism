@@ -1,0 +1,181 @@
+--- a/include/glx/diagonal_scan.cuh
++++ b/include/glx/diagonal_scan.cuh
+@@ -1491,10 +1491,10 @@
+         #pragma unroll
+         for(int r = 0; r < ROW_BLOCKS; r++){
+             auto send_value = primary_sum[r];
+-            if(lam4 >= 3){
+-                send_value.insert(high_eid, send_value.extract(low_eid));
+-                send_value.insert(low_eid, vstate.init[r]);
+-            }
++auto shifted = send_value;
++            shifted.insert(high_eid, send_value.extract(low_eid));
++            shifted.insert(low_eid, vstate.init[r]);
++            send_value = choose(lam4 >= 3, send_value, shifted);
+             cross_lane[r] = send_value.shuffle(boundary_lane);
+         }
+ 
+@@ -1513,10 +1513,10 @@
+         #pragma unroll
+         for(int r = 0; r < ROW_BLOCKS; r++){
+             auto send_value = primary_sum[r];
+-            if(lam4 >= 2){
+-                send_value.insert(high_eid, send_value.extract(low_eid));
+-                send_value.insert(low_eid, vstate.init[r]);
+-            }
++auto shifted = send_value;
++            shifted.insert(high_eid, send_value.extract(low_eid));
++            shifted.insert(low_eid, vstate.init[r]);
++            send_value = choose(lam4 >= 2, send_value, shifted);
+             constexpr int lane_mask = COL_BLOCKS == 2 ? 18 : 2;
+             cross_lane[r] = send_value.shuffle_xor(lane_mask);
+         }
+@@ -1566,10 +1566,10 @@
+         #pragma unroll
+         for(int r = 0; r < ROW_BLOCKS; r++){
+             auto send_value = primary_sum[r];
+-            if(lam4 >= 3){
+-                send_value.insert(high_eid, send_value.extract(low_eid));
+-                send_value.insert(low_eid, vstate.init[r]);
+-            }
++auto shifted = send_value;
++            shifted.insert(high_eid, send_value.extract(low_eid));
++            shifted.insert(low_eid, vstate.init[r]);
++            send_value = choose(lam4 >= 3, send_value, shifted);
+             cross_lane[r] = send_value.shuffle(boundary_lane);
+         }
+ 
+@@ -1684,10 +1684,10 @@
+         #pragma unroll
+         for(int r = 0; r < ROW_BLOCKS; r++){
+             auto send_value = primary_sum[r];
+-            if(lam4 == 0){
+-                send_value.insert(high_eid, send_value.extract(low_eid));
+-                send_value.insert(low_eid, vstate.init[r]);
+-            }
++auto shifted = send_value;
++            shifted.insert(high_eid, send_value.extract(low_eid));
++            shifted.insert(low_eid, vstate.init[r]);
++            send_value = choose(lam4 == 0, send_value, shifted);
+             cross_lane[r] = send_value.shuffle(boundary_lane);
+         }
+ 
+@@ -1707,10 +1707,10 @@
+         #pragma unroll
+         for(int r = 0; r < ROW_BLOCKS; r++){
+             auto send_value = primary_sum[r];
+-            if(lam4 <= 1){
+-                send_value.insert(high_eid, send_value.extract(low_eid));
+-                send_value.insert(low_eid, vstate.init[r]);
+-            }
++auto shifted = send_value;
++            shifted.insert(high_eid, send_value.extract(low_eid));
++            shifted.insert(low_eid, vstate.init[r]);
++            send_value = choose(lam4 <= 1, send_value, shifted);
+             constexpr int lane_mask = COL_BLOCKS == 2 ? 18 : 2;
+             cross_lane[r] = send_value.shuffle_xor(lane_mask);
+         }
+@@ -1763,10 +1763,10 @@
+         #pragma unroll
+         for(int r = 0; r < ROW_BLOCKS; r++){
+             auto send_value = primary_sum[r];
+-            if(lam4 == 0){
+-                send_value.insert(high_eid, send_value.extract(low_eid));
+-                send_value.insert(low_eid, vstate.init[r]);
+-            }
++auto shifted = send_value;
++            shifted.insert(high_eid, send_value.extract(low_eid));
++            shifted.insert(low_eid, vstate.init[r]);
++            send_value = choose(lam4 == 0, send_value, shifted);
+             cross_lane[r] = send_value.shuffle(boundary_lane);
+         }
+ 
+@@ -1850,10 +1850,10 @@
+         #pragma unroll
+         for(int r = 0; r < ROW_BLOCKS; r++){
+             auto send_value = data[r][COL_BLOCKS - 1];
+-            if(lam4 >= 3) { 
+-                send_value.insert(high_eid, send_value.extract(low_eid));
+-                send_value.insert(low_eid, vstate.init[r]);
+-            }
++auto shifted = send_value;
++            shifted.insert(high_eid, send_value.extract(low_eid));
++            shifted.insert(low_eid, vstate.init[r]);
++            send_value = choose(lam4 >= 3, send_value, shifted);
+             tmp[r] = send_value.shuffle(boundary_lane);
+         }
+         constexpr int phase2_pointwise_min_disp = (1 * COL_BLOCKS) / THREAD_ROWS;
+@@ -1868,10 +1868,10 @@
+         #pragma unroll
+         for(int r = 0; r < ROW_BLOCKS; r++){
+             auto send_value = data[r][COL_BLOCKS - 1];
+-            if(lam4 >= 2) { 
+-                send_value.insert(high_eid, send_value.extract(low_eid));
+-                send_value.insert(low_eid, vstate.init[r]);
+-            }
++auto shifted = send_value;
++            shifted.insert(high_eid, send_value.extract(low_eid));
++            shifted.insert(low_eid, vstate.init[r]);
++            send_value = choose(lam4 >= 2, send_value, shifted);
+             constexpr int lane_mask = COL_BLOCKS == 2 ? 18 : 2;
+             tmp[r] = send_value.shuffle_xor(lane_mask);
+         }
+@@ -1910,10 +1910,10 @@
+         #pragma unroll
+         for(int r = 0; r < ROW_BLOCKS; r++){
+             auto send_value = data[r][COL_BLOCKS - 1];
+-            if(lam4 >= 3) { 
+-                send_value.insert(high_eid, send_value.extract(low_eid));
+-                send_value.insert(low_eid, vstate.init[r]);
+-            }
++auto shifted = send_value;
++            shifted.insert(high_eid, send_value.extract(low_eid));
++            shifted.insert(low_eid, vstate.init[r]);
++            send_value = choose(lam4 >= 3, send_value, shifted);
+             tmp[r] = send_value.shuffle(boundary_lane);
+         }
+         
+@@ -2010,10 +2010,10 @@
+         #pragma unroll
+         for(int r = 0; r < ROW_BLOCKS; r++){
+             auto send_value = data[r][0];
+-            if(lam4 == 0){
+-                send_value.insert(high_eid, send_value.extract(low_eid));
+-                send_value.insert(low_eid, vstate.init[r]);
+-            }
++auto shifted = send_value;
++            shifted.insert(high_eid, send_value.extract(low_eid));
++            shifted.insert(low_eid, vstate.init[r]);
++            send_value = choose(lam4 == 0, send_value, shifted);
+             tmp[r] = send_value.shuffle(boundary_lane);
+         }
+ 
+@@ -2033,10 +2033,10 @@
+         #pragma unroll
+         for(int r = 0; r < ROW_BLOCKS; r++){
+             auto send_value = data[r][0];
+-            if(lam4 <= 1){
+-                send_value.insert(high_eid, send_value.extract(low_eid));
+-                send_value.insert(low_eid, vstate.init[r]);
+-            }
++auto shifted = send_value;
++            shifted.insert(high_eid, send_value.extract(low_eid));
++            shifted.insert(low_eid, vstate.init[r]);
++            send_value = choose(lam4 <= 1, send_value, shifted);
+             constexpr int lane_mask = COL_BLOCKS == 2 ? 18 : 2;
+             tmp[r] = send_value.shuffle_xor(lane_mask);
+         }
+@@ -2091,10 +2091,10 @@
+         #pragma unroll
+         for(int r = 0; r < ROW_BLOCKS; r++){
+             auto send_value = data[r][0];
+-            if(lam4 == 0){
+-                send_value.insert(high_eid, send_value.extract(low_eid));
+-                send_value.insert(low_eid, vstate.init[r]);
+-            }
++auto shifted = send_value;
++            shifted.insert(high_eid, send_value.extract(low_eid));
++            shifted.insert(low_eid, vstate.init[r]);
++            send_value = choose(lam4 == 0, send_value, shifted);
+             tmp[r] = send_value.shuffle(boundary_lane);
+         }

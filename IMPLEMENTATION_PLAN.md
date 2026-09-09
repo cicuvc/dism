@@ -703,6 +703,25 @@ D64混合tanh首轮两方向分别523.261→327.887us、512.237→337.854us；
 19 项 finite memcheck 零错误，27 项训练冒烟/重放检查通过。摘要两方向首测
 328/337us→227/247us；范围、限制与复现见 `dism_v2/FINITE_SENTINEL.md`。
 
+Row bitset 实验已按授权接入：CUDA embedding 收尾生成 packed 行决策，host RNG
+预留前移，core 前后向直接复用；默认关闭，`DISM_ROW_BITSET=1` 启用。
+62 项 bitset 测试及前向 codegen 通过，memcheck 零错误；详细协议、资源和实测见
+`dism_v2/ROW_BITSET.md`。首测 dV+摘要约1–1.5%收益，端到端尚无稳定收益，
+暂不默认切换、不根据指令数预设加速比。
+
+摘要元数据阶段：int32 标签与 soft/hard/mixed 编译期分发已接入，int64 诊断回退保留。
+full251项通过，finite118项和lineinfo memcheck通过；首轮D64混合摘要int64→int32
+236.24→221.15us。下一tile元数据寄存器预取及摘要store重排等待新NCU再决定。
+详细边界、资源与未测项目见 `dism_v2/LABEL_METADATA.md`。
+
+### 摘要输出寄存器重排实验（2026-09-09）
+
+已比较lane28补列31/63、两条完整warp store的方案。理论sector足迹18→16，
+但D64混合int32/tanh_finite三轮CUPTI中q_from_k约慢2.13%，k_from_q约快0.44%，
+无一致收益，默认恢复原写回。新增shuffle带来两处collective慢路径与一处BRA.DIV；
+full251项通过，finite54组新旧隔离进程逐位一致，memcheck零错误，无spill/CALL。
+未测试shared/TMA批量写回或新增NCU。候选与实测见experiments/summary_store/README.md。
+
 ## 阶段 6：varlen
 
 - 增加 packed tokens 与 sequence offsets 接口，定义与 fixed-length 逐序列调用等价的数学结果。

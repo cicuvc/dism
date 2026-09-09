@@ -8,10 +8,12 @@
 void launch_embedding(const void*, const void*, const void*, void*, float*, float*, int*,
                       int, int, int, int, int, float, cudaStream_t);
 void launch_embedding_fused(const void*,const void*,const void*,const void*,void*,void*,
-                           float*,float*,float*,float*,int*,int*,int,int,int,int,int,int,float,cudaStream_t);
+                           float*,float*,float*,float*,int*,int*,int,int,int,int,int,int,float,cudaStream_t,
+                           uint32_t*,uint64_t,uint64_t,float);
 
 std::vector<torch::Tensor> embedding_forward(torch::Tensor q, torch::Tensor k,
-        torch::Tensor eq, torch::Tensor ek, double scale, bool ws, int block_v) {
+        torch::Tensor eq, torch::Tensor ek, double scale, bool ws, int block_v,
+        std::optional<std::tuple<uint64_t,uint64_t,float>> row_rng) {
     TORCH_CHECK(q.is_cuda() && q.dim()==4, "q must be CUDA [B,H,N,D]");
     for (const auto& x : {q,k,eq,ek})
         TORCH_CHECK(x.device()==q.device() && x.is_contiguous() && x.scalar_type()==at::kBFloat16,
@@ -37,10 +39,18 @@ std::vector<torch::Tensor> embedding_forward(torch::Tensor q, torch::Tensor k,
     auto pk=torch::empty_like(lk),pq=torch::empty_like(lk);
     auto ik=torch::empty({b,h,n},q.options().dtype(at::kInt)),iq=torch::empty_like(ik);
     auto stream=c10::cuda::getCurrentCUDAStream();
+    torch::Tensor bits;
+    uint64_t seed=0,offset=0;float probability=0;
+    if(row_rng) {
+        std::tie(seed,offset,probability)=*row_rng;
+        TORCH_CHECK(ws && probability>0 && probability<1 && offset%4==0,"bitset requires WS and mixed probability");
+        bits=torch::empty({b,h,(n+31)/32},q.options().dtype(at::kInt));
+    }
     if(ws) {
         launch_embedding_fused(q.data_ptr(),k.data_ptr(),eq.data_ptr(),ek.data_ptr(),oq.data_ptr(),ok.data_ptr(),
             lk.data_ptr<float>(),lq.data_ptr<float>(),pk.data_ptr<float>(),pq.data_ptr<float>(),
-            ik.data_ptr<int>(),iq.data_ptr<int>(),b*h,h,n,v,d,block_v,float(scale),stream);
+            ik.data_ptr<int>(),iq.data_ptr<int>(),b*h,h,n,v,d,block_v,float(scale),stream,
+            row_rng?reinterpret_cast<uint32_t*>(bits.data_ptr<int>()):nullptr,seed,offset,probability);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     } else {
     launch_embedding(k.data_ptr(),ek.data_ptr(),eq.data_ptr(),oq.data_ptr(),lk.data_ptr<float>(),
@@ -50,6 +60,8 @@ std::vector<torch::Tensor> embedding_forward(torch::Tensor q, torch::Tensor k,
                      pq.data_ptr<float>(),iq.data_ptr<int>(),b*h,h,n,v,d,float(scale),stream);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
-    return {oq,ok,lk,lq,pk,pq,ik,iq};
+    std::vector<torch::Tensor> result{oq,ok,lk,lq,pk,pq,ik,iq};
+    if(row_rng) result.push_back(bits);
+    return result;
 }
 PYBIND11_MODULE(TORCH_EXTENSION_NAME,m) { m.def("forward", &embedding_forward); }

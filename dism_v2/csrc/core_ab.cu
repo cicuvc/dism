@@ -66,8 +66,15 @@ __global__ void run(__grid_constant__ const Args p,__grid_constant__ const CUten
             }
             __syncwarp();
         }
-        uint32_t hard0=__ballot_sync(0xffffffff,qb+lane<p.n && row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qb+lane,p.hard_prob));
-        uint32_t hard1=__ballot_sync(0xffffffff,qb+lane+32<p.n && row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qb+lane+32,p.hard_prob));
+uint32_t hard0,hard1;
+            if(p.hard_bits) {
+                const int words=(p.n+31)/32;
+                hard0=qb<p.n?p.hard_bits[int64_t(bh)*words+qb/32]:0;
+                hard1=qb+32<p.n?p.hard_bits[int64_t(bh)*words+qb/32+1]:0;
+            } else {
+                hard0=__ballot_sync(0xffffffff,qb+lane<p.n && row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qb+lane,p.hard_prob));
+        hard1=__ballot_sync(0xffffffff,qb+lane+32<p.n && row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qb+lane+32,p.hard_prob));
+            }
         Reverse::HState bottom;
         if(chunk+1<p.padded_n/32) {
             int q=qb+8*(lane&3)+8-lane/4;

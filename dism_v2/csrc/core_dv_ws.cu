@@ -21,7 +21,7 @@ template<int D,int DV> struct Shared {
 __device__ __forceinline__ float transposed_score(const Args& p,float dot,int bh,int q,int k,bool hard) {
     if(q>=p.n || k>=p.n || k>q) return LOG_ZERO;
     float tau=p.tau[bh%p.heads];
-    if(hard) return p.q_label[int64_t(bh)*p.n+q]==p.k_label[int64_t(bh)*p.n+k]?tau*LOG2E:LOG_ZERO;
+    if(hard) return p.query_label(int64_t(bh)*p.n+q)==p.key_label(int64_t(bh)*p.n+k)?tau*LOG2E:LOG_ZERO;
     return (dot*p.scale-p.lse[int64_t(bh)*p.n+(p.column_lse?k:q)]+tau)*LOG2E;
 }
 
@@ -112,10 +112,17 @@ __global__ __launch_bounds__(384,1) void value_backward(
         Reverse::VState right;
         for(int t=0;t*64<p.padded_n;++t) {
             int s=t%2,phase=(t/2)&1,qb=p.padded_n-64-t*64;
-            uint32_t hard0=__ballot_sync(0xffffffff,qb+lane<p.n &&
+uint32_t hard0,hard1;
+            if(p.hard_bits) {
+                const int words=(p.n+31)/32;
+                hard0=qb<p.n?p.hard_bits[int64_t(bh)*words+qb/32]:0;
+                hard1=qb+32<p.n?p.hard_bits[int64_t(bh)*words+qb/32+1]:0;
+            } else {
+                hard0=__ballot_sync(0xffffffff,qb+lane<p.n &&
                 row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qb+lane,p.hard_prob));
-            uint32_t hard1=__ballot_sync(0xffffffff,qb+lane+32<p.n &&
+            hard1=__ballot_sync(0xffffffff,qb+lane+32<p.n &&
                 row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qb+lane+32,p.hard_prob));
+            }
             wait(&shared.ready[s],phase);
         Scalar scalar;
         {

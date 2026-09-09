@@ -34,7 +34,7 @@ def delta(dout,out):
 
 
 def value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,boundaries,*,sm_scale,rng_state,
-                   v=None,delta=None,warp_specialized=False):
+                   v=None,delta=None,warp_specialized=False,hard_bits=None):
     """Compute FP32 dV using selected A/B/LSE and saved forward states.
 
     Replays the forward direction and row RNG without new generator consumption.
@@ -62,11 +62,11 @@ def value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,boundaries,*,sm_s
         raise NotImplementedError("higher-order backward is not implemented")
     result = _extension().value_gradient(a,b,dout,lse,tau,q_label,k_label,normalizer,
         boundaries.vertical,boundaries.horizontal,float(sm_scale),rng_state.direction=="k_from_q",
-        rng_state.hard_prob,rng_state.seed,rng_state.offset,v,delta,warp_specialized)
+        rng_state.hard_prob,rng_state.seed,rng_state.offset,v,delta,warp_specialized,hard_bits)
     return tuple(result) if v is not None else result[0]
 
 
-def operand_gradient(a,b,v,dout,lse,tau,q_label,k_label,normalizer,delta,boundaries,g_boundary,*,sm_scale,rng_state,warp_specialized=True):
+def operand_gradient(a,b,v,dout,lse,tau,q_label,k_label,normalizer,delta,boundaries,g_boundary,*,sm_scale,rng_state,warp_specialized=True,hard_bits=None):
     """B3: FP32 (dA,dB,dLSE,drtau), no global G; defaults to 12-warp WS.
 
     Requires G32 boundaries from value_gradient(v=...,delta=...).
@@ -93,4 +93,4 @@ def operand_gradient(a,b,v,dout,lse,tau,q_label,k_label,normalizer,delta,boundar
         raise RuntimeError("operand_gradient uses nondeterministic TMA atomic reduction")
     return tuple(_extension().operand_gradient(a,b,v,dout,lse,tau,q_label,k_label,normalizer,delta,
         boundaries.vertical,boundaries.horizontal,g_boundary,float(sm_scale),rng_state.direction=="k_from_q",
-        rng_state.hard_prob,rng_state.seed,rng_state.offset,warp_specialized))
+        rng_state.hard_prob,rng_state.seed,rng_state.offset,warp_specialized,hard_bits))

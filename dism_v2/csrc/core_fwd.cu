@@ -39,7 +39,7 @@ __device__ __forceinline__ float score(const Args& p, float dot, int bh, int i, 
         bool hard, float cached_tau, float cached_lse, int64_t cached_label) {
     if(i>=p.n || j>=p.n || j>i) return LOG_ZERO;
     float tau=cached_tau;
-    if(hard) return cached_label==p.k_label[int64_t(bh)*p.n+j]?tau*LOG2E:LOG_ZERO;
+    if(hard) return cached_label==p.key_label(int64_t(bh)*p.n+j)?tau*LOG2E:LOG_ZERO;
     float l=p.column_lse?p.lse[int64_t(bh)*p.n+j]:cached_lse;
     return (dot*p.scale-l+tau)*LOG2E;
 }
@@ -111,11 +111,18 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
     } else {
         asm volatile("setmaxnreg.inc.sync.aligned.u32 232;" ::: "memory");
         // One lane per query row generates a decision, before the key loop.
-        int decision=0;
-        if(lane<16 && qbase+lane<p.n)
-            decision=row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qbase+lane,p.hard_prob);
-        bool hard[2]={bool(__shfl_sync(0xffffffff,decision,lane/4)),
-                      bool(__shfl_sync(0xffffffff,decision,8+lane/4))};
+bool hard[2];
+            if(p.hard_bits) {
+                uint32_t bits=qbase<p.n?p.hard_bits[int64_t(bh)*((p.n+31)/32)+qbase/32]:0;
+                hard[0]=(bits>>((qbase%32)+lane/4))&1;
+                hard[1]=(bits>>((qbase%32)+8+lane/4))&1;
+            } else {
+                int decision=0;
+                if(lane<16 && qbase+lane<p.n)
+                    decision=row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qbase+lane,p.hard_prob);
+                hard[0]=__shfl_sync(0xffffffff,decision,lane/4);
+                hard[1]=__shfl_sync(0xffffffff,decision,8+lane/4);
+            }
         // Cache query-row invariants before the key loop. Column LSE remains
         // indexed by key inside score(); the two directions are not equivalent.
         float cached_tau=p.tau[bh%p.heads], cached_lse[2];
@@ -124,7 +131,7 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
         for(int r=0;r<2;++r) {
             int i=qbase+r*8+lane/4;
             cached_lse[r]=(i<p.n && !p.column_lse)?p.lse[int64_t(bh)*p.n+i]:0.f;
-            cached_label[r]=i<p.n?p.q_label[int64_t(bh)*p.n+i]:-1;
+            cached_label[r]=i<p.n?p.query_label(int64_t(bh)*p.n+i):-1;
         }
         Buffer::VState left;
         kt::rt_fl<16,DV> out{0.f};

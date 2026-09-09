@@ -24,7 +24,7 @@ template<int D,int DV,bool SUMMARY> struct RecomputeShared {
 __device__ __forceinline__ float transposed_score(const Args& p,float dot,int bh,int q,int k,bool hard) {
     if(q>=p.n || k>=p.n || k>q) return LOG_ZERO;
     float tau=p.tau[bh%p.heads];
-    if(hard) return p.q_label[int64_t(bh)*p.n+q]==p.k_label[int64_t(bh)*p.n+k]?tau*LOG2E:LOG_ZERO;
+    if(hard) return p.query_label(int64_t(bh)*p.n+q)==p.key_label(int64_t(bh)*p.n+k)?tau*LOG2E:LOG_ZERO;
     return (dot*p.scale-p.lse[int64_t(bh)*p.n+(p.column_lse?k:q)]+tau)*LOG2E;
 }
 
@@ -78,10 +78,17 @@ __global__ void value_backward(__grid_constant__ const Args p,
     // query tile or neighbour warp supplies recompute state.
     for(int qb=p.padded_n-64;qb>=0;qb-=64) {
         // Two decisions per lane, shared across all 16 held keys. No global mask.
-        uint32_t hard0=__ballot_sync(0xffffffff,qb+lane<p.n &&
+uint32_t hard0,hard1;
+            if(p.hard_bits) {
+                const int words=(p.n+31)/32;
+                hard0=qb<p.n?p.hard_bits[int64_t(bh)*words+qb/32]:0;
+                hard1=qb+32<p.n?p.hard_bits[int64_t(bh)*words+qb/32+1]:0;
+            } else {
+                hard0=__ballot_sync(0xffffffff,qb+lane<p.n &&
             row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qb+lane,p.hard_prob));
-        uint32_t hard1=__ballot_sync(0xffffffff,qb+lane+32<p.n &&
+        hard1=__ballot_sync(0xffffffff,qb+lane+32<p.n &&
             row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qb+lane+32,p.hard_prob));
+            }
         if(qb+64<=p.n) {
             if(lane==0) {
                 expect(&shared.ready,sizeof(shared.query)+sizeof(shared.dout));

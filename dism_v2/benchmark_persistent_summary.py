@@ -16,6 +16,7 @@ def main():
     parser.add_argument('--direction',default='q_from_k',choices=['q_from_k','k_from_q'])
     parser.add_argument('--hard-prob',type=float,default=.5)
     parser.add_argument('--d',type=int,default=64,choices=[32,64,128])
+    parser.add_argument('--label-dtype',choices=['int32','int64'],default='int32')
     args=parser.parse_args()
     if args.baseline_binary:
         name='dism_v2_core_sm120a'+('' if TILE_LSE=='full' else '_'+TILE_LSE)
@@ -29,7 +30,8 @@ def main():
     emb=embedding(q,k,qv,kv,1.)
     tau=torch.full((4,),3.,device='cuda')
     a,b,lse=(q,emb[0],emb[3]) if args.direction=='q_from_k' else (emb[1],k,emb[2])
-    qlabel,klabel=emb[7].long(),emb[6].long()
+    dtype=torch.int32 if args.label_dtype=='int32' else torch.int64
+    qlabel,klabel=emb[7].to(dtype),emb[6].to(dtype)
     state=None
     def run():
         nonlocal state

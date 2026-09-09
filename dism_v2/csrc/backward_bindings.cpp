@@ -19,7 +19,8 @@ std::vector<torch::Tensor> value_gradient(torch::Tensor a,torch::Tensor b,torch:
         torch::Tensor lse,torch::Tensor tau,torch::Tensor ql,torch::Tensor kl,
         torch::Tensor norm,torch::Tensor vertical,torch::Tensor horizontal,
         double scale,bool column_lse,double probability,uint64_t seed,uint64_t offset,
-        std::optional<torch::Tensor> value,std::optional<torch::Tensor> delta,bool warp_specialized) {
+        std::optional<torch::Tensor> value,std::optional<torch::Tensor> delta,bool warp_specialized,
+        std::optional<torch::Tensor> hard_bits) {
     TORCH_CHECK(a.is_cuda() && a.dim()==4,"A must be CUDA [B,H,N,D]");
     for(const auto& x:{a,b,dout,lse,tau,ql,kl,norm,vertical,horizontal})
         TORCH_CHECK(x.device()==a.device() && x.is_contiguous(),"inputs must be contiguous on same CUDA device");
@@ -30,7 +31,7 @@ std::vector<torch::Tensor> value_gradient(torch::Tensor a,torch::Tensor b,torch:
     TORCH_CHECK((d==32||d==64||d==128) && (dv==32||dv==64||dv==128),"D/DV must be 32,64,128");
     for(const auto& x:{a,b,dout}) TORCH_CHECK(x.scalar_type()==at::kBFloat16,"A/B/dO must be BF16");
     for(const auto& x:{lse,tau,norm,vertical,horizontal}) TORCH_CHECK(x.scalar_type()==at::kFloat,"states must be FP32");
-    TORCH_CHECK(ql.scalar_type()==at::kLong && kl.scalar_type()==at::kLong,"labels must be int64");
+    TORCH_CHECK((ql.scalar_type()==at::kLong || ql.scalar_type()==at::kInt) && kl.scalar_type()==ql.scalar_type(),"labels must have matching int32/int64 dtype");
     for(const auto& x:{lse,ql,kl,norm})
         TORCH_CHECK(x.dim()==3 && x.size(0)==batch && x.size(1)==heads && x.size(2)==n,"row metadata shape mismatch");
     TORCH_CHECK(tau.dim()==1 && tau.size(0)==heads,"tau must be [H]");
@@ -49,10 +50,16 @@ std::vector<torch::Tensor> value_gradient(torch::Tensor a,torch::Tensor b,torch:
     auto output=torch::empty(dout.sizes(),dout.options().dtype(at::kFloat));
     dism_v2::Args p{};
     p.a=a.data_ptr(); p.b=b.data_ptr(); p.lse=lse.data_ptr<float>(); p.tau=tau.data_ptr<float>();
-    p.q_label=ql.data_ptr<int64_t>(); p.k_label=kl.data_ptr<int64_t>();
+    p.q_label=reinterpret_cast<const int64_t*>(ql.data_ptr()); p.k_label=reinterpret_cast<const int64_t*>(kl.data_ptr());
     p.normalizer=norm.data_ptr<float>(); p.vertical=vertical.data_ptr<float>(); p.horizontal=horizontal.data_ptr<float>();
     p.n=n; p.padded_n=np; p.batch_heads=batch*heads; p.heads=heads;
     p.scale=scale; p.column_lse=column_lse; p.hard_prob=probability; p.seed=seed; p.offset=offset;
+    p.label32=ql.scalar_type()==at::kInt;
+    if(hard_bits) {
+        TORCH_CHECK(hard_bits->device()==a.device() && hard_bits->scalar_type()==at::kInt && hard_bits->is_contiguous() &&
+            hard_bits->sizes()==torch::IntArrayRef({batch,heads,(n+31)/32}),"invalid hard bitset");
+        p.hard_bits=reinterpret_cast<const uint32_t*>(hard_bits->data_ptr<int>());
+    }
     auto stream=c10::cuda::getCurrentCUDAStream();
     if(value) {
         auto summary=torch::empty({batch,heads,np/32,np,2},norm.options());
@@ -95,7 +102,8 @@ torch::Tensor delta(torch::Tensor dout,torch::Tensor out) {
 std::vector<torch::Tensor> operand_gradient(torch::Tensor a,torch::Tensor b,torch::Tensor v,torch::Tensor dout,
         torch::Tensor lse,torch::Tensor tau,torch::Tensor ql,torch::Tensor kl,torch::Tensor norm,
         torch::Tensor dd,torch::Tensor vertical,torch::Tensor horizontal,torch::Tensor boundary,
-        double scale,bool column_lse,double probability,uint64_t seed,uint64_t offset,bool warp_specialized) {
+        double scale,bool column_lse,double probability,uint64_t seed,uint64_t offset,bool warp_specialized,
+        std::optional<torch::Tensor> hard_bits) {
     TORCH_CHECK(a.is_cuda() && a.dim()==4,"A must be CUDA [B,H,N,D]");
     for(const auto& x:{a,b,v,dout,lse,tau,ql,kl,norm,vertical,horizontal,dd,boundary})
         TORCH_CHECK(x.device()==a.device() && x.is_contiguous(),"inputs must be contiguous on same CUDA device");
@@ -106,7 +114,7 @@ std::vector<torch::Tensor> operand_gradient(torch::Tensor a,torch::Tensor b,torc
     TORCH_CHECK((d==32||d==64||d==128) && (dv==32||dv==64||dv==128),"D/DV must be 32,64,128");
     for(const auto& x:{a,b,dout}) TORCH_CHECK(x.scalar_type()==at::kBFloat16,"A/B/dO must be BF16");
     for(const auto& x:{lse,tau,norm,vertical,horizontal}) TORCH_CHECK(x.scalar_type()==at::kFloat,"states must be FP32");
-    TORCH_CHECK(ql.scalar_type()==at::kLong && kl.scalar_type()==at::kLong,"labels must be int64");
+    TORCH_CHECK((ql.scalar_type()==at::kLong || ql.scalar_type()==at::kInt) && kl.scalar_type()==ql.scalar_type(),"labels must have matching int32/int64 dtype");
     for(const auto& x:{lse,ql,kl,norm})
         TORCH_CHECK(x.dim()==3 && x.size(0)==batch && x.size(1)==heads && x.size(2)==n,"row metadata shape mismatch");
     TORCH_CHECK(tau.dim()==1 && tau.size(0)==heads,"tau must be [H]");
@@ -128,10 +136,16 @@ std::vector<torch::Tensor> operand_gradient(torch::Tensor a,torch::Tensor b,torc
     auto tau_partial=torch::empty({batch,heads,partial_count},tau.options());
     dism_v2::Args p{};
     p.a=a.data_ptr();p.b=b.data_ptr();p.v=v.data_ptr();p.lse=lse.data_ptr<float>();p.tau=tau.data_ptr<float>();
-    p.q_label=ql.data_ptr<int64_t>();p.k_label=kl.data_ptr<int64_t>();p.normalizer=norm.data_ptr<float>();
+    p.q_label=reinterpret_cast<const int64_t*>(ql.data_ptr());p.k_label=reinterpret_cast<const int64_t*>(kl.data_ptr());p.normalizer=norm.data_ptr<float>();
     p.vertical=vertical.data_ptr<float>();p.horizontal=horizontal.data_ptr<float>();
     p.n=n;p.padded_n=np;p.batch_heads=batch*heads;p.heads=heads;p.scale=scale;p.column_lse=column_lse;
     p.hard_prob=probability;p.seed=seed;p.offset=offset;
+    p.label32=ql.scalar_type()==at::kInt;
+    if(hard_bits) {
+        TORCH_CHECK(hard_bits->device()==a.device() && hard_bits->scalar_type()==at::kInt && hard_bits->is_contiguous() &&
+            hard_bits->sizes()==torch::IntArrayRef({batch,heads,(n+31)/32}),"invalid hard bitset");
+        p.hard_bits=reinterpret_cast<const uint32_t*>(hard_bits->data_ptr<int>());
+    }
     auto launch=warp_specialized?dism_v2::launch_operand_backward_ws:dism_v2::launch_operand_backward;
     launch(p,d,dv,dout.data_ptr(),dd.data_ptr<float>(),boundary.data_ptr<float>(),
         da.data_ptr<float>(),db.data_ptr<float>(),dlse.data_ptr<float>(),tau_partial.data_ptr<float>(),

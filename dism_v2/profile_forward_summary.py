@@ -16,6 +16,7 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--direction',choices=('q_from_k','k_from_q'),default='q_from_k')
     parser.add_argument('--hard-prob',type=float,default=.5)
+    parser.add_argument('--label-dtype',choices=('int32','int64'),default='int32')
     args=parser.parse_args()
     torch.manual_seed(0)
     q,k,v=[torch.randn(64,4,1024,64,device='cuda',dtype=torch.bfloat16) for _ in range(3)]
@@ -27,7 +28,8 @@ def main():
     gen=torch.Generator(device='cuda').manual_seed(777)
     state=None
     for _ in range(11):
-        result=forward(a,b,v,lse,tau,emb[7].long(),emb[6].long(),sm_scale=1.,
+        dtype=torch.int32 if args.label_dtype=='int32' else torch.int64
+        result=forward(a,b,v,lse,tau,emb[7].to(dtype),emb[6].to(dtype),sm_scale=1.,
             direction=args.direction,hard_prob=args.hard_prob,
             generator=gen if state is None else None,rng_state=state,
             return_rng_state=True,save_boundaries=True)
@@ -35,7 +37,7 @@ def main():
     torch.cuda.synchronize()
     print(json.dumps(dict(tile_lse=TILE_LSE,batch=64,heads=4,n=1024,d=64,dv=64,vocab=512,
         direction=args.direction,hard_prob=args.hard_prob,tau=3.,scale=1.,
-        finite_output=bool(torch.isfinite(result[0]).all()))),flush=True)
+        label_dtype=args.label_dtype,finite_output=bool(torch.isfinite(result[0]).all()))),flush=True)
 
 
 if __name__=='__main__':
