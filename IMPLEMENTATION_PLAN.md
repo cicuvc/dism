@@ -751,6 +751,31 @@ N65/257的leader串行尾块分别约13→35us、37→59us，回退明显。
 同配置Triton summary比较：CUDA纯soft约2.69–3.09倍、mixed约2.60–2.75倍相对吞吐；
 只比较summary GPU时间，不是端到端训练吞吐，见dism_v2/SUMMARY_VS_TRITON.md。
 
+### OUTPUT主kernel同类优化（本轮完成，2026-09-09）
+
+按summary记录建立完整审计与实施范围，见dism_v2/OUTPUT_OPTIMIZATION.md。
+第一步候选已做score/方向/模式/标签特化、寄存器元数据、单FFMA/selp，以及
+完整K/V单次TMA与K的LDSM布局修正；尚未改persistent Q/K/V或mailbox同步。
+finite codegen无CALL，但纯soft q方向D64/DV32、D128/DV128各新增STACK8，
+最初按约定暂停，随后用户已明确授权记录spill并继续。第一步full200项通过。
+第二步已接入persistent Q/K/V、按shared预算分配槽数、D128/DV128双段Q，
+WG mailbox/退出同步及单线程producer；finite36项多workload全D/DV重放和codegen通过。
+协作tail-producer候选有停滞/不一致，已移除；保留安全串行tail并记录性能风险。
+最终增加BF16x2成对O写回，消除STG.U16；full170项、finite154项通过，
+最终full/finite各507项端到端选定回归通过，反向重算257项通过。
+三类sanitizer各36项零错误，full/tanh/finite的CALL/TMA/寄存器重分配检查通过。
+OUTPUT只有D128/DV128仍有spill，按用户授权保留；摘要零spill要求不变。
+tanh严格core oracle在基线与最终版均120失败/13通过、失败集合相同，未放宽容差；
+既有backward全扩展零spill断言失败仍记录，不作为本轮数值失败隐藏。
+D64/DV64/B64/H4/N1024/V512、mixed/int32/finite+lineinfo，三轮CUPTI：
+q方向797.707→450.494us（1.77x），k方向837.867→455.806us（1.84x）。
+九种维度的N1024单轮对照均提升；N65约40→65us回退，N257约124–129→114–115us。
+NCU报告/tmp/dism-output-persistent-lineinfo-q.ncu-rep，467.58us、SM37.32%、
+tensor37.08%。约95.3%的剩余excessive global sectors来自横边/O写回，
+不再是重复score元数据加载；具体WG重叠尚未由时间线证明。
+本轮要求的实施/验证/性能审计已完成，未提交；剩余store布局、任务负载均衡、
+短序列尾加载和spill优化不声称已完成。完整记录见dism_v2/OUTPUT_OPTIMIZATION.md。
+
 ## 阶段 6：varlen
 
 - 增加 packed tokens 与 sequence offsets 接口，定义与 fixed-length 逐序列调用等价的数学结果。

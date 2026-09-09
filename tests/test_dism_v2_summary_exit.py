@@ -7,16 +7,16 @@ from dism_v2.core import forward
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 
 
-@pytest.mark.parametrize("d,direction,n", itertools.product(
-    (32,64,128), ("q_from_k","k_from_q"), (65,257)))
+@pytest.mark.parametrize("d,dv,direction,n", itertools.product(
+    (32,64,128), (32,64,128), ("q_from_k","k_from_q"), (65,257)))
 @torch.no_grad()
-def test_summary_exit_replay(d,direction,n):
+def test_summary_exit_replay(d,dv,direction,n):
     # More tasks than SMs; no dense Torch oracle in the sanitizer process.
     batch = torch.cuda.get_device_properties(0).multi_processor_count // 2 + 3
     torch.manual_seed(971)
     shape = (batch,2,n)
     a,b = [torch.randn((*shape,d),device="cuda",dtype=torch.bfloat16) for _ in range(2)]
-    v = torch.randn((*shape,32),device="cuda",dtype=torch.bfloat16)
+    v = torch.randn((*shape,dv),device="cuda",dtype=torch.bfloat16)
     lse = torch.full(shape,4.,device="cuda")
     tau = torch.zeros(2,device="cuda")
     qlabel,klabel = [torch.randint(0,11,shape,device="cuda",dtype=torch.int32) for _ in range(2)]

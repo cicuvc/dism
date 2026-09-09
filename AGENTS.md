@@ -35,6 +35,21 @@
 
 ## 实现组件与布局
 
+- OUTPUT主kernel已完成summary同类优化（2026-09-09）：90个D×DV×方向×模式/标签
+  特化，与30个summary合计120处inc/dec；score元数据寄存器缓存、单FFMA/selp。
+  每SM一个persistent CTA，独立Q TMA槽与跨任务Q/K0/V0预取，K/V完整tile各一条TMA；
+  D128/DV128为两个64行Q phase，先发K0/V0再等待Q0释放以装Q1。
+  K/V槽数按D行、DV列32/64/128分别(3,3,2)/(3,2,1)/(1,1,1)，
+  ready1/free256、WG mail128、WG独立退出；非对齐K/V尾部保留安全leader串行加载。
+  O为BF16x2成对写回，未新增shared中间布局；summary及外部GLX/TK未改。
+  用户允许继续spill，当前OUTPUT只在D128/DV128部分实例有spill；摘要仍须零spill。
+  full/finite选定端到端各507项、三类sanitizer各36项通过，九维度N1024性能提升，
+  N65串行尾加载明显回退。tanh严格oracle基线与新版均120失败/13通过，保持失败可见。
+  本条覆盖旧OUTPUT非persistent/双槽及39处重分配计数；详见dism_v2/OUTPUT_OPTIMIZATION.md。
+
+- 用户最新授权：OUTPUT core同类优化遇到spill记录并汇报，但不再因此暂停；
+  继续正确性、流水线及性能验证，不放宽数值容差。覆盖下文历史spill停报约定。
+
 - 当前已获用户接受的summary基线采用leader-only producer：producer WG dec40后先elect，仅warp8的
   elected线程进入task/key循环；其余线程走WG退出同步，不直接return。K-ready1，
   K-free256、mail128不变。尾块暂由leader串行安全搬运/补零，因此N65/257有明显
