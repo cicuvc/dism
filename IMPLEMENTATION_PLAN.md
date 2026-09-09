@@ -875,6 +875,17 @@ full/finite全扩展noCALL检查通过，选定端到端各507通过，finite bi
 尚未完成，默认仍OPT0。
 详见反向优化文档及backward_rhs_{timing,codegen}_sm120a.json。
 
+最终筛选：OPT11对冻结OPT0，full/finite各九维度×双方向×两轮（各72进程）
+全部提升；N65/257同样两轮32进程均提升。三层完整训练步，固定相同前向和CUDA
+embedding后仅替换反向，full71.891→59.332ms、finite66.260→55.961ms。
+据此默认切为OPT11/stages2，保留显式0–10，LSE仍默认full。
+原始样本见backward_final_{matrix_full,matrix_finite,tails,training}_sm120a.json。
+默认入口full/finite各194项及选定端到端各507项通过，finite bitset+布局63项通过。
+最终NCU报告/tmp/dism-backward-final-opt11-q.ncu-rep，两个kernel的tensor-active
+约41.83%/24.45%；B1仍有spill、B3主工况零spill，不宣称周期精确的WG overlap。
+六主kernel训练内每launch统计已完成，每模式每kernel60样本，详见优化文档。
+本轮反向优化目标的实施、验证、候选筛选和完整性能验收完成；既有精度失败保持可见。
+
 ## 阶段 6：varlen
 
 - 增加 packed tokens 与 sequence offsets 接口，定义与 fixed-length 逐序列调用等价的数学结果。

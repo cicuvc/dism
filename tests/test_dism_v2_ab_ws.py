@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import torch
 from torch.utils.cpp_extension import CUDA_HOME
-from dism_v2.backward import _extension
+from dism_v2.backward import _extension,DEFAULT_OPTIMIZATION
 from test_dism_v2_dv import run,exact_oracle_matmul,pytestmark
 
 def test_ab_ws_contract():
@@ -75,7 +75,7 @@ def test_ab_reference_bounded_soft(n,direction,record_property):
         check_summary=True,warp_specialized=True,check_g=True,check_ab=True,ab_warp_specialized=True,check_reference=True)
 
 def test_codegen():
-    optimization=int(os.environ.get('DISM_BWD_OPT','0'))
+    optimization=int(os.environ.get('DISM_BWD_OPT',DEFAULT_OPTIMIZATION))
     sass=subprocess.check_output([str(Path(CUDA_HOME)/"bin/cuobjdump"),"-sass",_extension().__file__],text=True)
     count=0
     for block in sass.split('Function : ')[1:]:

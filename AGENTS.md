@@ -226,6 +226,12 @@
 
 ## 验证与协作
 
+- 反向最终性能筛选后默认DISM_BWD_OPT=11、STAGES=2，覆盖下文历史默认OPT0条目。
+  full/finite九种D/DV×两方向×两轮计时均提升，D64/DV64的N65/257亦提升；
+  同前向/embedding的三层完整训练步吞吐分别提升约21.2%/18.4%。保留0–10显式选项，
+  默认11不包含OPT6预取或OPT7–9输出布局实验；不改LSE默认full、不放宽精度容差。
+  新默认full/finite各194项与选定端到端各507项通过，finite bitset+布局63项通过。
+  最终profile、六主kernel耗时和完成审计见dism_v2/BACKWARD_OPTIMIZATION.md。
 - 反向OPT5直接RHS LDSM已验证；OPT6跨任务首块A/dO预取（B1独立输入槽、
   B3复用Gsoft/dA scratch）协议验证通过但本批性能回退，保留实验、不切默认。
   OPT7在OPT5流水线上仅改dA输出64B swizzle，OPT8再用TK float2成对store；

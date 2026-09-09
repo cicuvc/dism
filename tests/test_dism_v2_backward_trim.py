@@ -11,7 +11,7 @@ pytestmark=pytest.mark.skipif(not torch.cuda.is_available(),reason='CUDA require
 def modules():
     prior=os.environ.get('DISM_BWD_OPT')
     prior_stages=os.environ.get('DISM_BWD_STAGES')
-    target=prior or '2'
+    target=prior or backward.DEFAULT_OPTIMIZATION
     if int(target)<2:pytest.skip('trim/persistent candidate required')
     try:
         out=[]
@@ -62,7 +62,7 @@ def test_trim_equivalence(modules,monkeypatch,d,dv,direction,probability,n,batch
         torch.testing.assert_close(x,y,rtol=0,atol=0)
     for x,y in zip(actual[3],baseline[3]):
         torch.testing.assert_close(x,y,rtol=3e-5,atol=3e-5)
-    if probability==1. and int(os.environ.get('DISM_BWD_OPT','0'))>=11:
+    if probability==1. and int(os.environ.get('DISM_BWD_OPT',backward.DEFAULT_OPTIMIZATION))>=11:
         for grad in actual[3][:3]:
             assert torch.count_nonzero(grad)==0 # dA/dB/dLSE; tau remains checked above.
     summary=actual[1]
@@ -72,7 +72,7 @@ def test_trim_equivalence(modules,monkeypatch,d,dv,direction,probability,n,batch
         assert torch.count_nonzero(omitted[...,1])==0
         assert torch.all(omitted[...,0]==float(chunk*32>=n))
 
-@pytest.mark.skipif(int(os.environ.get('DISM_BWD_OPT','2'))<3,reason='persistent candidate required')
+@pytest.mark.skipif(int(os.environ.get('DISM_BWD_OPT',backward.DEFAULT_OPTIMIZATION))<3,reason='persistent candidate required')
 @pytest.mark.parametrize('d,dv',((32,32),(64,64),(128,128)))
 @pytest.mark.parametrize('direction',('q_from_k','k_from_q'))
 @pytest.mark.parametrize('n',(1,65,129,257,385))
@@ -80,7 +80,7 @@ def test_persistent_epochs(modules,monkeypatch,d,dv,direction,n):
     test_trim_equivalence(modules,monkeypatch,d,dv,direction,.37,n,
         batch=torch.cuda.get_device_properties(0).multi_processor_count+3)
 
-@pytest.mark.skipif(int(os.environ.get('DISM_BWD_OPT','2'))<10,reason='specialized candidate required')
+@pytest.mark.skipif(int(os.environ.get('DISM_BWD_OPT',backward.DEFAULT_OPTIMIZATION))<10,reason='specialized candidate required')
 @pytest.mark.parametrize('d,dv',itertools.product((32,64,128),repeat=2))
 @pytest.mark.parametrize('direction',('q_from_k','k_from_q'))
 @pytest.mark.parametrize('probability',(0.,.37,1.))

@@ -7,13 +7,16 @@ Common projection/conv/FFN/optimizer code is unchanged; FFN uses existing compil
 """
 import argparse
 import collections
+import importlib.util
 import json
+import os
 from pathlib import Path
 import statistics
 import sys
 import time
 import torch
 from .autograd import voc_dism
+from .backward import DEFAULT_OPTIMIZATION
 from .dism_ref import voc_dism_ref
 from .kernel_config import TILE_LSE
 
@@ -26,9 +29,20 @@ def main():
     p.add_argument('--steps',type=int,default=5)
     p.add_argument('--hard-prob',type=float,default=.5)
     p.add_argument('--profile',action='store_true',help='CUPTI per-launch GPU times, not wall-clock throughput')
+    p.add_argument('--backward-binary',help='Frozen CUDA backward extension for a controlled whole-step comparison')
+    p.add_argument('--backward-module',help='Original PyInit name of the frozen extension')
     a=p.parse_args()
     if min(a.batch,a.warmup,a.steps)<1 or not 0<=a.hard_prob<=1:
         p.error('positive batch/warmup/steps and hard-prob in [0,1] required')
+    if a.backward_binary:
+        if a.backend!='cuda':
+            p.error('--backward-binary requires --backend cuda')
+        from . import backward
+        name=a.backward_module or 'dism_v2_backward_sm120a'+('' if TILE_LSE=='full' else '_'+TILE_LSE)
+        spec=importlib.util.spec_from_file_location(name,a.backward_binary)
+        module=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        backward._extension=lambda:module
     sys.path.insert(0,str(Path(__file__).resolve().parent))
     try:
         from . import copy_task as task
@@ -65,7 +79,10 @@ def main():
         dict(params=[x for x in model.parameters() if not hasattr(x,'_no_weight_decay')],weight_decay=.01)
     ],lr=.005)
     sched=task._build_cosine_warmup_scheduler(opt,1000,50,.1)
-    meta=dict(backend=a.backend,tile_lse=TILE_LSE,batch=b,n=n,layers=3,heads=4,d=64,dv=64,qk_vocab=512,
+    meta=dict(backend=a.backend,tile_lse=TILE_LSE,
+        backward_optimization=os.environ.get('DISM_BWD_OPT',DEFAULT_OPTIMIZATION),
+        backward_binary=a.backward_binary,backward_module=a.backward_module,
+        batch=b,n=n,layers=3,heads=4,d=64,dv=64,qk_vocab=512,
         d_model=dm,hard_prob=a.hard_prob,sm_scale=1,parameters=sum(x.numel() for x in model.parameters()),
         gpu=torch.cuda.get_device_name(),torch=torch.__version__,cuda=torch.version.cuda,
         scope='wall-clock synchronized full step: data, zero_grad, forward, CE, backward, clipping, AdamW, scheduler; no eval/logging/compilation',
@@ -95,12 +112,18 @@ def main():
                 for _ in range(a.steps): step()
                 torch.cuda.synchronize()
             groups=collections.defaultdict(list)
+            instances=collections.defaultdict(set)
             for event in sorted(prof.events(),key=lambda e:e.time_range.start):
                 if event.device_type==torch.autograd.DeviceType.CUDA and 'dism_v2::' in event.name:
-                    groups[event.name].append(event.time_range.elapsed_us())
+                    # Random direction now selects separate template instances.
+                    # Count launches by kernel family, not by score policy.
+                    name=event.name.split('<',1)[0]
+                    groups[name].append(event.device_time_total)
+                    instances[name].add(event.name)
             for name,times in groups.items():
                 assert len(times)==3*a.steps,(name,len(times))
                 print(json.dumps(dict(kind='kernel',name=name,count=len(times),
+                    instances=sorted(instances[name]),
                     median_us=statistics.median(times),mean_us=statistics.mean(times),
                     min_us=min(times),max_us=max(times),
                     occurrence_medians_us=[statistics.median(times[j::3]) for j in range(3)],

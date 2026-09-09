@@ -1,4 +1,11 @@
-# WS backward optimization plan (2026-09-09)
+# WS backward optimization report (2026-09-09)
+
+Final selected default: OPT11/stages2. Both requested kernels are optimized
+and measured across all nine shapes; default-entry validation and integrated
+timing are complete. Historical sections below record each experiment's
+then-current status, not today's dispatch. Known precision failures and
+accepted spill remain; this is optimization completion, not a claim of
+exact-gradient accuracy or completion of varlen/sm90.
 
 Goal: optimize BOTH summary+dV (`core_dv_ws.cu`) and operand/scalar gradients
 (`core_ab_ws.cu`), following the measured forward optimization workflow.
@@ -585,13 +592,167 @@ other spills remain recorded and accepted for this experiment.
 Raw timings/resources are in `benchmarks/backward_hard_gradient_*_sm120a.json`;
 OPT10 versus OPT5 results are in `benchmarks/backward_special_*_sm120a.json`.
 
-### Remaining work
+### Final screening: all-nine-shape full-mode matrix
 
-First-query prefetch and output-layout experiments have been measured without
-a stable net gain and remain opt-in. Complete all-nine-shape performance
-screening, integrated timing and final default selection before declaring
-the optimization goal complete. Do not infer a default dispatch policy from
-the main-shape finite measurements alone.
+Candidate source checkpoint464a8c5, OPT11/stages2 versus frozen original
+OPT0 binary. B64/H4/N1024/V512, BF16, hard_prob=.5, scale1, rtau3
+(within ln(D) for all tested D); actual CUDA embedding and forward states
+prepared outside timing. Two fresh-process rounds, alternating variant order,
+10 warmups and30 CUPTI samples per run;72 runs total. No concurrent GPU
+tests or clock locking. Every measured result is finite; this is not an
+independent gradient accuracy test.
+
+All nine dimensions improve in both directions. Speedup ranges over the two
+directions (pooled60-sample per-kernel medians):
+
+| D / DV | summary+dV | dA/dB/dLSE/dtau |
+|---|---:|---:|
+|32 /32|2.79–2.85x|2.35–2.38x|
+|32 /64|2.73–2.80x|2.41–2.46x|
+|32 /128|2.51–2.56x|2.39x|
+|64 /32|2.80–2.84x|2.16–2.25x|
+|64 /64|2.76x|2.24–2.29x|
+|64 /128|2.48–2.55x|2.25–2.32x|
+|128 /32|2.84–2.93x|1.92–1.93x|
+|128 /64|2.77–2.78x|1.88–1.92x|
+|128 /128|2.52–2.55x|1.83–1.86x|
+
+D64/DV64 q_from_k: B1 2653.554→962.715us, B3 3735.772→1668.423us;
+k_from_q: B1 2601.987→944.219us, B3 3575.421→1562.456us.
+Whole measured backward wrapper GPU means (including passing/scalar/auxiliary
+kernels, excluding embedding/forward/delta) are6491.110→2759.202us and
+6280.116→2654.571us respectively. These are NOT complete training-step times.
+Raw samples, round medians and frozen baseline SHA256 are in
+`benchmarks/backward_final_matrix_full_sm120a.json`.
+
+Spill remains: full OPT11 D128/DV128 stack maxima across policies are
+B1 344B/B3 296B; D64/DV64 B1 maximum40B and B3 zero. These are static stack
+sizes, not dynamic spilled-traffic estimates. No spill tuning in this sweep.
+The same72-run matrix in tanh_finite also improves every shape/direction:
+B1 2.83–3.79x, B3 1.72–2.60x. D64/DV64 q_from_k B1
+2260.708→657.709us, B3 3141.200→1502.648us; k_from_q B1
+2208.261→651.405us, B3 2914.482→1353.161us. Finite B3 has visible
+round variation (q candidate medians1476.008/1635.191us), so keep raw
+samples and avoid claiming small differences as stable improvements.
+Evidence: `benchmarks/backward_final_matrix_finite_sm120a.json`.
+### Complete training-step comparison
+
+Same3-layer copy model, B64/H4/N1024/D64/DV64/V512, mixed probability.5,
+random global direction, CUDA embedding forward/backward and current forward
+core in both arms. Only backward extension differs: frozen OPT0 vs OPT11.
+Each fresh process runs10 warmups then30 synchronized complete steps, two
+rounds with reversed variant order. Includes data generation, zero_grad,
+forward, CE, backward, clipping, AdamW and scheduler; excludes compilation,
+evaluation and logging. No CUPTI or concurrent GPU workload.
+
+| LSE mode | OPT0 step | OPT11 step | Input tokens/s, OPT0→OPT11 | Speedup |
+|---|---:|---:|---:|---:|
+|full|71.891ms|59.332ms|911,598→1,104,565|1.212x|
+|tanh_finite|66.260ms|55.961ms|989,073→1,171,104|1.184x|
+
+Pooled60-step medians. Full per-round medians: baseline71.829/71.964ms,
+candidate59.402/59.297ms; finite baseline66.268/66.170ms,
+candidate55.907/56.010ms. Loss and gradient norms remain finite in all
+measured steps; this short timing run is not a long-term training-convergence
+claim. Atomics and discrete labels can cause trajectories to differ.
+`benchmark_copy_training` now accepts `--backward-binary` and
+`--backward-module` to isolate the backward change. Its profile branch groups
+direction-specialized instances by kernel family, retaining original instance
+names, so random direction does not invalidate launch-count assertions.
+Raw step samples/configuration are in
+`benchmarks/backward_final_training_sm120a.json`.
+
+### Short sequences, final NCU and default selection
+
+N65/257, B64/H4/D64/DV64, mixed.5, both directions and full/finite,
+two alternating rounds:32 fresh processes, all outputs finite. Both kernels
+improve in every case. N65 B1 speedup1.69–1.83x/B3 1.33–1.58x;
+N257 B1 2.08–2.39x/B3 1.88–2.04x. These are only the measured short shapes,
+not a guarantee for arbitrary batch/length. Raw samples:
+`benchmarks/backward_final_tails_sm120a.json`.
+
+Final NCU report `/tmp/dism-backward-final-opt11-q.ncu-rep` includes source,
+both kernels, full set/40 passes each, D64/DV64 main mixed q_from_k/finite.
+Against initial frozen baseline, profiler durations B1 3.190016→0.890304ms,
+B3 4.384864→1.930944ms; tensor-active percentages19.26→41.83% and
+18.77→24.45%. Final issue-active48.28%/33.17%, dynamic shared
+36,992/53,376B. B1 still has1,126,384 local spilling requests; B3 has zero.
+Selected counters: `benchmarks/backward_final_ncu_sm120a.json`.
+NCU replay/clock conditions differ from normal CUPTI, so do not mix durations.
+These aggregate counters do not prove a specific pair of WGs overlaps in a
+particular cycle; source places the reverse dependency after independent
+recomputation, and no precise time-line overlap claim is made.
+
+Based on all-nine-shape, short-N and integrated measurements, default is now
+OPT11/stages2. Keep0–10 explicit, LSE default full and row_bitset default0.
+Default11 includes OPT1–5 and OPT10/11, NOT OPT6 first-A/dO prefetch or
+OPT7–9 output-layout experiments. Retain rejected score reassociation and
+accepted spill/strict numerical failures in the evidence rather than hiding
+them. No automatic per-shape/stage dispatch threshold is inferred.
+
+### Six principal launches within training
+
+Unspecified DISM_BWD_OPT (new default11), same3-layer main mixed training
+configuration,10 warmups/20 measured steps,60 launches per family. CUPTI
+median per launch in microseconds, pooled across layers/global directions:
+
+| Kernel | full | tanh_finite |
+|---|---:|---:|
+|Forward summary|427.870|222.719|
+|Forward passing|31.152|31.616|
+|Forward output|827.995|402.014|
+|Backward summary+dV|954.843|639.612|
+|Backward passing|48.144|47.920|
+|Backward dA/dB/dLSE/dtau|1705.511|1499.976|
+
+No division by three: each sample already represents one layer's launch.
+Auxiliary delta/tau reduction and embedding are excluded from this six-row
+table, retained in `benchmarks/backward_final_six_launches_sm120a.json`.
+Backward occurrence order is layers2/1/0, forward0/1/2. Sum of medians is not
+a measured full training-step duration. Profiler launch-count assertions pass
+for all12 recorded core/embedding/auxiliary families in both modes.
+
+Reproduce the six-launch measurement (fresh process per LSE mode):
+
+```bash
+DISM_TILE_LSE=full /home/cicuvc/miniconda3/envs/blkw/bin/python -m dism_v2.benchmark_copy_training --backend cuda --batch 64 --warmup 10 --steps 20 --profile
+DISM_TILE_LSE=tanh_finite /home/cicuvc/miniconda3/envs/blkw/bin/python -m dism_v2.benchmark_copy_training --backend cuda --batch 64 --warmup 10 --steps 20 --profile
+```
+
+### Final default-entry validation and completion audit
+
+With DISM_BWD_OPT absent, full and tanh_finite each pass194 checks:
+108 nine-shape/mode/direction equivalence cases,30 persistent epoch cases,
+54 high-bit int64 cases, and both whole-extension/legacy B3 codegen gates.
+This covers the actual default dispatch rather than an explicitly selected
+candidate. Full60.93s/finite47.00s. Selected autograd wiring/training/replay
+checks each507 passed/398 deselected (4.46s/4.44s); finite bitset and host
+output-layout tests63 passed (2.00s).
+
+CUDA source is unchanged from checkpoint464a8c5: its expanded full strict
+suite414 passed/26 known numerical failures matches frozen OPT5's failure
+IDs. OPT11 memcheck/racecheck/synccheck each7 passed, zero errors/hazards
+(3.28s/125.61s/2.83s). The default selection did not change tolerances or
+convert known failures to xfail. Spill/noCALL/native TMA/register-role
+checks use current compiled binaries; detailed per-policy resources remain
+in `backward_hard_gradient_codegen_sm120a.json`.
+
+| Requirement | Inspected evidence and disposition |
+|---|---|
+|Both B1 and B3 optimized|Current core_dv_ws/core_ab_ws implement metadata, trim, persistent held inputs, full-width TMA, WG mail, direct RHS and specialization. Both improve in every measured nine-shape case.|
+|Scalar arithmetic and mode semantics|Reassociation rejected after new precision failures; accepted variant preserves old score order. Pure-hard G/rtau retained and zero dA/dB/dLSE explicitly checked.|
+|Prefetch and pipeline exploration|Stages1/2/3 and OPT6 first-A/dO prefetch implemented/tested/measured; unsuccessful candidates retained opt-in, not silently treated as faster.|
+|Layouts and shared lifetimes|OPT5 direct RHS validated; OPT7–9 output-layout trials measured. No new final-default computational shared staging. Existing Gsoft/dA union and input/mail lifetimes retain sanitizer coverage.|
+|Nine shapes, RNG, tails, long chains|194 default checks per mode, bitset and selected autograd checks; prior expanded strict suite includes N8193 and retains all26 known failures.|
+|Codegen, spill, performance|NoCALL/TMA/register-role default gates pass, spill explicitly recorded, final NCU and two-round full/finite matrices inspected. No cycle-exact WG overlap claim.|
+|Integrated result and user launch report|Two-round whole training-step timing improves21.2%/18.4%; six principal launch families have60 samples each per mode and count assertions pass.|
+|Default and handoff|OPT11/stages2 selected from full/finite/nine-shape/short-N/integrated evidence; explicit alternatives retained and README/AGENTS/plan updated.|
+
+Requested optimization cycle is complete. Further spill reduction, task-order
+load balance, stricter BF16/rtau accuracy, varlen and Hopper remain separate
+future work. First-query prefetch and output-layout alternatives remain
+experiments without a stable net gain; no additional implementation is
+required merely to make these unsuccessful experiments become defaults.
 
 Work-distribution diagnostic for the current170-SM main shape: bh-major task
 order assigns96–136 query tiles per persistent CTA (mean108.42). A key-major

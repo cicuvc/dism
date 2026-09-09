@@ -7,11 +7,13 @@ from torch.utils.cpp_extension import load
 from .core import RowRNGState, ScanBoundaries
 from .kernel_config import LSE_SUFFIX, LSE_FLAGS
 
+DEFAULT_OPTIMIZATION = "11"
+
 
 @lru_cache(None)
 def _extension():
     source=Path(__file__).resolve().parent/"csrc"
-    optimization=os.environ.get('DISM_BWD_OPT','0')
+    optimization=os.environ.get('DISM_BWD_OPT',DEFAULT_OPTIMIZATION)
     if optimization not in tuple(map(str,range(12))):
         raise ValueError('DISM_BWD_OPT must be between 0 and 11')
     suffix='' if optimization=='0' else ('_opt' if optimization=='1' else '_opt'+optimization)

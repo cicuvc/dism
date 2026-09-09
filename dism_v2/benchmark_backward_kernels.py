@@ -68,7 +68,7 @@ def main():
         if e.device_type==torch.autograd.DeviceType.CUDA:
             groups[e.name].append(e.device_time_total)
     report=dict(**vars(args),gpu=torch.cuda.get_device_name(),tile_lse=TILE_LSE,
-        optimization=os.environ.get('DISM_BWD_OPT','0'),vocab=512,scale=1.,tau=3.,
+        optimization=os.environ.get('DISM_BWD_OPT',backward.DEFAULT_OPTIMIZATION),vocab=512,scale=1.,tau=3.,
         requested_stages=os.environ.get('DISM_BWD_STAGES','2'),
         scope='GPU kernel durations, B1+passing+B3+scalar reduction and wrapper auxiliaries; fixed forward states; no embedding/forward/delta time',
         finite=all(bool(torch.isfinite(x).all()) for x in (result[0],*result[1])),

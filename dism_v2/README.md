@@ -6,6 +6,14 @@
 范围、接口和已知限制见[AUTOGRAD.md](AUTOGRAD.md)。
 下文的`core.forward`仍是底层不接autograd的诊断入口。
 
+WS反向当前默认 `DISM_BWD_OPT=11`、`DISM_BWD_STAGES=2`：persistent CTA、
+因果裁剪、寄存器元数据、直接RHS LDSM、WG级reverse mailbox及score特化。
+纯hard B3保留G递推/rtau，省去零operand/LSE梯度计算；soft/mixed语义不变。
+显式 `DISM_BWD_OPT=0` 可回到旧基线，1–10保留实验对照；进程首次构建前设置。
+OPT6预取及OPT7–9输出布局实验不包含在默认11中。spill与既有精度失败仍保留，
+LSE默认仍为full，不因本次反向优化切换近似。
+九维度/短N/完整训练性能和验证记录见[BACKWARD_OPTIMIZATION.md](BACKWARD_OPTIMIZATION.md)。
+
 本目录保留用户的 `dism_ref.py` / `emb_kernel.py`，新 CUDA 实现在 `csrc/`，入口为 `core.forward`。
 这是 **支持固定/全局随机方向的底层 core 前向接口**；六输入训练接口见上述autograd入口，不兼容旧接口。
 

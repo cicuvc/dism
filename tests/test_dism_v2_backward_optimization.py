@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 from torch.utils.cpp_extension import CUDA_HOME
-from dism_v2.backward import _extension
+from dism_v2.backward import _extension,DEFAULT_OPTIMIZATION
 
 @pytest.mark.skipif(not torch.cuda.is_available(),reason='CUDA required')
 def test_ws_codegen_with_spill_report(record_property):
@@ -21,16 +21,16 @@ def test_ws_codegen_with_spill_report(record_property):
     usages=dict(re.findall(r'Function (\S+):\n([^\n]+)',resources))
     selected={functions[i]:functions[i+1] for i in range(1,len(functions),2)
               if 'ws14value_backwardI' in functions[i] or 'ab_ws3runI' in functions[i]}
-    assert len(selected)==(180 if int(os.environ.get('DISM_BWD_OPT','0'))>=10 else 18)
+    assert len(selected)==(180 if int(os.environ.get('DISM_BWD_OPT',DEFAULT_OPTIMIZATION))>=10 else 18)
     report={}
     for name,body in selected.items():
         assert not re.search(r'\bCALL(?:\.|\s)',body),name
         assert body.count('USETMAXREG.DEALLOC.CTAPOOL')==1,name
         assert body.count('USETMAXREG.TRY_ALLOC.CTAPOOL')==1,name
         assert 'UTMALDG.5D' in body,name
-        if int(os.environ.get('DISM_BWD_OPT','0'))>=3:
+        if int(os.environ.get('DISM_BWD_OPT',DEFAULT_OPTIMIZATION))>=3:
             expected_tma=4
-            if int(os.environ.get('DISM_BWD_OPT','0'))==6:
+            if int(os.environ.get('DISM_BWD_OPT',DEFAULT_OPTIMIZATION))==6:
                 d,dv=map(int,re.search(r'ILi(\d+)ELi(\d+)E',name).groups())
                 if 'ab_ws3runI' in name:
                     prefetch=d+dv<=128 # First A/dO aliases16-KiB scratch.
@@ -45,13 +45,13 @@ def test_ws_codegen_with_spill_report(record_property):
             assert body.count('BAR.SYNC')==2,name
         if 'ab_ws3runI' in name:
             hard_only=False
-            if int(os.environ.get('DISM_BWD_OPT','0'))>=11:
+            if int(os.environ.get('DISM_BWD_OPT',DEFAULT_OPTIMIZATION))>=11:
                 spec=int(re.search(r'ILi\d+ELi\d+ELi(\d+)E',name).group(1))
                 hard_only=spec%5 in (1,2)
             assert ('UTMAREDG.3D.ADD' in body)==(not hard_only),name
             if hard_only:
                 assert not re.search(r'\b(?:ATOM|RED)\.',body),name
-            if int(os.environ.get('DISM_BWD_OPT','0'))==9:
+            if int(os.environ.get('DISM_BWD_OPT',DEFAULT_OPTIMIZATION))==9:
                 d=int(re.search(r'ILi(\d+)ELi(\d+)E',name).group(1))
                 assert body.count('STS.128')>=2*4*(d//16),name
         report[name]=usages[name].strip()
