@@ -1,4 +1,4 @@
-"""Causal trim vs untrimmed WS, including dense summaries and padded identity."""
+"""WS candidate vs reference, including dense summaries and padded identity."""
 import itertools
 import os
 import pytest
@@ -12,12 +12,13 @@ def modules():
     prior=os.environ.get('DISM_BWD_OPT')
     prior_stages=os.environ.get('DISM_BWD_STAGES')
     target=prior or backward.DEFAULT_OPTIMIZATION
+    reference=os.environ.get('DISM_BWD_REFERENCE_OPT','1')
     if int(target)<2:pytest.skip('trim/persistent candidate required')
     try:
         out=[]
-        for mode in ('1',target):
+        for mode in (reference,target):
             os.environ['DISM_BWD_OPT']=mode
-            os.environ['DISM_BWD_STAGES']='2' if mode=='1' else (prior_stages or '2')
+            os.environ['DISM_BWD_STAGES']='2' if mode==reference else (prior_stages or '2')
             backward._extension.cache_clear()
             out.append(backward._extension())
         yield out

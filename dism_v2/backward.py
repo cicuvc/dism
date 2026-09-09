@@ -7,15 +7,15 @@ from torch.utils.cpp_extension import load
 from .core import RowRNGState, ScanBoundaries
 from .kernel_config import LSE_SUFFIX, LSE_FLAGS
 
-DEFAULT_OPTIMIZATION = "11"
+DEFAULT_OPTIMIZATION = "13"
 
 
 @lru_cache(None)
 def _extension():
     source=Path(__file__).resolve().parent/"csrc"
     optimization=os.environ.get('DISM_BWD_OPT',DEFAULT_OPTIMIZATION)
-    if optimization not in tuple(map(str,range(12))):
-        raise ValueError('DISM_BWD_OPT must be between 0 and 11')
+    if optimization not in tuple(map(str,range(15))):
+        raise ValueError('DISM_BWD_OPT must be between 0 and 14')
     suffix='' if optimization=='0' else ('_opt' if optimization=='1' else '_opt'+optimization)
     stages=os.environ.get('DISM_BWD_STAGES','2')
     if stages not in ('1','2','3') or (int(optimization)<4 and stages!='2'):

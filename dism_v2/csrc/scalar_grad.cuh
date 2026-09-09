@@ -1,7 +1,7 @@
 #pragma once
 // Included inside a kernel namespace after log_affine.cuh.
 // G is dL/d(natural logM), before the BF16 conversion used by gradient MMA.
-template<bool TAU_ONLY=false>
+template<bool TAU_ONLY=false,bool ZERO_INVALID_G=false>
 __device__ __forceinline__ void scalar_gradients(
         const Args& p,const Scalar& value,int bh,int kb,int qb,
         uint32_t hard0,uint32_t hard1,float* dlse,float& tau,float (&key_lse)[2]) {
@@ -14,8 +14,12 @@ __device__ __forceinline__ void scalar_gradients(
         for(int r=0;r<2;++r) {
             int k=kb+8*r+l;
             auto x=value.data[r][c].value;
-            float u=k<p.n && q<p.n && k<=q?x.u0:0.f;
-            float v=k<p.n && q+32<p.n && k<=q+32?x.u1:0.f;
+            float u,v;
+            if constexpr(ZERO_INVALID_G) { u=x.u0; v=x.u1; }
+            else {
+                u=k<p.n && q<p.n && k<=q?x.u0:0.f;
+                v=k<p.n && q+32<p.n && k<=q+32?x.u1:0.f;
+            }
             tau+=u+v; // Hard matches participate; hard breaks have exact G=0.
             if constexpr(!TAU_ONLY) {
             u=((hard0>>(c+8*g))&1)?0.f:u;

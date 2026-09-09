@@ -226,6 +226,23 @@
 
 ## 验证与协作
 
+- 用户已明确选择默认DISM_BWD_OPT=13（STAGES=2）；覆盖本文历史默认11/0条目。
+  OPT14仍为显式输出writer实验，不默认启用。LSE模式默认不变，下游计时以
+  tanh_finite为主；OPT12/13已有严格精度失败仍保留，不因默认切换放宽容差。
+
+- OPT14实验将B3 Gsoft与单槽dA分离，每WG一对ready128/free1，warp9 elected线程
+  依次服务WG1/WG0，四条TMA归一group后read-wait0再释放free，退出full-wait。
+  consumer仅覆盖dA前等free，不再执行TMA wait。设备实测opt-in上限99KiB，
+  九维度输入双槽均可容纳。finite对照192项、选定autograd508项和三类sanitizer
+  各3项通过，无CALL；D64/DV64新增56B stack按授权保留。主工况B3慢9.34%/12.53%，
+  默认仍11，不推断单一回退原因。见dism_v2/BACKWARD_DA_WRITER.md。
+
+- 用户追加的score/边界清理实验：OPT12为预加载scale2/bias2及单FFMA；OPT13再对
+  tanh_finite删去冗余LOG_ZERO/概率/G消费遮罩，保留padding alpha=1和内存访问边界。
+  padding query normalizer=+INF仅作概率归零，不替换affine sentinel。13对12的194项
+  对照、507项选定端到端、62项bitset、三类sanitizer各3项通过，主工况B3快约3–4%。
+  OPT12新增的full两项/finite三项严格精度失败仍保留，因此默认仍11；下游性能评估
+  以finite为主，不再要求优化full。详见dism_v2/BACKWARD_SCORE_CLEANUP.md。
 - 反向最终性能筛选后默认DISM_BWD_OPT=11、STAGES=2，覆盖下文历史默认OPT0条目。
   full/finite九种D/DV×两方向×两轮计时均提升，D64/DV64的N65/257亦提升；
   同前向/embedding的三层完整训练步吞吐分别提升约21.2%/18.4%。保留0–10显式选项，

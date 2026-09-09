@@ -1,5 +1,13 @@
 # 当前 CUDA core 状态
 
+当前默认反向优化为 `DISM_BWD_OPT=13`、`DISM_BWD_STAGES=2`，由用户明确选择。
+LSE模式默认不变；OPT12/13已有严格数值失败继续记录，不放宽容差。
+以下默认11的实验记录为历史状态。
+
+反向实验 `DISM_BWD_OPT=14` 在13基础上分离Gsoft/单槽dA，由warp9发射TMA reduction。
+finite数值/同步检查通过，但主工况B3慢约9–13%，D64/DV64新增56B stack；不默认启用。
+设计、测试命令与实测见 [BACKWARD_DA_WRITER.md](BACKWARD_DA_WRITER.md)。
+
 完整六输入的一阶autograd入口现为 `dism_v2.autograd.voc_dism`：
 直接使用现有Triton embedding前后向及CUDA WS core。
 已进行端到端接线、梯度/reference和sanitizer检查，仍有精度失败，
@@ -13,6 +21,11 @@ WS反向当前默认 `DISM_BWD_OPT=11`、`DISM_BWD_STAGES=2`：persistent CTA、
 OPT6预取及OPT7–9输出布局实验不包含在默认11中。spill与既有精度失败仍保留，
 LSE默认仍为full，不因本次反向优化切换近似。
 九维度/短N/完整训练性能和验证记录见[BACKWARD_OPTIMIZATION.md](BACKWARD_OPTIMIZATION.md)。
+
+追加实验：`DISM_BWD_OPT=12` 预加载并预计算score的scale2/bias2，逐元素单FFMA；
+`DISM_BWD_OPT=13` 再于tanh_finite路径删除冗余零状态/有效域遮罩，保留padding
+affine identity和所有内存尾部保护。默认仍11；FFMA新增严格精度失败未隐藏。
+实现依据和对照结果见[BACKWARD_SCORE_CLEANUP.md](BACKWARD_SCORE_CLEANUP.md)。
 
 本目录保留用户的 `dism_ref.py` / `emb_kernel.py`，新 CUDA 实现在 `csrc/`，入口为 `core.forward`。
 这是 **支持固定/全局随机方向的底层 core 前向接口**；六输入训练接口见上述autograd入口，不兼容旧接口。

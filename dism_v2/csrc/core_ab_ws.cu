@@ -18,6 +18,13 @@ namespace kt=kittens;
 #include "scalar_grad.cuh"
 using Reverse=glx::MMABuffer<16,64,glx::BinaryElement,glx::AffineComposeOp,glx::F32x2>;
 template<int D,int DV> struct Slot { kt::st_bf<64,D> query; kt::st_bf<64,DV> dout; };
+#if DISM_BWD_OPT >= 14
+struct Scratch {
+    kt::st_bf<16,64> soft;
+    // Output-layout storage, independent of the next tile's Gsoft transpose.
+    alignas(128) float da[1][16][16];
+};
+#else
 union Scratch {
     kt::st_bf<16,64> soft;
 #if DISM_BWD_OPT == 7 || DISM_BWD_OPT == 8
@@ -27,6 +34,7 @@ union Scratch {
     alignas(128) float da[2][16][16];
 #endif
 };
+#endif
 template<int D,int DV,bool ENABLE> struct ScratchBuffer { Scratch scratch[8]; };
 template<int D,int DV> struct ScratchBuffer<D,DV,true> {
     // Async first A/dO input aliases existing Gsoft/dA scratch. Each task
@@ -53,6 +61,9 @@ template<int D,int DV> struct Shared {
         Slot<D,DV> slot[SLOTS];
     };
     ScratchBuffer<D,DV,PREFETCH> work;
+#if DISM_BWD_OPT >= 14
+    uint64_t output_ready[2],output_free[2];
+#endif
     uint64_t ready[SLOTS],free[SLOTS];
 #if DISM_BWD_OPT >= 4
     uint64_t mail_ready[SLOTS],mail_free[SLOTS];
@@ -82,6 +93,7 @@ template<int D,int DV> struct Shared {
         return slot[s];
     }
 };
+// OPT0 baseline only. Optimized kernels use bwd_metadata::score below.
 __device__ __forceinline__ float transposed_score(const Args& p,float dot,int bh,int q,int k,bool hard) {
     if(q>=p.n || k>=p.n || k>q) return LOG_ZERO;
     float tau=p.tau[bh%p.heads];
@@ -125,6 +137,14 @@ __global__ __launch_bounds__(384,1) void run(
     const int blocks=(p.padded_n+127)/128;
     int tile=0;
     if(warp==0 && kt::warp::elect_leader()) {
+#if DISM_BWD_OPT >= 14
+        #pragma unroll
+        for(int wg=0;wg<2;++wg) {
+            init_bar(&shared.output_ready[wg],128);
+            init_bar(&shared.output_free[wg],1);
+            arrive(&shared.output_free[wg]); // Phase0: initially empty.
+        }
+#endif
         if constexpr(PREFETCH) {
             init_bar(&shared.work.first_ready,32); init_bar(&shared.work.first_free,256);
             init_bar(&shared.work.first_consumed,256);
@@ -175,6 +195,47 @@ __global__ __launch_bounds__(384,1) void run(
     if(warp>=8) {
         asm volatile("setmaxnreg.dec.sync.aligned.u32 40;" ::: "memory");
         bool leader=kt::warp::elect_leader();
+#if DISM_BWD_OPT >= 14
+        if constexpr(!HARD_ONLY) {
+            if(warp==9 && leader) {
+                int epoch=0;
+                #pragma unroll 1
+                for(int task=blockIdx.x;task<blocks*p.batch_heads;task+=gridDim.x) {
+                    int bh=task/blocks,query_begin=(task%blocks)*128;
+                    #pragma unroll 1
+                    for(int t=0;t*64<p.padded_n-query_begin;++t) {
+                        int qb=p.padded_n-64-t*64;
+                        // Reverse scan publishes WG1 before WG0. Service the
+                        // entire WG1 tile first; no all-eight-warp rendezvous.
+                        #pragma unroll
+                        for(int group=0;group<2;++group) {
+                            int wg=1-group;
+                            #pragma unroll
+                            for(int qt=0;qt<4;++qt) {
+                                #pragma unroll
+                                for(int f=0;f<D/16;++f) {
+                                    int phase=(epoch+qt*(D/16)+f)&1;
+                                    wait(&shared.output_ready[wg],phase);
+                                    #pragma unroll
+                                    for(int w=0;w<4;++w) {
+                                        unsigned addr=smaddr(shared.work.scratch[wg*4+w].da[0]);
+                                        asm volatile("cp.reduce.async.bulk.tensor.3d.global.shared::cta.add.tile.bulk_group "
+                                            "[%0, {%2, %3, %4}], [%1];" ::
+                                            "l"(&dam),"r"(addr),"r"(f*16),"r"(qb+qt*16),"r"(bh):"memory");
+                                    }
+                                    asm volatile("cp.async.bulk.commit_group;" ::: "memory");
+                                    asm volatile("cp.async.bulk.wait_group.read 0;" ::: "memory");
+                                    arrive(&shared.output_free[wg]);
+                                }
+                            }
+                        }
+                        epoch+=D/4;
+                    }
+                }
+                asm volatile("cp.async.bulk.wait_group 0;" ::: "memory");
+            }
+        }
+#endif
         if(warp==8) {
         int task_round=0;
 #if DISM_BWD_OPT >= 3
@@ -236,12 +297,17 @@ __global__ __launch_bounds__(384,1) void run(
         }
     } else {
         asm volatile("setmaxnreg.inc.sync.aligned.u32 232;" ::: "memory");
+        int output_epoch=0;
         int task_round=0;
 #if DISM_BWD_OPT >= 3
         #pragma unroll 1
         for(int task=blockIdx.x;task<blocks*p.batch_heads;task+=gridDim.x,++task_round) {
             int bh=task/blocks,key_cta=task%blocks,chunk=key_cta*4+(warp&3);
             int kb=chunk*32+(warp/4)*16,query_begin=key_cta*128;
+#if DISM_BWD_OPT >= 12
+            // Issue held-key metadata before waiting on its asynchronous B/V input.
+            bwd_metadata::KeyFor<SPEC> key_meta(p,bh,kb);
+#endif
             wait(&shared.held_ready,task_round&1);
             kt::rt_bf<16,D> keys;
             kt::rt_bf<16,DV> values;
@@ -256,7 +322,7 @@ __global__ __launch_bounds__(384,1) void run(
         int issued=0;
         float tau_sum=0,key_lse[2]={0,0};
         Reverse::VState right;
-#if DISM_BWD_OPT
+#if DISM_BWD_OPT && DISM_BWD_OPT < 12
         bwd_metadata::KeyFor<SPEC> key_meta(p,bh,kb);
 #endif
         #pragma unroll 1
@@ -265,6 +331,10 @@ __global__ __launch_bounds__(384,1) void run(
             int input_s=PREFETCH?input_tile%SLOTS:s;
             int input_phase=PREFETCH?(input_tile/SLOTS)&1:phase;
             auto& input=shared.input_slot(t==0,input_s);
+#if DISM_BWD_OPT >= 12
+            // LSE/label/norm/delta loads precede RNG and the A/dO ready wait.
+            bwd_metadata::QueryFor<SPEC> query_meta(p,delta,bh,qb,key_meta.tau);
+#endif
 uint32_t hard0,hard1;
             if(p.hard_bits) {
                 const int words=(p.n+31)/32;
@@ -276,7 +346,7 @@ uint32_t hard0,hard1;
             hard1=__ballot_sync(0xffffffff,qb+lane+32<p.n &&
                 row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qb+lane+32,p.hard_prob));
             }
-#if DISM_BWD_OPT
+#if DISM_BWD_OPT && DISM_BWD_OPT < 12
             bwd_metadata::QueryFor<SPEC> query_meta(p,delta,bh,qb);
 #endif
             if constexpr(PREFETCH) {
@@ -411,7 +481,7 @@ uint32_t hard0,hard1;
                 for(int c=0;c<8;++c) scalar.data[r][c].value=reverse.data[r][c].second;
             }
             scalar.template reverse_roll<false>();
-            scalar_gradients<HARD_ONLY>(p,scalar,bh,kb,qb,hard0,hard1,dlse,tau_sum,key_lse);
+            scalar_gradients<HARD_ONLY,bwd_metadata::finite_zero>(p,scalar,bh,kb,qb,hard0,hard1,dlse,tau_sum,key_lse);
             if constexpr(HARD_ONLY) {
                 // Labels are stop-gradient. Keep G and tau accumulation above;
                 // dA/dB/dLSE are zero in pure hard mode. Final dB stores still
@@ -420,7 +490,9 @@ uint32_t hard0,hard1;
             } else {
             auto& scratch=shared.work.scratch[warp];
             // Last iteration's output TMA must finish reading before union reuse.
+#if DISM_BWD_OPT < 14
             if(lane==0) asm volatile("cp.async.bulk.wait_group.read 0;" ::: "memory");
+#endif
             __syncwarp();
             {
                 kt::rt_bf<16,64> grad;
@@ -430,8 +502,16 @@ uint32_t hard0,hard1;
                     for(int c=0;c<8;++c) {
                         auto pos=Buffer::layout(r,c,0);auto x=scalar.data[r][c].value;
                         int k=kb+pos.first,q=qb+pos.second;
-                        float a=k<p.n && q<p.n && !((hard0>>pos.second)&1)?x.u0:0.f;
-                        float b=k<p.n && q+32<p.n && !((hard1>>pos.second)&1)?x.u1:0.f;
+                        float a,b;
+                        if constexpr(bwd_metadata::finite_zero) {
+                            // Reverse recurrence has zero terminal G; all padding
+                            // and noncausal diagonals have beta0, hence exact G0.
+                            a=bwd_metadata::select(!((hard0>>pos.second)&1),x.u0,0.f);
+                            b=bwd_metadata::select(!((hard1>>pos.second)&1),x.u1,0.f);
+                        } else {
+                            a=k<p.n && q<p.n && !((hard0>>pos.second)&1)?x.u0:0.f;
+                            b=k<p.n && q+32<p.n && !((hard1>>pos.second)&1)?x.u1:0.f;
+                        }
                         // Register G matches physically permuted query; shared G is logical.
                         grad.tiles[0][c/2].data[r+2*(c&1)]=__floats2bfloat162_rn(a,b);
                         if(!PREFETCH || t!=0) {
@@ -479,9 +559,14 @@ uint32_t hard0,hard1;
                     kt::warp::rt_conversions::swap_layout(keycol,keyrow);
                     kt::rt_fl<16,16> part{0.f};
                     kt::warp::wmma::mma_AtB(part,grad,keycol,part);
+#if DISM_BWD_OPT >= 14
+                    constexpr int out_slot=0;
+                    wait(&shared.output_free[warp/4],output_epoch&1);
+#else
                     int out_slot=issued%2;
                     if(lane==0 && issued>=2)
                         asm volatile("cp.async.bulk.wait_group.read 1;" ::: "memory");
+#endif
                     __syncwarp();
 #if DISM_BWD_OPT == 9
                     // Four lanes own one complete16-float row. Each8-lane
@@ -523,6 +608,10 @@ uint32_t hard0,hard1;
 #endif
                     asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
                     __syncwarp();
+#if DISM_BWD_OPT >= 14
+                    arrive(&shared.output_ready[warp/4]); // All128 writers publish.
+                    ++output_epoch;
+#else
                     if(lane==0) {
 #if DISM_BWD_OPT == 7 || DISM_BWD_OPT == 8
                         unsigned addr=static_cast<unsigned>(__cvta_generic_to_shared(scratch.da[out_slot].data));
@@ -534,6 +623,7 @@ uint32_t hard0,hard1;
                             "l"(&dam),"r"(addr),"r"(f*16),"r"(qb+qt*16),"r"(bh):"memory");
                         asm volatile("cp.async.bulk.commit_group;" ::: "memory");
                     }
+#endif
                     ++issued;
                 }
             }
@@ -559,7 +649,9 @@ uint32_t hard0,hard1;
         if constexpr(!HARD_ONLY) store_key_lse(p,bh,kb,dlse,key_lse);
         float total=warp_sum(tau_sum);
         if(lane==0) tau_partial[(int64_t(bh)*blocks+key_cta)*8+warp]=total;
+#if DISM_BWD_OPT < 14
         if(lane==0) asm volatile("cp.async.bulk.wait_group 0;" ::: "memory");
+#endif
         __syncwarp();
     }
 #if DISM_BWD_OPT >= 3

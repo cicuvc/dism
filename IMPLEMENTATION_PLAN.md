@@ -1,5 +1,15 @@
 # Dism v2 kernel 执行计划
 
+最新选择：用户授权将默认反向配置切至OPT13、STAGES=2，OPT14保留显式实验。
+提交后重新测三层完整训练步；finite主场景，对照显式OPT11，保留既有精度问题。
+
+当前追加实验：OPT14 在 OPT13 上拆开 B3 Gsoft/单槽 dA，warp9 elected 线程
+按 WG1→WG0 发 TMA reduction，ready128/free1 每 WG 一对，read-wait 后归还槽，
+最终 full-wait。仅 consumer 写 dA 前等待 free；默认11保持不变。
+先做13/14九维度、尾块、persistent epoch 数值对照，再 sanitizer、SASS/spill、
+主工况两方向交替计时。实际设备 opt-in shared 上限99KiB，双输入槽下九维度
+均可放下独立输出；验证状态见 `dism_v2/BACKWARD_DA_WRITER.md`。
+
 状态：阶段 1 的独立 GLX、TMA 列置换、融合单 stripe 和三阶段 checkpoint 实验已通过。阶段 2 已实现固定/每次调用全局随机 direction、标量 hard_prob（含混合 RNG）的三阶段 CUDA core 前向；完整接口、反向与性能基准仍未完成。新代码、实测和边界见 `dism_v2/README.md`；不能称为完整 voc_dism 已完成。
 
 ## 目标基线
@@ -885,6 +895,15 @@ embedding后仅替换反向，full71.891→59.332ms、finite66.260→55.961ms。
 约41.83%/24.45%；B1仍有spill、B3主工况零spill，不宣称周期精确的WG overlap。
 六主kernel训练内每launch统计已完成，每模式每kernel60样本，详见优化文档。
 本轮反向优化目标的实施、验证、候选筛选和完整性能验收完成；既有精度失败保持可见。
+
+### 追加反向score与有效域清理
+
+追加用户请求的反向score/有效域清理已作为OPT12/13实验验证：预加载元数据和
+scale2/bias2、单FFMA，以及finite零状态/概率/G消费遮罩简化；保留padding affine
+identity与全部内存尾部保护。13对12的194项对照、507项选定端到端、62项bitset、
+三类sanitizer各3项通过。finite主工况B1相对12快7–9%，B3快3–4%；
+12的新增严格精度失败尚未被接受，默认仍11，不放宽容差。
+详细依据和原始记录见dism_v2/BACKWARD_SCORE_CLEANUP.md。
 
 ## 阶段 6：varlen
 

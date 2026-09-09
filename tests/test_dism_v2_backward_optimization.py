@@ -56,3 +56,65 @@ def test_ws_codegen_with_spill_report(record_property):
                 assert body.count('STS.128')>=2*4*(d//16),name
         report[name]=usages[name].strip()
     record_property('ws_resources',json.dumps(report))
+
+
+@pytest.mark.skipif(int(os.environ.get('DISM_BWD_OPT',DEFAULT_OPTIMIZATION))<12,
+                   reason='single-FFMA experiment required')
+@pytest.mark.skipif(not torch.cuda.is_available(),reason='CUDA required')
+def test_single_ffma_score_codegen(tmp_path):
+    """Real B1/B3 D64 mixed specializations:32 score FFMAs/warp, no score LDG/BRA.
+
+    Source annotations may include scheduler-moved integer predicates, so only
+    forbid extra floating arithmetic, memory loads and branches at the score
+    expression. The whole-kernel noCALL/resource gates remain separate.
+    """
+    if torch.cuda.get_device_capability()!=(12,0):pytest.skip('sm120a')
+    build=Path(_extension().__file__).parent
+    source=Path(__file__).parents[1]/'dism_v2/csrc/backward_metadata.cuh'
+    line=next(i for i,s in enumerate(source.read_text().splitlines(),1)
+              if 'result=fmaf(dot,key.scale2,bias);' in s)
+    marker=f'backward_metadata.cuh", line {line} '
+    for stem in ('core_dv_ws','core_ab_ws'):
+        dest=tmp_path/stem;dest.mkdir()
+        subprocess.check_call([str(Path(CUDA_HOME)/'bin/cuobjdump'),'-xelf','all',
+                               str(build/(stem+'.cuda.o'))],cwd=dest)
+        cubins=list(dest.glob('*.cubin'));assert len(cubins)==1
+        symbols=subprocess.check_output(['readelf','-sW',str(cubins[0])],text=True)
+        indices=[s.split(':',1)[0].strip() for s in symbols.splitlines()
+                 if ' FUNC ' in s and re.search(r'ILi64ELi64ELi[38]EE',s)]
+        assert len(indices)==2
+        for index in indices:
+            sass=subprocess.check_output([str(Path(CUDA_HOME)/'bin/nvdisasm'),
+                '-c','-gi','-fun',index,str(cubins[0])],text=True)
+            annotations=[];active=False;ops=[]
+            for s in sass.splitlines():
+                if '//##' in s:annotations.append(s)
+                elif re.search(r'/\*[0-9a-f]+\*/',s):
+                    if annotations:
+                        active=any(marker in a for a in annotations);annotations=[]
+                    if active:
+                        ops.append(re.sub(r'^.*?\*/\s*(?:@!?P\d+\s*)?','',s).split()[0])
+            assert ops.count('FFMA')==32,(stem,index,ops)
+            assert not any(op.startswith(('FADD','FMUL','LDG','BRA','CALL')) for op in ops),ops
+            if stem=='core_ab_ws' and int(os.environ.get('DISM_BWD_OPT',DEFAULT_OPTIMIZATION))>=14:
+                src=(source.parent/'core_ab_ws.cu').read_text().splitlines()
+                begin=next(i for i,s in enumerate(src,1) if 'if(warp==9 && leader)' in s)
+                end=next(i for i,s in enumerate(src,1) if 'if(warp==8)' in s)
+                # Every output issue/commit/wait must belong to the elected
+                # writer branch, never to the consumer's computation region.
+                annotations=[];writer=False;counts={}
+                for s in sass.splitlines():
+                    if '//##' in s:annotations.append(s)
+                    elif re.search(r'/\*[0-9a-f]+\*/',s):
+                        if annotations:
+                            lines=[int(m.group(1)) for a in annotations
+                                   if (m:=re.search(r'core_ab_ws.cu", line (\d+)\b',a))]
+                            writer=any(begin<=line<end for line in lines)
+                            annotations=[]
+                        if any(op in s for op in ('UTMAREDG.3D.ADD','UTMACMDFLUSH','DEPBAR')):
+                            assert writer,(index,s)
+                            for op in ('UTMAREDG.3D.ADD','UTMACMDFLUSH','DEPBAR'):
+                                if op in s:counts[op]=counts.get(op,0)+1
+                assert counts['UTMAREDG.3D.ADD']==128,counts
+                assert counts['UTMACMDFLUSH']==32,counts
+                assert counts['DEPBAR']>=32,counts

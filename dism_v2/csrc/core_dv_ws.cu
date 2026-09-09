@@ -75,6 +75,7 @@ template<int D,int DV> struct Shared : FirstInput<D,DV,InputConfig<D,DV>::PREFET
         return slot[s];
     }
 };
+// OPT0 baseline only. Optimized kernels use bwd_metadata::score below.
 __device__ __forceinline__ float transposed_score(const Args& p,float dot,int bh,int q,int k,bool hard) {
     if(q>=p.n || k>=p.n || k>q) return LOG_ZERO;
     float tau=p.tau[bh%p.heads];
@@ -232,6 +233,10 @@ __global__ __launch_bounds__(384,1) void value_backward(
         for(int task=blockIdx.x;task<blocks*p.batch_heads;task+=gridDim.x,++task_round) {
             int bh=task/blocks,key_cta=task%blocks,chunk=key_cta*4+(warp&3);
             int kb=chunk*32+(warp/4)*16,query_begin=key_cta*128;
+#if DISM_BWD_OPT >= 12
+            // Issue held-key metadata before waiting on its asynchronous B/V input.
+            bwd_metadata::KeyFor<SPEC> key_meta(p,bh,kb);
+#endif
             wait(&shared.held_ready,task_round&1);
             kt::rt_bf<16,D> keys;
             kt::rt_bf<16,DV> values;
@@ -244,7 +249,7 @@ __global__ __launch_bounds__(384,1) void value_backward(
 #endif
         kt::rt_fl<16,DV> accumulated{0.f};
         Reverse::VState right;
-#if DISM_BWD_OPT
+#if DISM_BWD_OPT && DISM_BWD_OPT < 12
         bwd_metadata::KeyFor<SPEC> key_meta(p,bh,kb);
 #endif
         #pragma unroll 1
@@ -253,6 +258,10 @@ __global__ __launch_bounds__(384,1) void value_backward(
             int input_s=PREFETCH?input_tile%SLOTS:s;
             int input_phase=PREFETCH?(input_tile/SLOTS)&1:phase;
             auto& input=shared.input_slot(t==0,input_s);
+#if DISM_BWD_OPT >= 12
+            // LSE/label/norm/delta loads precede RNG and the A/dO ready wait.
+            bwd_metadata::QueryFor<SPEC> query_meta(p,delta,bh,qb,key_meta.tau);
+#endif
 uint32_t hard0,hard1;
             if(p.hard_bits) {
                 const int words=(p.n+31)/32;
@@ -264,7 +273,7 @@ uint32_t hard0,hard1;
             hard1=__ballot_sync(0xffffffff,qb+lane+32<p.n &&
                 row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qb+lane+32,p.hard_prob));
             }
-#if DISM_BWD_OPT
+#if DISM_BWD_OPT && DISM_BWD_OPT < 12
             bwd_metadata::QueryFor<SPEC> query_meta(p,delta,bh,qb);
 #endif
             if constexpr(PREFETCH) {
