@@ -9,6 +9,9 @@
 #include "log_affine.cuh"
 #include "pipeline.cuh"
 #include "row_rng.cuh"
+#ifndef DISM_OUTPUT_Q_ALIAS
+#define DISM_OUTPUT_Q_ALIAS 0
+#endif
 
 namespace dism_v2 {
 namespace kt=kittens;
@@ -38,7 +41,33 @@ template<int D,int DV,bool OUTPUT> struct Shared {
     uint64_t ready[SLOTS],free[SLOTS];
     uint64_t mail_ready[SLOTS],mail_free[SLOTS];
     Buffer::HState::SharedStorage mail[4][SLOTS];
+    __device__ __forceinline__ auto& query() { return q; }
+    __device__ __forceinline__ auto& key(int s) { return slot[s].k; }
+    __device__ __forceinline__ auto& value(int s) { return slot[s].v; }
 };
+#if DISM_OUTPUT_Q_ALIAS
+// Experimental D64/DV64 only. Input storage reuse, no intermediate staging.
+template<> struct Shared<64,64,true> {
+    static constexpr int QROWS=128,QPHASES=1,SLOTS=3;
+#if DISM_OUTPUT_Q_ALIAS == 1
+    Slot<64,64,true> first[2];
+    union { kt::st_bf<128,64> q; Slot<64,64,true> third; } reuse;
+    __device__ __forceinline__ auto& key(int s) { return s==2?reuse.third.k:first[s].k; }
+    __device__ __forceinline__ auto& value(int s) { return s==2?reuse.third.v:first[s].v; }
+#else
+    kt::st_bf<64,64> k0;
+    union { kt::st_bf<128,64> q; kt::st_bf<64,64> k12[2]; } reuse;
+    kt::st_bf<64,64> v[3];
+    uint64_t kfree[SLOTS],vready[SLOTS];
+    __device__ __forceinline__ auto& key(int s) { return s==0?k0:reuse.k12[s-1]; }
+    __device__ __forceinline__ auto& value(int s) { return v[s]; }
+#endif
+    uint64_t qready,qfree,done;
+    uint64_t ready[SLOTS],free[SLOTS],mail_ready[SLOTS],mail_free[SLOTS];
+    Buffer::HState::SharedStorage mail[4][SLOTS];
+    __device__ __forceinline__ auto& query() { return reuse.q; }
+};
+#endif
 template<int D,int QROWS> CUtensorMap output_q_map(const Args& p) {
     constexpr int S=D==32?32:64;
     const cuuint64_t dims[]{S,cuuint64_t(p.n),cuuint64_t(p.batch_heads),D/S,1};
@@ -69,6 +98,8 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
     constexpr int STAGES=Shared<D,DV,OUTPUT>::SLOTS;
     constexpr int QROWS=Shared<D,DV,OUTPUT>::QROWS;
     constexpr int QPHASES=Shared<D,DV,OUTPUT>::QPHASES;
+    constexpr bool ALIAS=DISM_OUTPUT_Q_ALIAS && D==64 && DV==64;
+    constexpr bool SPLIT=DISM_OUTPUT_Q_ALIAS==2 && D==64 && DV==64;
     extern __shared__ __align__(128) unsigned char bytes[];
     auto& shared=*reinterpret_cast<Shared<D,DV,OUTPUT>*>(bytes);
     int warp=threadIdx.x/32,lane=threadIdx.x&31;
@@ -77,17 +108,23 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
     // ready32 variant failed persistent replay and is not the selected path.
     if(warp==0 && kt::warp::elect_leader()) {
         init_bar(&shared.qready,1); init_bar(&shared.qfree,256);
+        if constexpr(ALIAS) init_bar(&shared.done,256);
 #pragma unroll
         for(int s=0;s<STAGES;++s) {
             init_bar(&shared.ready[s],1);
             init_bar(&shared.free[s],256);
             init_bar(&shared.mail_ready[s],128);
             init_bar(&shared.mail_free[s],128);
+            if constexpr(SPLIT) {
+                init_bar(&shared.kfree[s],256);
+                init_bar(&shared.vready[s],1);
+            }
         }
         asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
     }
     __syncthreads();
     int tile=0,task_round=0;
+    unsigned used_slots=0,slot_phases=0;
     if(warp>=8) {
         kt::warpgroup::decrease_registers<40>();
         bool leader=kt::warp::elect_leader();
@@ -97,21 +134,64 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
                 int bh=task/blocks,base=(task%blocks)*128;
                 int key_end=min(p.padded_n,base+128);
                 int qepoch=task_round*QPHASES;
+                // Conservative: all PV readers finished. Split: all K readers
+                // finished; V remains live in separate storage and protocol.
+                if constexpr(ALIAS)
+                    if(task_round) wait(&shared.done,(task_round-1)&1);
                 if(leader) {
                     if(qepoch) wait(&shared.qfree,(qepoch-1)&1);
-                    expect(&shared.qready,sizeof(shared.q));
-                    summary_tma(&qm,shared.q.data,&shared.qready,{base,bh,0,0});
+                    expect(&shared.qready,sizeof(shared.query()));
+                    summary_tma(&qm,shared.query().data,&shared.qready,{base,bh,0,0});
                 }
 #pragma unroll 1
                 for(int t=0;t*64<key_end;++t,++tile) {
-                    int s=tile%STAGES;
-                    if(tile>=STAGES) wait(&shared.free[s],((tile/STAGES)-1)&1);
-                    auto& slot=shared.slot[s];
+                    int s=ALIAS?t%STAGES:tile%STAGES;
+                    int phase=ALIAS?((slot_phases>>s)&1):(tile/STAGES)&1;
+                    bool recycled=ALIAS?bool(used_slots&(1u<<s)):tile>=STAGES;
+                    if constexpr(ALIAS) {used_slots|=1u<<s;slot_phases^=1u<<s;}
+                    if constexpr(SPLIT) {
+                        if(recycled) wait(&shared.kfree[s],phase^1);
+                    } else if(recycled) wait(&shared.free[s],phase^1);
+                    if constexpr(ALIAS) {
+                        // Every task starts at slot0. Q aliases KV2 or K1/K2.
+                        if(SPLIT?s>=1:s==2) wait(&shared.qfree,qepoch&1);
+                    }
+                    auto& key=shared.key(s);
+                    auto& value=shared.value(s);
+                    if constexpr(SPLIT) {
+                        if(t*64+64<=p.n) {
+                            expect(&shared.ready[s],sizeof(key));
+                            summary_tma(&km,key.data,&shared.ready[s],{0,0,bh*p.n+t*64,0});
+                        } else {
+#pragma unroll 1
+                            for(int r=0;r<64;++r) {
+                                int pr=(r&7)*8+((r>>3)&3)*2+(r>>5);
+#pragma unroll
+                                for(int c=0;c<D;++c) key[int2{pr,c}]=t*64+r<p.n?
+                                    static_cast<const __nv_bfloat16*>(p.b)[(int64_t(bh)*p.n+t*64+r)*D+c]:__float2bfloat16(0);
+                            }
+                            arrive(&shared.ready[s]);
+                        }
+                        if(recycled) wait(&shared.free[s],phase^1);
+                        if(t*64+64<=p.n) {
+                            expect(&shared.vready[s],sizeof(value));
+                            summary_tma(&vm,value.data,&shared.vready[s],{0,0,bh*p.n+t*64,0});
+                        } else {
+#pragma unroll 1
+                            for(int r=0;r<64;++r) {
+                                int pr=(r&7)*8+((r>>3)&3)*2+(r>>5);
+#pragma unroll
+                                for(int c=0;c<DV;++c) value[int2{pr,c}]=t*64+r<p.n?
+                                    static_cast<const __nv_bfloat16*>(p.v)[(int64_t(bh)*p.n+t*64+r)*DV+c]:__float2bfloat16(0);
+                            }
+                            arrive(&shared.vready[s]);
+                        }
+                    } else {
                     if(t*64+64<=p.n) {
                         if(leader) {
-                            expect(&shared.ready[s],sizeof(slot.k)+sizeof(slot.v));
-                            summary_tma(&km,slot.k.data,&shared.ready[s],{0,0,bh*p.n+t*64,0});
-                            summary_tma(&vm,slot.v.data,&shared.ready[s],{0,0,bh*p.n+t*64,0});
+                            expect(&shared.ready[s],sizeof(key)+sizeof(value));
+                            summary_tma(&km,key.data,&shared.ready[s],{0,0,bh*p.n+t*64,0});
+                            summary_tma(&vm,value.data,&shared.ready[s],{0,0,bh*p.n+t*64,0});
                         }
                     } else {
                         int valid=min(64,max(0,p.n-t*64));
@@ -120,22 +200,23 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
                             int pr=(r&7)*8+((r>>3)&3)*2+(r>>5);
 #pragma unroll
                             for(int c=0;c<D;++c)
-                                slot.k[int2{pr,c}]=static_cast<const __nv_bfloat16*>(p.b)[
+                                key[int2{pr,c}]=static_cast<const __nv_bfloat16*>(p.b)[
                                     (int64_t(bh)*p.n+t*64+r)*D+c];
 #pragma unroll
                             for(int c=0;c<DV;++c)
-                                slot.v[int2{pr,c}]=static_cast<const __nv_bfloat16*>(p.v)[
+                                value[int2{pr,c}]=static_cast<const __nv_bfloat16*>(p.v)[
                                     (int64_t(bh)*p.n+t*64+r)*DV+c];
                         }
 #pragma unroll 1
                         for(int r=valid;r<64;++r) {
                             int pr=(r&7)*8+((r>>3)&3)*2+(r>>5);
 #pragma unroll
-                            for(int c=0;c<D;++c) slot.k[int2{pr,c}]=__float2bfloat16(0);
+                            for(int c=0;c<D;++c) key[int2{pr,c}]=__float2bfloat16(0);
 #pragma unroll
-                            for(int c=0;c<DV;++c) slot.v[int2{pr,c}]=__float2bfloat16(0);
+                            for(int c=0;c<DV;++c) value[int2{pr,c}]=__float2bfloat16(0);
                         }
                         arrive(&shared.ready[s]);
+                    }
                     }
                     // Largest shape uses two Q phases, but K0/V0 is issued
                     // before waiting for Q0 consumption. This keeps next-task
@@ -143,8 +224,8 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
                     if constexpr(QPHASES==2) {
                         if(t==0 && leader) {
                             wait(&shared.qfree,qepoch&1);
-                            expect(&shared.qready,sizeof(shared.q));
-                            summary_tma(&qm,shared.q.data,&shared.qready,{base+QROWS,bh,0,0});
+                            expect(&shared.qready,sizeof(shared.query()));
+                            summary_tma(&qm,shared.query().data,&shared.qready,{base+QROWS,bh,0,0});
                         }
                     }
                 }
@@ -163,7 +244,7 @@ __global__ __launch_bounds__(384,1) void core(__grid_constant__ const Args p, __
             for(int phase=0;phase<QPHASES;++phase) {
                 wait(&shared.qready,(task_round*QPHASES+phase)&1);
                 if((qbase-base)/QROWS==phase) {
-                    auto view=shared.q.template subtile<16,D>({((qbase-base)%QROWS)/16,0});
+                    auto view=shared.query().template subtile<16,D>({((qbase-base)%QROWS)/16,0});
                     kt::warp::load(qreg,view);
                 }
                 arrive(&shared.qfree);
@@ -178,7 +259,7 @@ bool hard[2];
             } else {
                 int decision=0;
                 if(lane<16 && qbase+lane<p.n)
-                    decision=row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qbase+lane,p.hard_prob);
+                    decision=row_hard<true>(p.seed,p.offset,uint64_t(bh)*p.n+qbase+lane,p.hard_prob);
                 hard[0]=__shfl_sync(0xffffffff,decision,lane/4);
                 hard[1]=__shfl_sync(0xffffffff,decision,8+lane/4);
             }
@@ -198,7 +279,10 @@ bool hard[2];
         float maximum[2]{0,0}, denominator[2]{1,1};
         #pragma unroll 1
         for(int t=0;t*64<key_end;++t,++tile) {
-            int s=tile%STAGES, phase=(tile/STAGES)&1;
+            int s=ALIAS?t%STAGES:tile%STAGES;
+            int phase=ALIAS?((slot_phases>>s)&1):(tile/STAGES)&1;
+            bool recycled=ALIAS?bool(used_slots&(1u<<s)):tile>=STAGES;
+            if constexpr(ALIAS) {used_slots|=1u<<s;slot_phases^=1u<<s;}
             Scalar scalar;
             {
                 Label key_label[2];
@@ -214,8 +298,16 @@ bool hard[2];
                 wait(&shared.ready[s],phase);
                 kt::rt_bf<D,64,kt::ducks::rt_layout::col> kreg;
                 kt::rt_fl<16,64> accum{0.f};
-                load_rhs_tile(kreg,shared.slot[s].k);
+                load_rhs_tile(kreg,shared.key(s));
                 kt::warp::wmma::mma_AB(accum,qreg,kreg,accum);
+                if constexpr(SPLIT) {
+                    // ptxas can schedule an arrive before trailing HMMAs even
+                    // when source puts it after mma_AB. Establish WG memory
+                    // ordering explicitly before releasing the shared K reads.
+                    kt::warpgroup::sync(4+warp/4);
+                    arrive(&shared.kfree[s]);
+                    if((t+1)*64>=key_end) arrive(&shared.done);
+                }
                 #pragma unroll
                 for(int r=0;r<2;++r) {
                     #pragma unroll
@@ -276,7 +368,7 @@ bool hard[2];
             else result=data.reduce_forward(left,top);
             left=result.first;
             if(warp<4) {
-                if(tile>=STAGES) wait(&shared.mail_free[s],phase^1);
+                if(recycled) wait(&shared.mail_free[s],phase^1);
                 result.second.store_shared(shared.mail[warp][s]);
                 arrive(&shared.mail_ready[s]);
             } else if constexpr(!OUTPUT) {
@@ -336,11 +428,11 @@ bool hard[2];
                     }
                     m=fmaxf(m,__shfl_xor_sync(0xffffffff,m,1));
                     m=fmaxf(m,__shfl_xor_sync(0xffffffff,m,2));
-                    float alpha=exp2f(maximum[r]-m), sum=0;
+                    float alpha=exp2_ftz(maximum[r]-m), sum=0;
                     #pragma unroll
                     for(int c=0;c<8;++c) {
                         auto x=scalar.data[r][c].value;
-                        float a=exp2f(x.u0-m),b=exp2f(x.u1-m); sum+=a+b;
+                        float a=exp2_ftz(x.u0-m),b=exp2_ftz(x.u1-m); sum+=a+b;
                         weights.tiles[0][c/2].data[r+2*(c&1)]=__floats2bfloat162_rn(a,b);
                     }
                     sum+=__shfl_xor_sync(0xffffffff,sum,1); sum+=__shfl_xor_sync(0xffffffff,sum,2);
@@ -352,9 +444,12 @@ bool hard[2];
                     }
                 }
                 kt::rt_bf<64,DV,kt::ducks::rt_layout::col> vreg;
-                kt::warp::load(vreg,shared.slot[s].v);
+                if constexpr(SPLIT) wait(&shared.vready[s],phase);
+                kt::warp::load(vreg,shared.value(s));
                 kt::warp::wmma::mma_AB(out,weights,vreg,out);
                 arrive(&shared.free[s]);
+                if constexpr(ALIAS && !SPLIT)
+                    if((t+1)*64>=key_end) arrive(&shared.done);
             }
         }
         // Initialize omitted strictly upper-triangular state: passing and backward

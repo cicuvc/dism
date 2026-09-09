@@ -13,6 +13,7 @@ from .kernel_config import TILE_LSE
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--baseline-binary')
+    parser.add_argument('--baseline-module',help='Optional original PyInit module name for a saved variant')
     parser.add_argument('--direction',default='q_from_k',choices=['q_from_k','k_from_q'])
     parser.add_argument('--hard-prob',type=float,default=.5)
     parser.add_argument('--d',type=int,default=64,choices=[32,64,128])
@@ -23,7 +24,7 @@ def main():
     args=parser.parse_args()
     if args.dv is None: args.dv=args.d
     if args.baseline_binary:
-        name='dism_v2_core_sm120a'+('' if TILE_LSE=='full' else '_'+TILE_LSE)
+        name=args.baseline_module or 'dism_v2_core_sm120a'+('' if TILE_LSE=='full' else '_'+TILE_LSE)
         spec=importlib.util.spec_from_file_location(name,args.baseline_binary)
         module=importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)

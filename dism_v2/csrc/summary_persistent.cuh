@@ -157,7 +157,7 @@ __global__ __launch_bounds__(384, 1) void summary_persistent(__grid_constant__ c
             } else {
                 int decision=0;
                 if(lane<16 && qbase+lane<p.n)
-                    decision=row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qbase+lane,p.hard_prob);
+                    decision=row_hard<true>(p.seed,p.offset,uint64_t(bh)*p.n+qbase+lane,p.hard_prob);
                 hard[0]=__shfl_sync(0xffffffff,decision,lane/4,32);
                 hard[1]=__shfl_sync(0xffffffff,decision,8+lane/4,32);
             }

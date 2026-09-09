@@ -25,6 +25,11 @@
 
 ## 随机数与重算
 
+- 前向summary/OUTPUT混合特化使用row_hard<true>省掉概率端点检查，其他未特化
+  调用保留端点快速路径。online softmax及共享log-affine使用显式ex2.approx.ftz.f32，
+  有意将subnormal指数输出清零；chunk passing仍是完整log1p公式，不换tanh。
+  最新hard_bits A/B未见稳定净收益，默认仍0；实测见dism_v2/FORWARD_SCALAR_BITSET.md。
+
 - 生产路径在 warp 内生成行决策所需随机数，不预先生成或保存 global-memory 行随机数/行 mask 数组。
 - 用户最新授权 bitset A/B 实验：`DISM_ROW_BITSET=1` 在 CUDA embedding 收尾生成每32行一个 uint32，core 前后向复用；RNG 身份和消费约定不变。此为上述“不保存行 mask”约定的明确实验例外，默认保留重算路径。
 - 使用可重放的 counter-based RNG 或等价方案，将逻辑 `(sequence/batch, head, query row)` 映射到随机数。不得使用会随 CTA 调度、warp 所属或 key tile 改变的随机身份。
@@ -34,6 +39,15 @@
 - reference 的显式 `hard_mask`/`interpolation` 可用于调试对照，但不是生产路径的预计算 mask 方案。调试导出的 mask 不得进入正式性能路径。
 
 ## 实现组件与布局
+
+- OUTPUT新增D64/DV64的Q存储复用实验，进程首次构建前设置DISM_OUTPUT_Q_ALIAS=kv/k，
+  用户因主要工况为mixed选择默认kv；none/k仍可显式选择，其他维度保留原实现。kv为Q/KV2 union三级流水、最后PV后预取下一任务；
+  k为Q覆盖SoA的K1/K2，V独立，K读取经WG同步后释放并允许下一Q预取。
+  最初紧接LDSM释放曾有memcheck执行下重放失败；单纯把源码arrive移到MMA之后
+  不能约束ptxas调度，最终k版使用WG barrier4/5保证共享读完成，codegen验证释放前
+  有该同步且没有LDSM跨过它。两版最终三类sanitizer各10项通过，full/finite D64/DV64
+  零spill、无CALL。kv仅mixed有实测收益，soft/短N回退；k无稳定收益，仍不默认启用。
+  详见dism_v2/OUTPUT_Q_ALIAS.md；本条不授权继续扩大实验范围或自动切换dispatch。
 
 - OUTPUT主kernel已完成summary同类优化（2026-09-09）：90个D×DV×方向×模式/标签
   特化，与30个summary合计120处inc/dec；score元数据寄存器缓存、单FFMA/selp。

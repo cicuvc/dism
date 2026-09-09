@@ -21,9 +21,14 @@ __host__ __device__ __forceinline__ uint32_t row_bits(uint64_t seed, uint64_t of
     }
     return c.x;
 }
+template<bool MIXED_ONLY=false>
 __device__ __forceinline__ bool row_hard(uint64_t seed,uint64_t offset,uint64_t row,float probability) {
-    if(probability==0.f) return false;
-    if(probability==1.f) return true;
+    // Forward MODE specialization handles endpoints outside this call. Keep
+    // their cheap return for unspecialized backward/embedding callers.
+    if constexpr(!MIXED_ONLY) {
+        if(probability==0.f) return false;
+        if(probability==1.f) return true;
+    }
     return float(row_bits(seed,offset,row)>>8)*0x1p-24f<probability;
 }
 } // namespace dism_v2

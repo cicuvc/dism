@@ -1,5 +1,6 @@
 """Guard against silent setmaxnreg removal or TMA extern-call lowering."""
 import re
+import os
 import subprocess
 from pathlib import Path
 
@@ -38,9 +39,21 @@ def test_sm120a_native_tma_and_register_reallocation(record_property):
     # Removing all exit synchronization has stalled persistent N257 workloads.
     for name,body in {**summaries,**outputs}.items():
         barriers=[line for line in body.splitlines() if "BAR.SYNC" in line]
-        assert len(barriers)==2,name
+        split_k=(os.environ.get('DISM_OUTPUT_Q_ALIAS','kv')=='k'
+                 and 'coreILi64ELi64E' in name)
+        assert len(barriers)==(3 if split_k else 2),name
         assert sum(bool(re.search(r"BAR\.SYNC[^;]*, 0x80\s*;",line))
-                   for line in barriers)==1,name
+                   for line in barriers)==(2 if split_k else 1),name
+        if split_k and ('ELi0E' in name or 'ELi2E' in name):
+            # Source ordering alone did not keep arrive after score HMMA.
+            # The explicit WG barrier must precede the first K release.
+            start=body.index('HMMA.')
+            release=body.index('SYNCS.ARRIVE',start)
+            sync=body.rfind('BAR.SYNC',0,release)
+            assert sync>=0 and re.search(r'BAR\.SYNC[^;]*, 0x80\s*;',body[sync:release]),name
+            # In some specializations ptxas places the WG barrier before the
+            # first HMMA; that is also safe provided all K loads precede it.
+            assert 'LDSM.' not in body[sync:release],name
     # Two query-label and two distributed key-label loads; no per-score LDG64.
     for name,body in summaries.items():
         wide='Li1ExE' in name or 'Li2ExE' in name

@@ -18,14 +18,18 @@ from .kernel_config import LSE_SUFFIX, LSE_FLAGS
 def _extension():
     root = Path(__file__).resolve().parent.parent
     glx = Path(os.environ.get("GLX_ROOT", "/home/cicuvc/cs/projects/glx"))
+    alias = os.environ.get("DISM_OUTPUT_Q_ALIAS", "kv")
+    if alias not in ("none", "kv", "k"):
+        raise ValueError("DISM_OUTPUT_Q_ALIAS must be none, kv or k")
+    alias_flags = [] if alias == "none" else [f"-DDISM_OUTPUT_Q_ALIAS={1 if alias == 'kv' else 2}"]
     return load(
-        name="dism_v2_core_sm120a" + LSE_SUFFIX,
+        name="dism_v2_core_sm120a" + LSE_SUFFIX + ("" if alias == "none" else "_qalias_" + alias),
         sources=[str(root / "dism_v2/csrc" / f) for f in ("bindings.cpp", "core_fwd.cu")],
         extra_include_paths=[str(root / "include"), str(glx / "include")],
         extra_cflags=["-O2", "-std=c++20"],
         extra_cuda_cflags=["-O3", "-std=c++20", "--extended-lambda",
                           "--expt-relaxed-constexpr", "-gencode=arch=compute_120a,code=sm_120a",
-                          "--ptxas-options=-v"] + LSE_FLAGS
+                          "--ptxas-options=-v"] + LSE_FLAGS + alias_flags
                           + (["-lineinfo"] if os.environ.get("DISM_LINEINFO", "0") == "1" else []),
         extra_ldflags=["-lcuda"], verbose=os.environ.get("DISM_VERBOSE_BUILD") == "1",
     )

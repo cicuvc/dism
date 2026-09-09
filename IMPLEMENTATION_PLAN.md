@@ -776,6 +776,46 @@ tensor37.08%。约95.3%的剩余excessive global sectors来自横边/O写回，
 本轮要求的实施/验证/性能审计已完成，未提交；剩余store布局、任务负载均衡、
 短序列尾加载和spill优化不声称已完成。完整记录见dism_v2/OUTPUT_OPTIMIZATION.md。
 
+### 三个前向kernel与旧Triton对照（2026-09-09）
+
+OUTPUT优化已提交82f9305；新增独立benchmark_forward_comparison统计正常forward
+stream中的summary/passing/output，不含embedding、初始化kernel及CPU间隙。
+B64/H4/N1024/D=DV64，CUDA词表512/finite，旧Triton N_VOCAB=N_HEADDIM64。
+三轮各30次，保留所有样本：按90样本平均总时间，Triton1906.8us，
+CUDA纯soft728.3/744.4us、mixed739.6/752.9us（q/k方向），相对吞吐2.53–2.62x。
+单kernel中位数比值summary2.63–3.10x、passing1.72–1.76x、output2.39–2.48x。
+不同数学语义，未锁频且Triton有明显样本波动；不作等价算法或训练TPS结论。
+逐次总时间与分阶段中位数不能直接相加，见dism_v2/FORWARD_VS_TRITON.md。
+
+### OUTPUT Q/KV存储复用验证（已完成，2026-09-09）
+
+用户授权保守/激进两版。D64/DV64保留默认独立Q基线，新增进程级
+DISM_OUTPUT_Q_ALIAS=kv/k隔离构建；均三级流水。
+kv版Q覆盖KV2，最后PV后允许下一workload预取；k版SoA的Q覆盖K1/K2，
+K读取后经WG同步再释放，最后K消费后允许下一Q预取，V仍由独立ready/free保护。
+每任务从slot0开始，phase按物理槽维护；包含少于三级的短任务。
+两版full core/replay/codegen各146项、finite labels/bitset/replay/codegen各130项通过。
+两版full/finite的D64/DV64各10实例零spill、无CALL，三类sanitizer各10项零错误，
+最终k版另重复三轮N129 memcheck各2项通过。最初紧随LDSM释放曾出现一行重放
+不一致，已淘汰；仅将源码释放移到MMA后不能约束ptxas调度，最终加WG barrier4/5，
+并验证无LDSM跨过该同步后才发布K-free。反向重算257项、full/finite选定端到端
+各507项通过，保留既有精度问题及backward零spill断言冲突，不改容差。
+动态shared：kv55424B/k55552B，均实现三级（原独立Q两级53376B）。
+B64/H4/N1024/D64/DV64/mixed/finite三轮OUTPUT中位数：q方向基线451.556us、
+kv417.373us、k462.126us；k方向456.431/447.421/456.462us。
+kv在mixed有收益但soft及N65/257回退，k无稳定净收益；用户随后基于mixed主工况
+选择默认kv，保留显式none/k，不自动dispatch。
+实测、SASS与两份新NCU见dism_v2/OUTPUT_Q_ALIAS.md；本轮未提交。
+
+### 前向scalar与hard_bits复测（已完成，2026-09-09）
+
+前向scalar收尾和hard_bits复测已完成：默认保守kv，混合row_hard删除端点检查，
+显式FTZ EX2消除subnormal处理。full263/finite130、标量probe3、反向257、
+选定端到端full/finite各507、三类sanitizer各10通过；不宣称既有精度问题修复。
+summary零spill，OUTPUT已接受spill未变化。hard_bits含embedding前向总时间仅改善
+0.14%/0.07%，全前反向0.56%/0.23%，未锁频且存在波动，保留默认0。
+数据、边界语义及复现命令见dism_v2/FORWARD_SCALAR_BITSET.md；未提交。
+
 ## 阶段 6：varlen
 
 - 增加 packed tokens 与 sequence offsets 接口，定义与 fixed-length 逐序列调用等价的数学结果。
