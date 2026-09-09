@@ -16,6 +16,7 @@ def main():
     parser.add_argument('--direction',default='q_from_k',choices=['q_from_k','k_from_q'])
     parser.add_argument('--hard-prob',type=float,default=.5)
     parser.add_argument('--d',type=int,default=64,choices=[32,64,128])
+    parser.add_argument('--n',type=int,default=1024)
     parser.add_argument('--label-dtype',choices=['int32','int64'],default='int32')
     args=parser.parse_args()
     if args.baseline_binary:
@@ -25,7 +26,7 @@ def main():
         spec.loader.exec_module(module)
         core._extension=lambda:module
     torch.manual_seed(0)
-    q,k,v=[torch.randn(64,4,1024,args.d,device='cuda',dtype=torch.bfloat16) for _ in range(3)]
+    q,k,v=[torch.randn(64,4,args.n,args.d,device='cuda',dtype=torch.bfloat16) for _ in range(3)]
     qv,kv=[torch.randn(4,512,args.d,device='cuda',dtype=torch.bfloat16) for _ in range(2)]
     emb=embedding(q,k,qv,kv,1.)
     tau=torch.full((4,),3.,device='cuda')
@@ -50,7 +51,7 @@ def main():
            and ('summary_persistent<' in e.name or ('core<' in e.name and 'false>' in e.name))]
     assert len(times)==30,[(e.name,e.device_time_total) for e in prof.events()
                          if e.device_type==torch.autograd.DeviceType.CUDA][:20]
-    print(json.dumps(dict(**vars(args),tile_lse=TILE_LSE,b=64,h=4,n=1024,vocab=512,
+    print(json.dumps(dict(**vars(args),tile_lse=TILE_LSE,b=64,h=4,vocab=512,
         gpu=torch.cuda.get_device_name(),samples_us=times,median_us=statistics.median(times),
         finite=bool(torch.isfinite(result[0]).all()))))
 

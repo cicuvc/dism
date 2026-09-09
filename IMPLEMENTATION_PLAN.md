@@ -722,6 +722,35 @@ full251项通过，finite118项和lineinfo memcheck通过；首轮D64混合摘�
 full251项通过，finite54组新旧隔离进程逐位一致，memcheck零错误，无spill/CALL。
 未测试shared/TMA批量写回或新增NCU。候选与实测见experiments/summary_store/README.md。
 
+### 三级K流水显式K0/K1前导预取实验（2026-09-09）
+
+保持原槽数/同步，仅剥离展开producer前两步。finite117项通过，但D64六实例
+出现STACK8；大配置B64/H4/N1024候选超过70秒未返回，终止测试并恢复原路径。
+未得到候选耗时，不声称跨任务预取已验证，未继续修spill或猜测卡住根因。
+补丁与资源记录见experiments/summary_k01/README.md。
+
+### 摘要退出同步缩小为warpgroup（2026-09-09）
+
+直接删除最终CTA barrier导致full模式N257/q_from_k/D32跨workload测试卡住；
+恢复CTA barrier后12项通过。按用户建议改用TK warpgroup::sync(1+warp/4)，
+三个WG分别128线程同步退出，保留初始化CTA barrier，组间无需同时退出。
+full251项、独立persistent12项通过；新增kernel-only退出/重放12项三类sanitizer
+均零错误/hazard。SASS保留原生TMA、inc232/dec40，无spill/CALL。
+NCU报告/tmp/dism-summary-wg-exit-lineinfo-q.ncu-rep：229.44us，SM39.74%，
+tensor38.54%；旧报告230.40us，未锁频单次profile不声称稳定提速。
+未定位无退出同步卡住的硬件/编译器根因，详见experiments/summary_final_barrier/README.md。
+
+### 单线程producer实验（2026-09-09）
+
+先elect再判断warp8/leader，仅该线程运行producer循环，ready32→1；其余producer
+线程仅参加WG退出同步，free256/mail128不变。full263项通过，finite codegen通过，
+无spill/CALL。D64/N1024三轮q方向222.415→220.6545us，k方向基本持平；
+N65/257的leader串行尾块分别约13→35us、37→59us，回退明显。
+用户已接受并授权提交为当前summary基线，保留尾部性能回退记录，不能视为所有shape的
+通用性能优化；详见experiments/summary_leader_only/README.md。
+同配置Triton summary比较：CUDA纯soft约2.69–3.09倍、mixed约2.60–2.75倍相对吞吐；
+只比较summary GPU时间，不是端到端训练吞吐，见dism_v2/SUMMARY_VS_TRITON.md。
+
 ## 阶段 6：varlen
 
 - 增加 packed tokens 与 sequence offsets 接口，定义与 fixed-length 逐序列调用等价的数学结果。

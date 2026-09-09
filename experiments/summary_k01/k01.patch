@@ -1,0 +1,36 @@
+diff --git a/dism_v2/csrc/summary_persistent.cuh b/dism_v2/csrc/summary_persistent.cuh
+--- a/dism_v2/csrc/summary_persistent.cuh
++++ b/dism_v2/csrc/summary_persistent.cuh
+@@ -101,8 +101,7 @@
+                     expect(&shared.qready, 8 * 16 * D * 2);
+                     summary_tma(&qm, shared.q.data, &shared.qready, {base, bh, 0, 0});
+                 }
+-#pragma unroll 1
+-                for (int t = 0; t * 64 < key_end; ++t, ++tile) {
++                auto load_key = [&](int t) {
+                     int s = tile % SLOTS;
+                     if (tile >= SLOTS)
+                         wait(&shared.free[s], ((tile / SLOTS) - 1) & 1);
+@@ -126,7 +125,22 @@
+                         __syncwarp();
+                         arrive(&shared.ready[s]);
+                     }
++                };
++                // Explicit two-tile prologue: submit K0 and K1 before entering
++                // the steady-state producer loop. Reuse the existing ring and
++                // its cumulative phases across workloads; never overwrite an
++                // old reader. D128's single slot must retain its original path.
++                constexpr int PREFETCH = SLOTS >= 3 ? 2 : 0;
++#pragma unroll
++                for (int t = 0; t < PREFETCH; ++t) {
++                    if (t * 64 < key_end) {
++                        load_key(t);
++                        ++tile;
++                    }
+                 }
++#pragma unroll 1
++                for (int t = PREFETCH; t * 64 < key_end; ++t, ++tile)
++                    load_key(t);
+             }
+         }
+     } else {

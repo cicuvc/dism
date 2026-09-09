@@ -27,6 +27,13 @@ def test_sm120a_native_tma_and_register_reallocation():
     # One Q transfer per workload and one full-width K transfer per key tile,
     # including D128; neither warp-row nor swizzle-panel emission loops remain.
     assert all(body.count("UTMALDG.5D")==2 for body in summaries.values())
+    # CTA initialization plus an independent 128-thread exit barrier per WG.
+    # Removing all exit synchronization has stalled persistent N257 workloads.
+    for name,body in summaries.items():
+        barriers=[line for line in body.splitlines() if "BAR.SYNC" in line]
+        assert len(barriers)==2,name
+        assert sum(bool(re.search(r"BAR\.SYNC[^;]*, 0x80\s*;",line))
+                   for line in barriers)==1,name
     # Two query-label and two distributed key-label loads; no per-score LDG64.
     for name,body in summaries.items():
         wide='Li1ExE' in name or 'Li2ExE' in name

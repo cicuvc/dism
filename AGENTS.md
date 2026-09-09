@@ -35,6 +35,17 @@
 
 ## 实现组件与布局
 
+- 当前已获用户接受的summary基线采用leader-only producer：producer WG dec40后先elect，仅warp8的
+  elected线程进入task/key循环；其余线程走WG退出同步，不直接return。K-ready1，
+  K-free256、mail128不变。尾块暂由leader串行安全搬运/补零，因此N65/257有明显
+  性能回退，不视为通用性能优化。详见experiments/summary_leader_only/README.md；
+  下文ready32为此前基线，free2/ready1历史卡住实验仍非本方案的根因证明。
+
+- 摘要退出同步改为三个warpgroup分别执行TK warpgroup::sync(1+warp/4)，
+  named barrier1/2/3各128线程；仅初始化保留CTA barrier0。直接删除所有退出同步
+  曾导致N257跨workload测试卡住，WG同步版本通过full251项及kernel-only12项三类
+  sanitizer；不能据此断言具体硬件根因。详见experiments/summary_final_barrier/README.md。
+
 - 摘要元数据新版：int32/int64 标签由 host 分发，soft/hard/mixed 编译期特化；
   soft 不加载标签，hard 不加载 LSE，int64 诊断输入不截断。D×方向×5 共30个摘要实例，
   加9个output共39处寄存器重分配。高层保留 embedding 的 int32 标签，不再转 long；

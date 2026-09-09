@@ -76,7 +76,7 @@ __global__ __launch_bounds__(384, 1) void summary_persistent(__grid_constant__ c
         init_bar(&shared.qfree, 256);
 #pragma unroll
         for (int s = 0; s < SLOTS; ++s) {
-            init_bar(&shared.ready[s], 32);
+            init_bar(&shared.ready[s], 1);
             init_bar(&shared.free[s], 256);
             init_bar(&shared.mail_ready[s], 128);
             init_bar(&shared.mail_free[s], 128);
@@ -87,20 +87,18 @@ __global__ __launch_bounds__(384, 1) void summary_persistent(__grid_constant__ c
     int tile = 0, task_round = 0;
     if (warp >= 8) {
         kt::warpgroup::decrease_registers<40>();
-        if (warp == 8) {
-            bool leader = kt::warp::elect_leader();
+        bool leader = kt::warp::elect_leader();
+        if (warp == 8 && leader) {
 #pragma unroll 1
             for (int task = blockIdx.x; task < total; task += gridDim.x, ++task_round) {
                 int bh = task / blocks, base = (task % blocks) * 128;
                 int key_end = min(p.padded_n, base + 128);
                 // Producer runs ahead: this Q and K0 launch while consumers
                 // finish the previous workload. No task-end CTA barrier.
-                if (leader) {
-                    if (task_round)
-                        wait(&shared.qfree, (task_round - 1) & 1);
-                    expect(&shared.qready, 8 * 16 * D * 2);
-                    summary_tma(&qm, shared.q.data, &shared.qready, {base, bh, 0, 0});
-                }
+                if (task_round)
+                    wait(&shared.qfree, (task_round - 1) & 1);
+                expect(&shared.qready, 8 * 16 * D * 2);
+                summary_tma(&qm, shared.q.data, &shared.qready, {base, bh, 0, 0});
 #pragma unroll 1
                 for (int t = 0; t * 64 < key_end; ++t, ++tile) {
                     int s = tile % SLOTS;
@@ -108,22 +106,29 @@ __global__ __launch_bounds__(384, 1) void summary_persistent(__grid_constant__ c
                         wait(&shared.free[s], ((tile / SLOTS) - 1) & 1);
                     auto &slot = shared.slot[s];
                     if (t * 64 + 64 <= p.n) {
-                        if (leader) {
-                            expect(&shared.ready[s], sizeof(slot.k));
-                            summary_tma(&km, slot.k.data, &shared.ready[s],
-                                        {0, 0, bh * p.n + t * 64, 0});
-                        } else arrive(&shared.ready[s]);
+                        expect(&shared.ready[s], sizeof(slot.k));
+                        summary_tma(&km, slot.k.data, &shared.ready[s],
+                                    {0, 0, bh * p.n + t * 64, 0});
                     } else {
-// Safe sequence-local tail; no flattened-map overread.
+                        // Single-owner safe tail. Iterate logical rows, then
+                        // invert logical_row() for the permuted shared layout.
+                        // Runtime row bounds avoid unrolling the entire tile.
+                        int valid = min(64, max(0, p.n - t * 64));
+#pragma unroll 1
+                        for (int r = 0; r < valid; ++r) {
+                            int physical = (r & 7) * 8 + ((r >> 3) & 3) * 2 + (r >> 5);
 #pragma unroll
-                        for (int x = lane; x < 64 * D; x += 32) {
-                            int j = t * 64 + logical_row(x / D);
-                            slot.k[int2{x / D, x % D}] = j < p.n
-                                                             ? static_cast<const __nv_bfloat16 *>(
-                                                                   p.b)[(int64_t(bh) * p.n + j) * D + x % D]
-                                                             : __float2bfloat16(0);
+                            for (int c = 0; c < D; ++c)
+                                slot.k[int2{physical, c}] = static_cast<const __nv_bfloat16 *>(
+                                    p.b)[(int64_t(bh) * p.n + t * 64 + r) * D + c];
                         }
-                        __syncwarp();
+#pragma unroll 1
+                        for (int r = valid; r < 64; ++r) {
+                            int physical = (r & 7) * 8 + ((r >> 3) & 3) * 2 + (r >> 5);
+#pragma unroll
+                            for (int c = 0; c < D; ++c)
+                                slot.k[int2{physical, c}] = __float2bfloat16(0);
+                        }
                         arrive(&shared.ready[s]);
                     }
                 }
@@ -283,7 +288,10 @@ __global__ __launch_bounds__(384, 1) void summary_persistent(__grid_constant__ c
             }
         }
     }
-    __syncthreads(); // Final drain only, not a workload boundary.
+    // Retire each 128-thread register-allocation group together, without
+    // coupling the two compute groups to the producer's exit. Barrier0 is
+    // reserved for CTA initialization; IDs1/2/3 belong to WG0/WG1/producer.
+    kt::warpgroup::sync(1 + warp / 4);
 }
 template <int D, bool COLUMN_LSE, int MODE, typename Label> void launch_persistent_summary_variant(const Args &p, cudaStream_t stream) {
     auto qm = summary_q_map<D>(p), km = permuted_map<D, true>(p.b, p.batch_heads * p.n);
