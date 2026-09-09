@@ -1,5 +1,6 @@
 """12-warp B3: independent G/GEMM oracle, tails, raw reference and codegen."""
 import itertools
+import os
 import re
 import subprocess
 from dataclasses import replace
@@ -74,6 +75,7 @@ def test_ab_reference_bounded_soft(n,direction,record_property):
         check_summary=True,warp_specialized=True,check_g=True,check_ab=True,ab_warp_specialized=True,check_reference=True)
 
 def test_codegen():
+    optimization=int(os.environ.get('DISM_BWD_OPT','0'))
     sass=subprocess.check_output([str(Path(CUDA_HOME)/"bin/cuobjdump"),"-sass",_extension().__file__],text=True)
     count=0
     for block in sass.split('Function : ')[1:]:
@@ -81,14 +83,21 @@ def test_codegen():
         if dims is None: continue
         count+=1
         assert not re.search(r'\bCALL\b',block)
-        assert 'UTMALDG.5D' in block and 'UTMAREDG.3D.ADD' in block
+        hard_only=False
+        if optimization>=11:
+            spec=int(re.search(r'ILi\d+ELi\d+ELi(\d+)E',block.splitlines()[0]).group(1))
+            hard_only=spec%5 in (1,2)
+        assert 'UTMALDG.5D' in block
+        assert ('UTMAREDG.3D.ADD' in block)==(not hard_only)
         assert re.search(r'USETMAXREG\.DEALLOC\.CTAPOOL\s+0x28',block)
         assert re.search(r'USETMAXREG\.TRY_ALLOC\.CTAPOOL\s+UP\d+, 0xe8',block)
-        assert 'MUFU.TANH' in block and 'LDSM.16.MT88' in block
-        if int(dims[1])<128 and (int(dims[1]),int(dims[2]))!=(64,128):
+        assert 'MUFU.TANH' in block
+        assert ('LDSM.16.' if hard_only else 'LDSM.16.MT88') in block
+        if optimization==0 and int(dims[1])<128 and (int(dims[1]),int(dims[2]))!=(64,128):
             assert not re.search(r'\b(?:LDL|STL)\b',block)
-        # User accepts D128 and the new D64/DV128 scalar-gradient spill.
-    assert count==9
+        # Legacy resource gate only. Optimization experiments explicitly allow
+        # spill; test_ws_codegen_with_spill_report records every instance.
+    assert count==(90 if optimization>=10 else 9)
 
 def test_tau_codegen():
     sass=subprocess.check_output([str(Path(CUDA_HOME)/"bin/cuobjdump"),"-sass",_extension().__file__],text=True)

@@ -226,6 +226,18 @@
 
 ## 验证与协作
 
+- 反向OPT5直接RHS LDSM已验证；OPT6跨任务首块A/dO预取（B1独立输入槽、
+  B3复用Gsoft/dA scratch）协议验证通过但本批性能回退，保留实验、不切默认。
+  OPT7在OPT5流水线上仅改dA输出64B swizzle，OPT8再用TK float2成对store；
+  两者不包含OPT6预取。shared用量不增加，属于输出布局整理。
+  首块预取与输出swizzle分别控制，不把OPT编号理解为全部累积。
+  OPT9基于OPT5，改为无swizzle的float4 dA写回和相邻lane输出归属交换；
+  不含OPT6预取或OPT7/8 swizzle，也不新增shared缓冲。验证状态见优化文档。
+  OPT10回到OPT5布局，按方向/标签宽度/软硬模式特化score，180实例；
+  hard省去score MMA，但不得省略反向递推或rtau梯度。默认选择仍需最终验收。
+  OPT11在OPT10上仅对纯hard B3省去零dA/dB/dLSE计算，保留完整G递推与rtau；
+  dA/dLSE由host置零，dB由kernel显式写零。默认仍OPT0，九维度性能筛选尚未完成。
+  最新资源、正确性与性能见dism_v2/BACKWARD_OPTIMIZATION.md，spill继续记录。
 - 当前反向优化目标覆盖WS summary+dV与WS dA/dB/dLSE/dtau两个kernel；
   参照前向的基线profile、元数据/分支、TMA、persistent/预取与流水线流程。
   用户明确允许遇到spill先记录再继续，覆盖历史反向spill停报条款；不放宽容差。

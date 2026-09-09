@@ -33,14 +33,19 @@ def modules():
 @pytest.mark.parametrize('probability',(0.,.37,1.))
 @pytest.mark.parametrize('n',(129,257))
 @torch.no_grad()
-def test_trim_equivalence(modules,monkeypatch,d,dv,direction,probability,n,batch=2):
+def test_trim_equivalence(modules,monkeypatch,d,dv,direction,probability,n,batch=2,
+                          label_dtype=torch.int32,high_bits=False):
     torch.manual_seed(861)
     def rand(dim):return torch.randn(batch,1,n,dim,device='cuda',dtype=torch.bfloat16)
     a,b=rand(d),rand(d)
     v,do=rand(dv),rand(dv)
     tau=torch.zeros(1,device='cuda')
     lse=torch.full((batch,1,n),4.,device='cuda')
-    ql,kl=[torch.randint(0,11,(batch,1,n),device='cuda',dtype=torch.int32) for _ in range(2)]
+    ql,kl=[torch.randint(0,11,(batch,1,n),device='cuda',dtype=label_dtype) for _ in range(2)]
+    if high_bits:
+        assert label_dtype==torch.int64
+        for label in (ql,kl):
+            label.add_(torch.randint(-1,2,label.shape,device='cuda')*(1<<40))
     out,norm,edges,state=core.forward(a,b,v,lse,tau,ql,kl,sm_scale=.125,
         direction=direction,hard_prob=probability,save_boundaries=True,return_rng_state=True)
     def run(module):
@@ -57,6 +62,9 @@ def test_trim_equivalence(modules,monkeypatch,d,dv,direction,probability,n,batch
         torch.testing.assert_close(x,y,rtol=0,atol=0)
     for x,y in zip(actual[3],baseline[3]):
         torch.testing.assert_close(x,y,rtol=3e-5,atol=3e-5)
+    if probability==1. and int(os.environ.get('DISM_BWD_OPT','0'))>=11:
+        for grad in actual[3][:3]:
+            assert torch.count_nonzero(grad)==0 # dA/dB/dLSE; tau remains checked above.
     summary=actual[1]
     for chunk in range(4,summary.shape[-3]):
         end=(chunk//4)*128
@@ -71,3 +79,12 @@ def test_trim_equivalence(modules,monkeypatch,d,dv,direction,probability,n,batch
 def test_persistent_epochs(modules,monkeypatch,d,dv,direction,n):
     test_trim_equivalence(modules,monkeypatch,d,dv,direction,.37,n,
         batch=torch.cuda.get_device_properties(0).multi_processor_count+3)
+
+@pytest.mark.skipif(int(os.environ.get('DISM_BWD_OPT','2'))<10,reason='specialized candidate required')
+@pytest.mark.parametrize('d,dv',itertools.product((32,64,128),repeat=2))
+@pytest.mark.parametrize('direction',('q_from_k','k_from_q'))
+@pytest.mark.parametrize('probability',(0.,.37,1.))
+def test_specialized_int64(modules,monkeypatch,d,dv,direction,probability):
+    # Labels include +/-2**40: matching low32 bits must not imply a hard match.
+    test_trim_equivalence(modules,monkeypatch,d,dv,direction,probability,129,
+                          label_dtype=torch.int64,high_bits=True)

@@ -844,7 +844,36 @@ finite139通过；含九维度108项相等性和30项多workload重放，端到�
 
 OPT5已加入score/dP直接RHS LDSM加载；新增DISM_BWD_STAGES=1/2/3实验入口，
 按shared预算回退双槽，dA输出仍独立双槽。finite默认双槽及请求三槽各139通过；
-OPT5全模式/sanitizer/性能与单槽验证尚未完成，默认仍OPT0。详见反向优化文档。
+随后finite请求单槽和full双槽各139通过。主工况两轮计时：OPT5改善B3，
+三级未改善B1，单槽B1略快但未证明整体更优；轮间波动和各实例spill均记录。
+stage1/3各三项三类sanitizer及stage3额外N385两项三类sanitizer均通过，零错误/hazard。
+OPT6随后接入首块A/dO跨任务预取：B1独立预算内输入槽，B3复用既有scratch，
+首块dB读完后256-reader barrier才允许Gsoft覆盖；输入ring与mail独立计数。
+finite/full最终源码各139通过（含18实例noCALL/原生TMA断言），三类sanitizer各5项通过。
+严格reference仍192通过/14相同已知失败。实测OPT6 D64 B1持平、B3约5%回退，
+D32两kernel回退，保留实验但不切默认。NCU仍显示B3约4路shared-store bank conflict；
+OPT7回到OPT5输入流水，仅验证dA输出槽TK FP32 64B swizzle及匹配TMA描述符。
+OPT7 finite/full各139通过，三类sanitizer各3通过，但本批性能回退：
+NCU显示平均bank conflict下降同时store请求数增加，总wavefront未下降。
+OPT8使用TK float2成对输出store，不包含OPT6预取；finite/full各139通过，
+恢复请求数并消除主工况新增spill，但整体吞吐仍接近OPT5、bank conflict未实质减少。
+三类sanitizer各3通过，零错误/hazard；后续可独立验证float4输出线程归属，
+模式特化/全维度筛选仍待推进。
+OPT9已接入无swizzle的float4输出归属：相邻lane交换后四lane覆盖完整16列，
+不增加shared。finite140通过（新增CPU精确归属/bank检查及STS.128断言），
+full也140通过，三类sanitizer各3通过；NCU shared-store wavefront下降约32%，
+但指令数增加约3.4%、实测B3慢约2–3%，保留实验、不切默认。
+输出布局探索暂收敛，继续方向/标签类型/软硬模式特化和全维度候选筛选。
+OPT10已在OPT5布局上接入10种score策略（方向×soft/hard32/hard64/mixed32/mixed64），
+两WS kernel共180实例；hard只跳过score MMA，保留递推及所有梯度流程。
+finite139通过、额外54项int64高位标签通过，180实例codegen通过；
+full/sanitizer/分模式性能验证进行中，不含OPT6–9实验，默认仍OPT0。
+后续OPT11对纯hard B3省去零operand/LSE梯度计算，保留G递推及rtau；
+finite193项通过，full扩展套件414通过/26项与冻结OPT5相同的已知精度失败。
+full/finite全扩展noCALL检查通过，选定端到端各507通过，finite bitset62通过。
+纯hard主工况B3降至约556us，mixed基本不变；最终九维度性能及完整计时验收
+尚未完成，默认仍OPT0。
+详见反向优化文档及backward_rhs_{timing,codegen}_sm120a.json。
 
 ## 阶段 6：varlen
 

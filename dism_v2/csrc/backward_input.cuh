@@ -38,5 +38,34 @@ __device__ __forceinline__ void load(const CUtensorMap* map,void* dst,uint64_t* 
     kittens::tma::atoms::load_async_atom<kittens::cache_policy::NORMAL>(
         smaddr(dst),reinterpret_cast<uint64_t>(map),coord,*reinterpret_cast<kittens::semaphore*>(bar));
 }
+// A/dO asynchronous input entry. All32 producer lanes participate in the
+// ready epoch, including the scalar-safe, unpadded tail path.
+template<int D,int DV,typename Slot>
+__device__ __forceinline__ void issue_query(const Args& p,const CUtensorMap* qm,
+        const CUtensorMap* dm,const __nv_bfloat16* dout,Slot& slot,
+        uint64_t* ready,int bh,int qb,bool leader,int lane) {
+    if(qb+64<=p.n) {
+        if(leader) {
+            expect(ready,sizeof(slot.query)+sizeof(slot.dout));
+            load(qm,slot.query.data,ready,{0,0,bh*p.n+qb,0});
+            load(dm,slot.dout.data,ready,{0,0,bh*p.n+qb,0});
+        } else arrive(ready);
+    } else {
+        #pragma unroll
+        for(int x=lane;x<64*D;x+=32) {
+            int q=qb+logical_row(x/D);
+            slot.query[int2{x/D,x%D}]=q<p.n?
+                static_cast<const __nv_bfloat16*>(p.a)[(int64_t(bh)*p.n+q)*D+x%D]:__float2bfloat16(0);
+        }
+        #pragma unroll
+        for(int x=lane;x<64*DV;x+=32) {
+            int q=qb+logical_row(x/DV);
+            slot.dout[int2{x/DV,x%DV}]=q<p.n?
+                dout[(int64_t(bh)*p.n+q)*DV+x%DV]:__float2bfloat16(0);
+        }
+        __syncwarp();
+        arrive(ready);
+    }
+}
 }
 #endif

@@ -17,7 +17,7 @@ namespace ws {
 namespace kt=kittens;
 using Reverse=glx::MMABuffer<16,64,glx::BinaryElement,glx::AffineComposeOp,glx::F32x2>;
 template<int D,int DV> struct Slot { kt::st_bf<64,D> query; kt::st_bf<64,DV> dout; };
-template<int D,int DV> struct Shared {
+template<int D,int DV> struct InputConfig {
     static constexpr int REQUESTED=DISM_BWD_STAGES;
     static constexpr int INPUT_BYTES=128*(D+DV);
     static constexpr int CANDIDATE_BYTES=(REQUESTED>2?REQUESTED:2)*INPUT_BYTES
@@ -25,6 +25,19 @@ template<int D,int DV> struct Shared {
     // Keep the old two-stage allocation if a requested variant exceeds the
     // conservative63-KiB budget; do not enlarge already-large baseline shapes.
     static constexpr int SLOTS=DISM_BWD_OPT>=4 && CANDIDATE_BYTES<=63*1024?REQUESTED:2;
+    static constexpr int PREFETCH_BYTES=(SLOTS>2?SLOTS:2)*INPUT_BYTES
+        +INPUT_BYTES+4*SLOTS*sizeof(Reverse::HState::SharedStorage)+512;
+    static constexpr bool PREFETCH=DISM_BWD_OPT==6 && PREFETCH_BYTES<=63*1024;
+};
+template<int D,int DV,bool ENABLE> struct FirstInput {};
+template<int D,int DV> struct FirstInput<D,DV,true> {
+    // Explicit asynchronous input slot; independent of the held B/V union.
+    Slot<D,DV> first;
+    uint64_t first_ready,first_free;
+};
+template<int D,int DV> struct Shared : FirstInput<D,DV,InputConfig<D,DV>::PREFETCH> {
+    static constexpr int SLOTS=InputConfig<D,DV>::SLOTS;
+    static constexpr bool PREFETCH=InputConfig<D,DV>::PREFETCH;
     union {
 #if DISM_BWD_OPT >= 3
         struct { kt::st_bf<128,D> key; kt::st_bf<128,DV> value; } initial;
@@ -57,6 +70,10 @@ template<int D,int DV> struct Shared {
     uint64_t held_ready,held_free;
 #endif
     Reverse::HState::SharedStorage mail[4][SLOTS];
+    __device__ __forceinline__ Slot<D,DV>& input_slot(bool first_tile,int s) {
+        if constexpr(PREFETCH) { if(first_tile) return this->first; }
+        return slot[s];
+    }
 };
 __device__ __forceinline__ float transposed_score(const Args& p,float dot,int bh,int q,int k,bool hard) {
     if(q>=p.n || k>=p.n || k>q) return LOG_ZERO;
@@ -77,7 +94,7 @@ __device__ __forceinline__ float2 reverse_coefficient(const Args& p,const float*
 }
 
 
-template<int D,int DV>
+template<int D,int DV,int SPEC=-1>
 __global__ __launch_bounds__(384,1) void value_backward(
         __grid_constant__ const Args p,__grid_constant__ const CUtensorMap qm,
         __grid_constant__ const CUtensorMap dm,
@@ -89,6 +106,8 @@ __global__ __launch_bounds__(384,1) void value_backward(
     extern __shared__ __align__(128) unsigned char bytes[];
     auto& shared=*reinterpret_cast<Shared<D,DV>*>(bytes);
     constexpr int SLOTS=Shared<D,DV>::SLOTS;
+    constexpr bool PREFETCH=Shared<D,DV>::PREFETCH;
+    int input_tile=0; // Consumer regular-ring counter; mail includes first tiles.
     int warp=threadIdx.x/32,lane=threadIdx.x&31,g=lane&3,l=lane/4;
     int bh=blockIdx.y,chunk=blockIdx.x*4+(warp&3);
     int kb=chunk*32+(warp/4)*16;
@@ -97,6 +116,9 @@ __global__ __launch_bounds__(384,1) void value_backward(
     const int blocks=(p.padded_n+127)/128;
     int tile=0;
     if(warp==0 && kt::warp::elect_leader()) {
+        if constexpr(PREFETCH) {
+            init_bar(&shared.first_ready,32); init_bar(&shared.first_free,256);
+        }
 #if DISM_BWD_OPT >= 3
         init_bar(&shared.held_ready,1); init_bar(&shared.held_free,256);
 #endif
@@ -144,8 +166,8 @@ __global__ __launch_bounds__(384,1) void value_backward(
         asm volatile("setmaxnreg.dec.sync.aligned.u32 40;" ::: "memory");
         bool leader=kt::warp::elect_leader();
         if(warp==8) {
-#if DISM_BWD_OPT >= 3
         int task_round=0;
+#if DISM_BWD_OPT >= 3
         #pragma unroll 1
         for(int task=blockIdx.x;task<blocks*p.batch_heads;task+=gridDim.x,++task_round) {
             int bh=task/blocks,query_begin=(task%blocks)*128;
@@ -158,10 +180,15 @@ __global__ __launch_bounds__(384,1) void value_backward(
                 bwd_input::load(&bm,shared.initial.key.data,&shared.held_ready,{query_begin,bh,0,0});
                 bwd_input::load(&vm,shared.initial.value.data,&shared.held_ready,{query_begin,bh,0,0});
             }
+            if constexpr(PREFETCH) {
+                if(task_round) wait(&shared.first_free,(task_round-1)&1);
+                bwd_input::issue_query<D,DV>(p,&qm,&dm,dout,shared.first,
+                    &shared.first_ready,bh,p.padded_n-64,leader,lane);
+            }
             wait(&shared.held_free,task_round&1);
 #endif
         #pragma unroll 1
-        for(int t=0;t*64<p.padded_n-query_begin;++t,++tile) {
+        for(int t=PREFETCH?1:0;t*64<p.padded_n-query_begin;++t,++tile) {
             int s=tile%SLOTS,qb=p.padded_n-64-t*64;
             if(tile>=SLOTS) wait(&shared.free[s],((tile/SLOTS)-1)&1);
             auto& slot=shared.slot[s];
@@ -199,8 +226,8 @@ __global__ __launch_bounds__(384,1) void value_backward(
         }
     } else {
         asm volatile("setmaxnreg.inc.sync.aligned.u32 232;" ::: "memory");
-#if DISM_BWD_OPT >= 3
         int task_round=0;
+#if DISM_BWD_OPT >= 3
         #pragma unroll 1
         for(int task=blockIdx.x;task<blocks*p.batch_heads;task+=gridDim.x,++task_round) {
             int bh=task/blocks,key_cta=task%blocks,chunk=key_cta*4+(warp&3);
@@ -218,11 +245,14 @@ __global__ __launch_bounds__(384,1) void value_backward(
         kt::rt_fl<16,DV> accumulated{0.f};
         Reverse::VState right;
 #if DISM_BWD_OPT
-        bwd_metadata::Key key_meta(p,bh,kb);
+        bwd_metadata::KeyFor<SPEC> key_meta(p,bh,kb);
 #endif
         #pragma unroll 1
         for(int t=0;t*64<p.padded_n-query_begin;++t,++tile) {
             int s=tile%SLOTS,phase=(tile/SLOTS)&1,qb=p.padded_n-64-t*64;
+            int input_s=PREFETCH?input_tile%SLOTS:s;
+            int input_phase=PREFETCH?(input_tile/SLOTS)&1:phase;
+            auto& input=shared.input_slot(t==0,input_s);
 uint32_t hard0,hard1;
             if(p.hard_bits) {
                 const int words=(p.n+31)/32;
@@ -235,22 +265,27 @@ uint32_t hard0,hard1;
                 row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qb+lane+32,p.hard_prob));
             }
 #if DISM_BWD_OPT
-            bwd_metadata::Query query_meta(p,delta,bh,qb);
+            bwd_metadata::QueryFor<SPEC> query_meta(p,delta,bh,qb);
 #endif
-            wait(&shared.ready[s],phase);
+            if constexpr(PREFETCH) {
+                if(t==0) wait(&shared.first_ready,task_round&1);
+                else wait(&shared.ready[input_s],input_phase);
+            } else wait(&shared.ready[input_s],input_phase);
         Scalar scalar;
         {
             // Keys remain in registers across query tiles.
             kt::rt_fl<16,64> dot{0.f};
+            if constexpr(SPEC<0 || bwd_metadata::Policy<SPEC>::mode!=1) {
 #if DISM_BWD_OPT >= 5
             kt::rt_bf<D,64,kt::ducks::rt_layout::col> queries;
-            bwd_input::load_rhs(queries,shared.slot[s].query);
+            bwd_input::load_rhs(queries,input.query);
             kt::warp::wmma::mma_AB(dot,keys,queries,dot);
 #else
             kt::rt_bf<64,D> queries;
-            kt::warp::load(queries,shared.slot[s].query);
+            kt::warp::load(queries,input.query);
             kt::warp::wmma::mma_ABt(dot,keys,queries,dot);
 #endif
+            }
             #pragma unroll
             for(int r=0;r<2;++r) {
                 #pragma unroll
@@ -324,7 +359,7 @@ uint32_t hard0,hard1;
             }
         }
         kt::rt_bf<64,DV,kt::ducks::rt_layout::col> derivatives;
-        kt::warp::load(derivatives,shared.slot[s].dout);
+        kt::warp::load(derivatives,input.dout);
         kt::warp::wmma::mma_AB(accumulated,weights,derivatives,accumulated);
         // Single BF16 P MMA: accepted precision tradeoff for the WS path.
         // The single-warp baseline retains its high+residual correction.
@@ -336,11 +371,11 @@ uint32_t hard0,hard1;
                 {
 #if DISM_BWD_OPT >= 5
                     kt::rt_bf<DV,64,kt::ducks::rt_layout::col> derivatives;
-                    bwd_input::load_rhs(derivatives,shared.slot[s].dout);
+                    bwd_input::load_rhs(derivatives,input.dout);
                     kt::warp::wmma::mma_AB(dp,values,derivatives,dp);
 #else
                     kt::rt_bf<64,DV> derivatives;
-                    kt::warp::load(derivatives,shared.slot[s].dout);
+                    kt::warp::load(derivatives,input.dout);
                     kt::warp::wmma::mma_ABt(dp,values,derivatives,dp);
 #endif
                 }
@@ -365,7 +400,10 @@ uint32_t hard0,hard1;
             }
             // Both A and dO have been consumed. Producer can reuse this slot
             // independently of the subsequent reverse mailbox dependency.
-            arrive(&shared.free[s]);
+            if constexpr(PREFETCH) {
+                if(t==0) arrive(&shared.first_free);
+                else { arrive(&shared.free[input_s]); ++input_tile; }
+            } else { arrive(&shared.free[input_s]); ++input_tile; }
             reverse.reverse_roll();
             Reverse::HState bottom;
             if(warp<4) {
@@ -433,12 +471,12 @@ __global__ void passing32(const float2* summary,float* boundary,int np) {
         }
     }
 }
-template<int D,int DV> void launch(const Args& p,const void* dout,const float* delta,
+template<int D,int DV,int SPEC=-1> void launch_case(const Args& p,const void* dout,const float* delta,
         float* dv,float2* summary,cudaStream_t stream) {
     auto qm=permuted_map<D,(DISM_BWD_OPT>=3)>(p.a,p.batch_heads*p.n);
     auto dm=permuted_map<DV,(DISM_BWD_OPT>=3)>(dout,p.batch_heads*p.n);
     constexpr int sm=sizeof(Shared<D,DV>);
-    auto err=cudaFuncSetAttribute(value_backward<D,DV>,cudaFuncAttributeMaxDynamicSharedMemorySize,sm);
+    auto err=cudaFuncSetAttribute(value_backward<D,DV,SPEC>,cudaFuncAttributeMaxDynamicSharedMemorySize,sm);
     if(err!=cudaSuccess) throw std::runtime_error(cudaGetErrorString(err));
 #if DISM_BWD_OPT >= 3
     auto bm=bwd_input::held_map<D>(p,p.b),vm=bwd_input::held_map<DV>(p,p.v);
@@ -448,11 +486,19 @@ template<int D,int DV> void launch(const Args& p,const void* dout,const float* d
     status=cudaDeviceGetAttribute(&sms,cudaDevAttrMultiProcessorCount,device);
     if(status!=cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));
     int tasks=((p.padded_n+127)/128)*p.batch_heads;
-    value_backward<D,DV><<<std::min(tasks,sms),384,sm,stream>>>(
+    value_backward<D,DV,SPEC><<<std::min(tasks,sms),384,sm,stream>>>(
         p,qm,dm,bm,vm,static_cast<const __nv_bfloat16*>(dout),delta,dv,summary);
 #else
-    value_backward<D,DV><<<dim3((p.padded_n+127)/128,p.batch_heads),384,sm,stream>>>(
+    value_backward<D,DV,SPEC><<<dim3((p.padded_n+127)/128,p.batch_heads),384,sm,stream>>>(
         p,qm,dm,static_cast<const __nv_bfloat16*>(dout),delta,dv,summary);
+#endif
+}
+template<int D,int DV> void launch(const Args& p,const void* dout,const float* delta,
+        float* dv,float2* summary,cudaStream_t stream) {
+#if DISM_BWD_OPT >= 10
+    bwd_metadata::dispatch(p,[&]<int S>() { launch_case<D,DV,S>(p,dout,delta,dv,summary,stream); });
+#else
+    launch_case<D,DV>(p,dout,delta,dv,summary,stream);
 #endif
 }
 template<int D> void dim(const Args& p,int dv,const void* dout,const float* delta,
