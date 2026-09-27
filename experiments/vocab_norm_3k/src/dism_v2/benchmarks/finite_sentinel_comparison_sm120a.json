@@ -1,0 +1,3306 @@
+{
+  "baseline": "tanh (guarded infinity)",
+  "candidate": "tanh_finite (-1e6)",
+  "cases": [
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/32/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000004,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/32/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 9.5367431640625e-7,
+          "relative_l2": 1.028312730888319e-7,
+          "cosine": 0.9999999999999979,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/32/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/32/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.00000286102294921875,
+          "relative_l2": 0.0000037070892083811596,
+          "cosine": 0.9999999999993242,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/32/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 4.76837158203125e-7,
+          "relative_l2": 4.864443209994599e-8,
+          "cosine": 0.999999999999999,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/32/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/64/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000004,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/64/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000019073486328125,
+          "relative_l2": 1.2295391467966263e-7,
+          "cosine": 0.9999999999999927,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/64/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/64/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 9.5367431640625e-7,
+          "relative_l2": 4.428518552636901e-7,
+          "cosine": 0.9999999999999618,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/64/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000019073486328125,
+          "relative_l2": 8.695783990798446e-8,
+          "cosine": 0.999999999999999,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/64/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/128/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/128/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000019073486328125,
+          "relative_l2": 2.5338585228272034e-7,
+          "cosine": 0.9999999999999997,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999997,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/128/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/128/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/128/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.000003814697265625,
+          "relative_l2": 4.872305773040045e-7,
+          "cosine": 0.9999999999998846,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "32/128/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/32/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0000011920928955078125,
+          "relative_l2": 5.942629518609143e-7,
+          "cosine": 0.9999999999998235,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.000005424022674560547,
+          "relative_l2": 0.0000026075564715327494,
+          "cosine": 0.9999999999969033,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0001220703125,
+          "relative_l2": 0.00004063847376487129,
+          "cosine": 0.9999999991743279,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/32/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0001220703125,
+          "relative_l2": 0.0000486558002989474,
+          "cosine": 0.9999999988163083,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00006103515625,
+          "relative_l2": 0.000043787827026661096,
+          "cosine": 0.9999999990413179,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.000011444091796875,
+          "relative_l2": 5.054808393851294e-7,
+          "cosine": 0.9999999999999947,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.000244140625,
+          "relative_l2": 0.00011413189947796182,
+          "cosine": 0.9999999934895057,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0001220703125,
+          "relative_l2": 0.00009956622580045795,
+          "cosine": 0.9999999950432851,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/32/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/32/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0000152587890625,
+          "relative_l2": 0.000004587762369089616,
+          "cosine": 0.9999999999894764,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0000152587890625,
+          "relative_l2": 0.0000034150114709566956,
+          "cosine": 0.999999999994169,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 9.5367431640625e-7,
+          "relative_l2": 4.693426278737568e-7,
+          "cosine": 0.9999999999999972,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0001220703125,
+          "relative_l2": 0.000030939949038711485,
+          "cosine": 0.9999999995213731,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/32/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.00000762939453125,
+          "relative_l2": 2.6880397652361903e-7,
+          "cosine": 0.9999999999999958,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/32/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.000030517578125,
+          "relative_l2": 0.000010504795594827157,
+          "cosine": 0.9999999999448246,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.00000286102294921875,
+          "relative_l2": 6.449776601603478e-7,
+          "cosine": 0.9999999999998164,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.000003814697265625,
+          "relative_l2": 0.0000010098996156207638,
+          "cosine": 0.9999999999994902,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0001220703125,
+          "relative_l2": 0.00002698858280779831,
+          "cosine": 0.9999999996358232,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000057220458984375,
+          "relative_l2": 2.7175842562826403e-7,
+          "cosine": 0.9999999999999989,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00000762939453125,
+          "relative_l2": 0.0000025095952695515203,
+          "cosine": 0.999999999996851,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000004,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 9.5367431640625e-7,
+          "relative_l2": 7.619405538707777e-7,
+          "cosine": 0.9999999999998254,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.000003814697265625,
+          "relative_l2": 5.893738958420361e-7,
+          "cosine": 0.9999999999998266,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.000011444091796875,
+          "relative_l2": 5.891772146322714e-7,
+          "cosine": 0.9999999999999875,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999997,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00006103515625,
+          "relative_l2": 0.000010689246946847276,
+          "cosine": 0.9999999999428704,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/128/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00006103515625,
+          "relative_l2": 0.00001276156930900472,
+          "cosine": 0.9999999999185714,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.000003814697265625,
+          "relative_l2": 4.6222572510809356e-7,
+          "cosine": 0.9999999999999432,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00006103515625,
+          "relative_l2": 0.00001043863895709533,
+          "cosine": 0.9999999999455176,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/128/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0000152587890625,
+          "relative_l2": 0.0000024389649805162203,
+          "cosine": 0.9999999999970259,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000171661376953125,
+          "relative_l2": 3.564190757868012e-7,
+          "cosine": 0.999999999999963,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/128/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/128/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000019073486328125,
+          "relative_l2": 2.8441732675200145e-7,
+          "cosine": 0.9999999999999973,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/128/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.000003814697265625,
+          "relative_l2": 4.620711878033515e-7,
+          "cosine": 0.9999999999998934,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000019073486328125,
+          "relative_l2": 3.6672915107861734e-8,
+          "cosine": 0.9999999999999996,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/128/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/32/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0000681136270072462,
+          "cosine": 0.9999999976803592,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.00009189719055592883,
+          "cosine": 0.9999999957776412,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000004,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.000278472900390625,
+          "relative_l2": 0.000006545683580213005,
+          "cosine": 0.9999999999997413,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.00005421707363990941,
+          "cosine": 0.9999999985302563,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.00013530497251899537,
+          "cosine": 0.9999999908462887,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/32/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.00003621714116983882,
+          "cosine": 0.9999999993441762,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.0003878618004588969,
+          "cosine": 0.999999924786043,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.00032968805581975097,
+          "cosine": 0.9999999456529274,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0052509307861328125,
+          "relative_l2": 0.0003391868652331842,
+          "cosine": 0.9999999838091457,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0005051554747825832,
+          "cosine": 0.9999998724131702,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0004540654598953729,
+          "cosine": 0.9999998969335245,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/32/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000019073486328125,
+          "relative_l2": 0.000011577820228138554,
+          "cosine": 0.9999999999985683,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/32/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00002288818359375,
+          "relative_l2": 7.468875402590639e-7,
+          "cosine": 0.9999999999997212,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.00010470016221972464,
+          "cosine": 0.9999999945189681,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.00004409482304413614,
+          "cosine": 0.9999999990278324,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0004425048828125,
+          "relative_l2": 0.0000047410556061941284,
+          "cosine": 0.999999999999999,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.00014518277575130878,
+          "cosine": 0.9999999894611362,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0000760205982735366,
+          "cosine": 0.9999999971106996,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/32/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0001220703125,
+          "relative_l2": 0.0000184159482055574,
+          "cosine": 0.9999999998304285,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000171661376953125,
+          "relative_l2": 0.0000011105625370747726,
+          "cosine": 0.9999999999994036,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0001220703125,
+          "relative_l2": 0.00003370001530811515,
+          "cosine": 0.9999999994321579,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/32/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000019073486328125,
+          "relative_l2": 0.000011577820228138554,
+          "cosine": 0.9999999999985683,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/64/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.000006846483351898448,
+          "cosine": 0.9999999999765629,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.00030517578125,
+          "relative_l2": 0.000001617590942961216,
+          "cosine": 0.9999999999996948,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0001220703125,
+          "relative_l2": 0.000002494041426753592,
+          "cosine": 0.99999999999689,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/64/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00006103515625,
+          "relative_l2": 0.00000769378955135444,
+          "cosine": 0.9999999999704027,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.00005054473876953125,
+          "relative_l2": 0.00000197834173098853,
+          "cosine": 0.9999999999982865,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0001220703125,
+          "relative_l2": 0.000015708824384959588,
+          "cosine": 0.9999999998766179,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/64/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.000005245208740234375,
+          "relative_l2": 0.000007647072578675491,
+          "cosine": 0.9999999999972956,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/64/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.000020102152911342247,
+          "cosine": 0.9999999997979517,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.000035146945634760145,
+          "cosine": 0.999999999382347,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.00022125244140625,
+          "relative_l2": 0.000002566238145383729,
+          "cosine": 0.9999999999968329,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.000028397389830614308,
+          "cosine": 0.999999999596797,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/64/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.000030517578125,
+          "relative_l2": 0.000003960677011993001,
+          "cosine": 0.9999999999921567,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000171661376953125,
+          "relative_l2": 8.874794242324502e-7,
+          "cosine": 0.9999999999999059,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00000762939453125,
+          "relative_l2": 6.881359293633549e-7,
+          "cosine": 0.9999999999997633,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/64/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.000005245208740234375,
+          "relative_l2": 0.000007647072578675491,
+          "cosine": 0.9999999999972956,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/128/139/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.000006963570535459722,
+          "cosine": 0.9999999999757544,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000004,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.000335693359375,
+          "relative_l2": 0.000001163878315194071,
+          "cosine": 0.9999999999994278,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.000006952379971534881,
+          "cosine": 0.9999999999758322,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/128/139/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 1.1920928955078125e-7,
+          "relative_l2": 1.2151440852926332e-9,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.000030517578125,
+          "relative_l2": 0.000003487294627161787,
+          "cosine": 0.9999999999939191,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000004,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000209808349609375,
+          "relative_l2": 0.0000011073070526390363,
+          "cosine": 0.9999999999996887,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0001220703125,
+          "relative_l2": 0.000013948403116571871,
+          "cosine": 0.9999999999027218,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/128/139/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 9.5367431640625e-7,
+          "relative_l2": 0.0000010572845979416503,
+          "cosine": 0.9999999999999605,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/128/139/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00390625,
+          "relative_l2": 0.00004989261943272506,
+          "cosine": 0.9999999987554571,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.015625,
+          "relative_l2": 0.0009361111581441843,
+          "cosine": 0.9999995625697469,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0009424235956192321,
+          "cosine": 0.9999995561060832,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.6121063232421875,
+          "relative_l2": 0.007249991833750659,
+          "cosine": 0.9999934713713421,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0012228605050811886,
+          "cosine": 0.9999992536110672,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0078125,
+          "relative_l2": 0.0012168267479045535,
+          "cosine": 0.9999992598972187,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/128/139/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.000030517578125,
+          "relative_l2": 0.000002544437198141244,
+          "cosine": 0.9999999999967631,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.00006103515625,
+          "relative_l2": 0.000001310197170439015,
+          "cosine": 0.9999999999991418,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000362396240234375,
+          "relative_l2": 0.0000015472840878248347,
+          "cosine": 0.9999999999991642,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0000019073486328125,
+          "relative_l2": 1.6751997597483007e-7,
+          "cosine": 0.999999999999986,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "128/128/139/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 9.5367431640625e-7,
+          "relative_l2": 0.0000010572845979416503,
+          "cosine": 0.9999999999999605,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/513/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.000030517578125,
+          "relative_l2": 0.000011975311246354813,
+          "cosine": 0.9999999999282964,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000004,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0000057220458984375,
+          "relative_l2": 0.0000023955908850893055,
+          "cosine": 0.9999999999998834,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0000152587890625,
+          "relative_l2": 0.000003093534679638957,
+          "cosine": 0.9999999999952149,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/513/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.000020293577945725596,
+          "cosine": 0.9999999997940889,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.00013570542990318013,
+          "cosine": 0.9999999907927208,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0003801565580439159,
+          "cosine": 0.9999999277480776,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000004,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.003406524658203125,
+          "relative_l2": 0.00032036653111951186,
+          "cosine": 0.9999999933862269,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0004328063224815674,
+          "cosine": 0.9999999064562977,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.00045828235512360854,
+          "cosine": 0.9999998949990831,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/513/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/513/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999998,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.00017586668357379582,
+          "cosine": 0.9999999845400533,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.00016179279927312125,
+          "cosine": 0.9999999869139641,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.000003814697265625,
+          "relative_l2": 7.05234876961694e-7,
+          "cosine": 0.9999999999998703,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.00045342240506518846,
+          "cosine": 0.9999998973637594,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.00023085756650276516,
+          "cosine": 0.9999999733595882,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/513/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.000004610846668544729,
+          "cosine": 0.9999999999893701,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.000244140625,
+          "relative_l2": 0.00012405826150235712,
+          "cosine": 0.999999992306041,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.00015353811068164936,
+          "cosine": 0.9999999882148949,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.000006871314288134252,
+          "cosine": 0.999999999976393,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0023822784423828125,
+          "relative_l2": 0.00035437681306664867,
+          "cosine": 0.9999999955579985,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0003007687847181949,
+          "cosine": 0.9999999547714176,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0004039987194840416,
+          "cosine": 0.9999999184144734,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/513/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000002,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/1024/q_from_k/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.000244140625,
+          "relative_l2": 0.000013590159535125223,
+          "cosine": 0.999999999907654,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0001220703125,
+          "relative_l2": 0.00006705900767798489,
+          "cosine": 0.9999999977515449,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.000244140625,
+          "relative_l2": 0.00014628949941311494,
+          "cosine": 0.9999999892997267,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.0001220703125,
+          "relative_l2": 0.000008576480266284284,
+          "cosine": 0.999999999963222,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.001430511474609375,
+          "relative_l2": 0.0005809050971412037,
+          "cosine": 0.9999998812676913,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.00044439497264813773,
+          "cosine": 0.9999999012565535,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.0003273512964360951,
+          "cosine": 0.9999999464318314,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/1024/q_from_k/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.000017875407952613667,
+          "cosine": 0.9999999998402352,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.00011454982776917711,
+          "cosine": 0.9999999934392308,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0002985028902946885,
+          "cosine": 0.9999999554495159,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.00001962778846492386,
+          "cosine": 0.999999999807376,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.00628662109375,
+          "relative_l2": 0.00017101616943251673,
+          "cosine": 0.9999999853904991,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0005044985821508623,
+          "cosine": 0.9999998727903411,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0005545712149148726,
+          "cosine": 0.9999998462432672,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/1024/q_from_k/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000009,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/1024/k_from_q/0.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0.000244140625,
+          "relative_l2": 0.00001854922911229166,
+          "cosine": 0.999999999827963,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.000244140625,
+          "relative_l2": 0.00011820357821687711,
+          "cosine": 0.9999999930145405,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.000244140625,
+          "relative_l2": 0.00011353389437859832,
+          "cosine": 0.9999999935550302,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.000244140625,
+          "relative_l2": 0.000012097858646213616,
+          "cosine": 0.9999999999268212,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0014638900756835938,
+          "relative_l2": 0.0010241097601828794,
+          "cosine": 0.999999607101848,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.00048828125,
+          "relative_l2": 0.0003844220987090324,
+          "cosine": 0.9999999261166479,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0003184103222254517,
+          "cosine": 0.999999949327858,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/1024/k_from_q/0.37",
+      "metrics": {
+        "out": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.000010429525866621571,
+          "cosine": 0.9999999999456127,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.0001753957781313057,
+          "cosine": 0.9999999846182825,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0.0009765625,
+          "relative_l2": 0.00015617465997406552,
+          "cosine": 0.9999999878060247,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.000017218851556569034,
+          "cosine": 0.9999999998517568,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0.0027008056640625,
+          "relative_l2": 0.00004361950507945431,
+          "cosine": 0.9999999993621912,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.00038100861170453393,
+          "cosine": 0.9999999274825752,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0.001953125,
+          "relative_l2": 0.0003787824204613622,
+          "cosine": 0.9999999282710621,
+          "finite": true
+        }
+      }
+    },
+    {
+      "tile_lse": "tanh_finite",
+      "case": "64/64/1024/k_from_q/1.0",
+      "metrics": {
+        "out": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 0.9999999999999999,
+          "finite": true
+        },
+        "dq": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dv": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1.0000000000000009,
+          "finite": true
+        },
+        "dtau": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true,
+          "sign_flips": 0,
+          "nonzero_heads": 2
+        },
+        "dq_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        },
+        "dk_vocab": {
+          "max_abs": 0,
+          "relative_l2": 0,
+          "cosine": 1,
+          "finite": true
+        }
+      }
+    }
+  ]
+}

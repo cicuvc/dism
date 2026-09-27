@@ -1,6 +1,50 @@
 # Dism CUDA kernel 开发约定
 
+## 最新 LM 默认与训练（2026-09-11）
+
+- 用户新增30k对照并指定转移到A100：width384，`[GDN,GDN,GDN,Full RoPE Attention]×3`，
+  FFN1522、72,182,172参数，FA head_dim64、theta10000、全因果无滑窗，其他训练超参沿用。
+  `--gdn-full` 不运行DISM/RNG。仅操作chenyc任务目录
+  `/home/chenyc/dism-gdn-full-384-30k-20260911`；本地同名服务已在预检阶段停止。
+  独立token服务18482经SSH传输，无语料复制；详见experiments/gdn_full_384_30k/README.md。
+
+- 用户选择 `dism_activation=vocab_silu` 为新默认：FP32 Q/K 词表先 SiLU，
+  再走原 embedding 插值；token Q/K shortconv 保留 SiLU。不附加词表归一化/共享。
+  旧实验快照与显式 baseline 配置不改。
+- 新授权从头训练 `[GDN,GDN,GDN,DISM]×3`，width384、H6、D=DV64、V512、
+  FFN1428、72,188,142 参数，无 SWA。用户已更正为 **30k** 而不是3k步，
+  warmup1000，hard_prob全程0→1，batch64/micro8、context2048、lr1e-3、wd.01、
+  softcap30、untied embedding/head、offline W&B，每1000步验证100个同batch批次。
+  独立快照/启动器：experiments/gdn_dism_vocab_silu_384_30k；不修改旧训练产物。
+
 ## 目标与范围
+
+- 已准备DISM词表共享选项：`dism_tie_qk_vocab`绑定同组Q/K词表，
+  `dism_vocab_groups`按连续head分组（正整数且整除heads，默认每head独立）。
+  不共享K/V投影、cache或scan状态，不是真正GQA；沿用既有CUDA kernel。
+  FP32词表先按head展开，再分别在Q/K路径转BF16，确保共享梯度在FP32汇总。
+  tied模式只注册q_voc一个owner，k_voc为None；访问使用expanded_vocabularies。
+  默认配置及旧checkpoint键不变，禁止自动平均/迁移旧词表；本阶段仅实现及梯度
+  测试，用户明确不开始训练。详见dism_v2/VOCAB_SHARING.md。
+
+- 新增但不启动训练的 `hybrid_shared` 变体：q/k/v_proj共享，SWA使用独立三个
+  shortconv及RoPE128窗口；raw SWA输出直接与voc_dism输出相加，再共用gate/norm/o_proj。
+  保留原hybrid接口及已有训练，不自动迁移checkpoint。参数与验证范围见
+  dism_v2/SHARED_DISM_VARIANT.md；当前只有CPU结构验证，CUDA smoke待独立执行。
+
+- 远端 A100 对照训练仅操作 chenyc 账户下本任务的独立目录；不查看其他用户的文件、
+  环境或进程详情，不修改共享环境、不停止已有任务。选卡只读取 GPU 汇总占用。
+  如需源码编译 FlashAttention，最多 8 个并行编译任务；保持本地 hybrid 训练运行。
+  用户明确允许用本任务的占位脚本预留一张空闲卡；先检查汇总占用，仅释放本任务占位。
+  用户新增 full causal attention+RoPE 对照：与 SWA-only 保持49.64M参数及训练配置，
+  只将滑窗改为全因果（FlashAttention window_size=(-1,-1),causal=True）。使用独立
+  任务目录和同身份/同顺序的独立token流服务，不改动已运行的hybrid/SWA-only。
+
+- 当前独立LM应用：约49.68M、15层、残差256、PreNorm、DISM并联RoPE SWA128，
+  GPT2输入embedding与LM head不得共享权重。30k步，hard_prob按optimizer step从0退火至1。
+  用户最新选择softcap30的Triton CE、峰值lr1e-3、wd1e-2，W&B暂offline。
+  旧训练已停并保存；新训练的进程/路径见dism_v2/LM_TRAINING.md。
+  修改代码或跑测试不得无授权停止/重启正在运行的训练；CE近似限制见SOFTCAP_CE.md。
 
 - 实现 `dism_v2/dism_ref.py::voc_dism_ref` 对应的前向和反向 CUDA kernel，最终覆盖 sm120 与 sm90；优先在本地 RTX 5090（sm120）完成正确性和性能迭代。
 - 当前主场景：q/k `[B,H,N,D]`、v `[B,H,N,DV]`，均为 BF16。D 与 DV 分别支持 32、64、128，二者独立，必须覆盖全部九种组合。

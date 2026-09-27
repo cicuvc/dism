@@ -1,0 +1,126 @@
+{
+  "kv": {
+    "report": "/tmp/dism-output-qalias-kv-lineinfo-q.ncu-rep",
+    "metrics": {
+      "gpu__time_duration.sum": {
+        "value": "441568",
+        "unit": "ns"
+      },
+      "launch__shared_mem_per_block_driver": {
+        "value": "1024",
+        "unit": "byte/block"
+      },
+      "launch__shared_mem_per_block_dynamic": {
+        "value": "55424",
+        "unit": "byte/block"
+      },
+      "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+        "value": "42.31",
+        "unit": "%"
+      },
+      "sm__throughput.avg.pct_of_peak_sustained_elapsed": {
+        "value": "42.31",
+        "unit": "%"
+      },
+      "smsp__pcsamp_sample_count": {
+        "value": "37665",
+        "unit": ""
+      },
+      "smsp__pcsamp_warps_issue_stalled_barrier": {
+        "value": "9327",
+        "unit": "warp"
+      },
+      "smsp__pcsamp_warps_issue_stalled_long_scoreboard": {
+        "value": "2690",
+        "unit": "warp"
+      },
+      "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": {
+        "value": "4456",
+        "unit": "warp"
+      },
+      "smsp__pcsamp_warps_issue_stalled_wait": {
+        "value": "6197",
+        "unit": "warp"
+      }
+    },
+    "barrier_source_rows": [
+      {
+        "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+        "line": 505,
+        "source": "}",
+        "samples": 9321.0
+      },
+      {
+        "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+        "line": 128,
+        "source": "if(warp>=8) {",
+        "samples": 6.0
+      }
+    ]
+  },
+  "k": {
+    "report": "/tmp/dism-output-qalias-k-lineinfo-q.ncu-rep",
+    "metrics": {
+      "gpu__time_duration.sum": {
+        "value": "476032",
+        "unit": "ns"
+      },
+      "launch__shared_mem_per_block_driver": {
+        "value": "1024",
+        "unit": "byte/block"
+      },
+      "launch__shared_mem_per_block_dynamic": {
+        "value": "55552",
+        "unit": "byte/block"
+      },
+      "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+        "value": "36.95",
+        "unit": "%"
+      },
+      "sm__throughput.avg.pct_of_peak_sustained_elapsed": {
+        "value": "36.95",
+        "unit": "%"
+      },
+      "smsp__pcsamp_sample_count": {
+        "value": "42710",
+        "unit": ""
+      },
+      "smsp__pcsamp_warps_issue_stalled_barrier": {
+        "value": "11993",
+        "unit": "warp"
+      },
+      "smsp__pcsamp_warps_issue_stalled_long_scoreboard": {
+        "value": "2882",
+        "unit": "warp"
+      },
+      "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": {
+        "value": "6246",
+        "unit": "warp"
+      },
+      "smsp__pcsamp_warps_issue_stalled_wait": {
+        "value": "6250",
+        "unit": "warp"
+      }
+    },
+    "barrier_source_rows": [
+      {
+        "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+        "line": 505,
+        "source": "}",
+        "samples": 10566.0
+      },
+      {
+        "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+        "line": 308,
+        "source": "arrive(&shared.kfree[s]);",
+        "samples": 1417.0
+      },
+      {
+        "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+        "line": 128,
+        "source": "if(warp>=8) {",
+        "samples": 10.0
+      }
+    ]
+  }
+}

@@ -1,0 +1,118 @@
+[
+  {
+    "tile_lse": "tanh_finite",
+    "bitset": "0",
+    "trial": 0,
+    "direction": "q_from_k",
+    "forward_only": true,
+    "output_q_alias": "kv",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "b": 64,
+    "h": 4,
+    "n": 1024,
+    "d": 64,
+    "dv": 64,
+    "vocab": 512,
+    "repeats": 50,
+    "total_gpu_mean_us": 1471.9393799999993,
+    "kernel_mean_per_iteration_us": {
+      "void dism_v2::embedding::fused<64, 64>(dism_v2::embedding::FusedArgs, CUtensorMap_st, CUtensorMap_st)": 779.8600000000001,
+      "void dism_v2::summary_persistent<64, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st)": 228.55254000000022,
+      "dism_v2::passing(dism_v2::Args)": 38.278239999999435,
+      "void dism_v2::core<64, 64, true, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st)": 425.24859999999956
+    },
+    "kernel_launch_median_us": {
+      "void dism_v2::embedding::fused<64, 64>(dism_v2::embedding::FusedArgs, CUtensorMap_st, CUtensorMap_st)": 730.4765000000007,
+      "void dism_v2::summary_persistent<64, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st)": 219.5985000000037,
+      "dism_v2::passing(dism_v2::Args)": 31.775499999999738,
+      "void dism_v2::core<64, 64, true, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st)": 402.5740000000005
+    }
+  },
+  {
+    "tile_lse": "tanh_finite",
+    "bitset": "1",
+    "trial": 0,
+    "direction": "q_from_k",
+    "forward_only": true,
+    "output_q_alias": "kv",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "b": 64,
+    "h": 4,
+    "n": 1024,
+    "d": 64,
+    "dv": 64,
+    "vocab": 512,
+    "repeats": 50,
+    "total_gpu_mean_us": 1472.8267400000002,
+    "kernel_mean_per_iteration_us": {
+      "void dism_v2::embedding::fused<64, 64>(dism_v2::embedding::FusedArgs, CUtensorMap_st, CUtensorMap_st)": 780.5644999999998,
+      "void dism_v2::summary_persistent<64, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st)": 231.19698000000037,
+      "dism_v2::passing(dism_v2::Args)": 32.374220000000285,
+      "void dism_v2::core<64, 64, true, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st)": 428.6910399999997
+    },
+    "kernel_launch_median_us": {
+      "void dism_v2::embedding::fused<64, 64>(dism_v2::embedding::FusedArgs, CUtensorMap_st, CUtensorMap_st)": 732.0925000000025,
+      "void dism_v2::summary_persistent<64, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st)": 218.92699999999968,
+      "dism_v2::passing(dism_v2::Args)": 31.77549999999883,
+      "void dism_v2::core<64, 64, true, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st)": 402.78200000000015
+    }
+  },
+  {
+    "tile_lse": "tanh_finite",
+    "bitset": "1",
+    "trial": 1,
+    "direction": "q_from_k",
+    "forward_only": true,
+    "output_q_alias": "kv",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "b": 64,
+    "h": 4,
+    "n": 1024,
+    "d": 64,
+    "dv": 64,
+    "vocab": 512,
+    "repeats": 50,
+    "total_gpu_mean_us": 1472.1025200000004,
+    "kernel_mean_per_iteration_us": {
+      "void dism_v2::embedding::fused<64, 64>(dism_v2::embedding::FusedArgs, CUtensorMap_st, CUtensorMap_st)": 779.7077599999997,
+      "void dism_v2::summary_persistent<64, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st)": 234.5083000000003,
+      "dism_v2::passing(dism_v2::Args)": 32.37549999999983,
+      "void dism_v2::core<64, 64, true, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st)": 425.5109600000006
+    },
+    "kernel_launch_median_us": {
+      "void dism_v2::embedding::fused<64, 64>(dism_v2::embedding::FusedArgs, CUtensorMap_st, CUtensorMap_st)": 732.4930000000022,
+      "void dism_v2::summary_persistent<64, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st)": 218.89500000000044,
+      "dism_v2::passing(dism_v2::Args)": 31.88800000000265,
+      "void dism_v2::core<64, 64, true, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st)": 403.3739999999998
+    }
+  },
+  {
+    "tile_lse": "tanh_finite",
+    "bitset": "0",
+    "trial": 1,
+    "direction": "q_from_k",
+    "forward_only": true,
+    "output_q_alias": "kv",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "b": 64,
+    "h": 4,
+    "n": 1024,
+    "d": 64,
+    "dv": 64,
+    "vocab": 512,
+    "repeats": 50,
+    "total_gpu_mean_us": 1477.05132,
+    "kernel_mean_per_iteration_us": {
+      "void dism_v2::embedding::fused<64, 64>(dism_v2::embedding::FusedArgs, CUtensorMap_st, CUtensorMap_st)": 778.3756799999996,
+      "void dism_v2::summary_persistent<64, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st)": 233.74481999999966,
+      "dism_v2::passing(dism_v2::Args)": 38.00176000000044,
+      "void dism_v2::core<64, 64, true, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st)": 426.92906000000033
+    },
+    "kernel_launch_median_us": {
+      "void dism_v2::embedding::fused<64, 64>(dism_v2::embedding::FusedArgs, CUtensorMap_st, CUtensorMap_st)": 731.6924999999992,
+      "void dism_v2::summary_persistent<64, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st)": 220.63899999999876,
+      "dism_v2::passing(dism_v2::Args)": 31.76000000000022,
+      "void dism_v2::core<64, 64, true, false, 2, int>(dism_v2::Args, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st)": 404.5420000000013
+    }
+  }
+]

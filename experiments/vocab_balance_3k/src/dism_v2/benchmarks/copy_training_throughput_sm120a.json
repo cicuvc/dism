@@ -1,0 +1,311 @@
+{
+  "date": "2026-09-08",
+  "runs": [
+    [
+      {
+        "kind": "config",
+        "backend": "cuda",
+        "batch": 64,
+        "n": 1024,
+        "layers": 3,
+        "heads": 4,
+        "d": 64,
+        "dv": 64,
+        "qk_vocab": 512,
+        "d_model": 256,
+        "hard_prob": 0.5,
+        "sm_scale": 1,
+        "parameters": 4068844,
+        "gpu": "NVIDIA GeForce RTX 5090",
+        "torch": "2.13.0+cu130",
+        "cuda": "13.0",
+        "scope": "wall-clock synchronized full step: data, zero_grad, forward, CE, backward, clipping, AdamW, scheduler; no eval/logging/compilation",
+        "warmup": 3,
+        "steps": 5
+      },
+      {
+        "kind": "warmup",
+        "step": 0,
+        "loss": 5.03125
+      },
+      {
+        "kind": "warmup",
+        "step": 1,
+        "loss": 5.0
+      },
+      {
+        "kind": "warmup",
+        "step": 2,
+        "loss": 5.0
+      },
+      {
+        "kind": "sample",
+        "step": 0,
+        "seconds": 0.07185201696120203,
+        "loss": 5.0,
+        "grad_norm": 0.13736604154109955
+      },
+      {
+        "kind": "sample",
+        "step": 1,
+        "seconds": 0.07176008797250688,
+        "loss": 5.0,
+        "grad_norm": 0.13347141444683075
+      },
+      {
+        "kind": "sample",
+        "step": 2,
+        "seconds": 0.07168685598298907,
+        "loss": 4.96875,
+        "grad_norm": 0.1285811811685562
+      },
+      {
+        "kind": "sample",
+        "step": 3,
+        "seconds": 0.07172591204289347,
+        "loss": 4.96875,
+        "grad_norm": 0.12430627644062042
+      },
+      {
+        "kind": "sample",
+        "step": 4,
+        "seconds": 0.07187784009147435,
+        "loss": 4.9375,
+        "grad_norm": 0.11948705464601517
+      },
+      {
+        "kind": "result",
+        "backend": "cuda",
+        "batch": 64,
+        "n": 1024,
+        "layers": 3,
+        "heads": 4,
+        "d": 64,
+        "dv": 64,
+        "qk_vocab": 512,
+        "d_model": 256,
+        "hard_prob": 0.5,
+        "sm_scale": 1,
+        "parameters": 4068844,
+        "gpu": "NVIDIA GeForce RTX 5090",
+        "torch": "2.13.0+cu130",
+        "cuda": "13.0",
+        "scope": "wall-clock synchronized full step: data, zero_grad, forward, CE, backward, clipping, AdamW, scheduler; no eval/logging/compilation",
+        "warmup": 3,
+        "steps": 5,
+        "median_s": 0.07176008797250688,
+        "min_s": 0.07168685598298907,
+        "max_s": 0.07187784009147435,
+        "input_tokens_s": 913265.3241047936,
+        "supervised_tokens_s": 456632.6620523968,
+        "sequences_s": 891.8606680710875,
+        "peak_allocated_bytes": 3988568576,
+        "peak_reserved_bytes": 4580179968
+      }
+    ],
+    [
+      {
+        "kind": "config",
+        "backend": "torch",
+        "batch": 64,
+        "n": 1024,
+        "layers": 3,
+        "heads": 4,
+        "d": 64,
+        "dv": 64,
+        "qk_vocab": 512,
+        "d_model": 256,
+        "hard_prob": 0.5,
+        "sm_scale": 1,
+        "parameters": 4068844,
+        "gpu": "NVIDIA GeForce RTX 5090",
+        "torch": "2.13.0+cu130",
+        "cuda": "13.0",
+        "scope": "wall-clock synchronized full step: data, zero_grad, forward, CE, backward, clipping, AdamW, scheduler; no eval/logging/compilation",
+        "warmup": 3,
+        "steps": 5
+      },
+      {
+        "kind": "warmup",
+        "step": 0,
+        "loss": 5.03125
+      },
+      {
+        "kind": "warmup",
+        "step": 1,
+        "loss": 5.0
+      },
+      {
+        "kind": "warmup",
+        "step": 2,
+        "loss": 5.0
+      },
+      {
+        "kind": "sample",
+        "step": 0,
+        "seconds": 8.663011404918507,
+        "loss": 5.0,
+        "grad_norm": 0.13738273084163666
+      },
+      {
+        "kind": "sample",
+        "step": 1,
+        "seconds": 8.798909942968749,
+        "loss": 5.0,
+        "grad_norm": 0.13348214328289032
+      },
+      {
+        "kind": "sample",
+        "step": 2,
+        "seconds": 8.88839514402207,
+        "loss": 4.96875,
+        "grad_norm": 0.1285843849182129
+      },
+      {
+        "kind": "sample",
+        "step": 3,
+        "seconds": 8.927340727997944,
+        "loss": 4.96875,
+        "grad_norm": 0.12428068369626999
+      },
+      {
+        "kind": "sample",
+        "step": 4,
+        "seconds": 8.87425318500027,
+        "loss": 4.9375,
+        "grad_norm": 0.1194823756814003
+      },
+      {
+        "kind": "result",
+        "backend": "torch",
+        "batch": 64,
+        "n": 1024,
+        "layers": 3,
+        "heads": 4,
+        "d": 64,
+        "dv": 64,
+        "qk_vocab": 512,
+        "d_model": 256,
+        "hard_prob": 0.5,
+        "sm_scale": 1,
+        "parameters": 4068844,
+        "gpu": "NVIDIA GeForce RTX 5090",
+        "torch": "2.13.0+cu130",
+        "cuda": "13.0",
+        "scope": "wall-clock synchronized full step: data, zero_grad, forward, CE, backward, clipping, AdamW, scheduler; no eval/logging/compilation",
+        "warmup": 3,
+        "steps": 5,
+        "median_s": 8.87425318500027,
+        "min_s": 8.663011404918507,
+        "max_s": 8.927340727997944,
+        "input_tokens_s": 7384.959458985506,
+        "supervised_tokens_s": 3692.479729492753,
+        "sequences_s": 7.211874471665533,
+        "peak_allocated_bytes": 17531159552,
+        "peak_reserved_bytes": 18062770176
+      }
+    ],
+    [
+      {
+        "kind": "config",
+        "backend": "torch_ref",
+        "batch": 64,
+        "n": 1024,
+        "layers": 3,
+        "heads": 4,
+        "d": 64,
+        "dv": 64,
+        "qk_vocab": 512,
+        "d_model": 256,
+        "hard_prob": 0.5,
+        "sm_scale": 1,
+        "parameters": 4068844,
+        "gpu": "NVIDIA GeForce RTX 5090",
+        "torch": "2.13.0+cu130",
+        "cuda": "13.0",
+        "scope": "wall-clock synchronized full step: data, zero_grad, forward, CE, backward, clipping, AdamW, scheduler; no eval/logging/compilation",
+        "warmup": 3,
+        "steps": 5
+      },
+      {
+        "kind": "warmup",
+        "step": 0,
+        "loss": 5.03125
+      },
+      {
+        "kind": "warmup",
+        "step": 1,
+        "loss": 5.0
+      },
+      {
+        "kind": "warmup",
+        "step": 2,
+        "loss": 5.0
+      },
+      {
+        "kind": "sample",
+        "step": 0,
+        "seconds": 8.873809087905101,
+        "loss": 5.0,
+        "grad_norm": 0.13735158741474152
+      },
+      {
+        "kind": "sample",
+        "step": 1,
+        "seconds": 8.76552196405828,
+        "loss": 5.0,
+        "grad_norm": 0.1334282010793686
+      },
+      {
+        "kind": "sample",
+        "step": 2,
+        "seconds": 8.933303895057179,
+        "loss": 4.96875,
+        "grad_norm": 0.12857502698898315
+      },
+      {
+        "kind": "sample",
+        "step": 3,
+        "seconds": 8.963536691037007,
+        "loss": 4.96875,
+        "grad_norm": 0.12436732649803162
+      },
+      {
+        "kind": "sample",
+        "step": 4,
+        "seconds": 9.095968392910436,
+        "loss": 4.9375,
+        "grad_norm": 0.11948104202747345
+      },
+      {
+        "kind": "result",
+        "backend": "torch_ref",
+        "batch": 64,
+        "n": 1024,
+        "layers": 3,
+        "heads": 4,
+        "d": 64,
+        "dv": 64,
+        "qk_vocab": 512,
+        "d_model": 256,
+        "hard_prob": 0.5,
+        "sm_scale": 1,
+        "parameters": 4068844,
+        "gpu": "NVIDIA GeForce RTX 5090",
+        "torch": "2.13.0+cu130",
+        "cuda": "13.0",
+        "scope": "wall-clock synchronized full step: data, zero_grad, forward, CE, backward, clipping, AdamW, scheduler; no eval/logging/compilation",
+        "warmup": 3,
+        "steps": 5,
+        "median_s": 8.933303895057179,
+        "min_s": 8.76552196405828,
+        "max_s": 9.095968392910436,
+        "input_tokens_s": 7336.143577994839,
+        "supervised_tokens_s": 3668.0717889974194,
+        "sequences_s": 7.164202712885585,
+        "peak_allocated_bytes": 25884637696,
+        "peak_reserved_bytes": 27617394688
+      }
+    ]
+  ]
+}

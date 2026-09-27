@@ -1,0 +1,2182 @@
+{
+  "full_baseline": {
+    "binary": "/tmp/dism-bwd-baseline.QDt5ap/dism_v2_backward_sm120a.so",
+    "rows": [
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi128ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:234 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 271,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi64ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:196 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 273,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi32ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:190 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 280,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi128ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:248 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 271,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi64ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 276,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi32ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:232 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 283,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi128ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:248 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 318,
+          "BRA": 269,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi64ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 318,
+          "BRA": 274,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi32ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:121 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 318,
+          "BRA": 275,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi128ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:172 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 338,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi64ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:228 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 341,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi32ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:236 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 346,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi128ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:170 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 338,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi64ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:218 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 344,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi32ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 349,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi128ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:170 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 336,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi64ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:186 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 342,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi32ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 383,
+          "BRA": 346,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:104 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 386,
+          "BRA": 393,
+          "FMUL": 480,
+          "FSETP": 282,
+          "MUFU.EX2": 124,
+          "CALL": 0,
+          "LDL": 28,
+          "STL": 29
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 386,
+          "BRA": 392,
+          "FMUL": 480,
+          "FSETP": 282,
+          "MUFU.EX2": 124,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:16 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 383,
+          "BRA": 399,
+          "FMUL": 480,
+          "FSETP": 282,
+          "MUFU.EX2": 124,
+          "CALL": 0,
+          "LDL": 4,
+          "STL": 4
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:80 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 386,
+          "BRA": 392,
+          "FMUL": 480,
+          "FSETP": 282,
+          "MUFU.EX2": 124,
+          "CALL": 0,
+          "LDL": 21,
+          "STL": 22
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 386,
+          "BRA": 391,
+          "FMUL": 480,
+          "FSETP": 282,
+          "MUFU.EX2": 124,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:16 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 383,
+          "BRA": 398,
+          "FMUL": 480,
+          "FSETP": 282,
+          "MUFU.EX2": 124,
+          "CALL": 0,
+          "LDL": 3,
+          "STL": 3
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:32 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 383,
+          "BRA": 392,
+          "FMUL": 480,
+          "FSETP": 282,
+          "MUFU.EX2": 124,
+          "CALL": 0,
+          "LDL": 5,
+          "STL": 5
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 383,
+          "BRA": 391,
+          "FMUL": 480,
+          "FSETP": 282,
+          "MUFU.EX2": 124,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 380,
+          "BRA": 398,
+          "FMUL": 480,
+          "FSETP": 282,
+          "MUFU.EX2": 124,
+          "CALL": 0,
+          "LDL": 1,
+          "STL": 1
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:232 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 356,
+          "BRA": 553,
+          "FMUL": 744,
+          "FSETP": 248,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 71,
+          "STL": 76
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:120 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 356,
+          "BRA": 552,
+          "FMUL": 744,
+          "FSETP": 248,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 30,
+          "STL": 36
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:80 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 353,
+          "BRA": 552,
+          "FMUL": 744,
+          "FSETP": 248,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 20,
+          "STL": 26
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:32 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 356,
+          "BRA": 504,
+          "FMUL": 584,
+          "FSETP": 248,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 7,
+          "STL": 7
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 356,
+          "BRA": 503,
+          "FMUL": 584,
+          "FSETP": 248,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 353,
+          "BRA": 503,
+          "FMUL": 584,
+          "FSETP": 248,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 353,
+          "BRA": 488,
+          "FMUL": 504,
+          "FSETP": 248,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 353,
+          "BRA": 487,
+          "FMUL": 504,
+          "FSETP": 248,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 350,
+          "BRA": 488,
+          "FMUL": 504,
+          "FSETP": 248,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      }
+    ]
+  },
+  "full_opt": {
+    "binary": "/home/cicuvc/.cache/torch_extensions/py312_cu130/dism_v2_backward_sm120a_opt/dism_v2_backward_sm120a_opt.so",
+    "rows": [
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi128ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:234 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 271,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi64ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:196 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 273,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi32ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:190 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 280,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi128ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:248 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 271,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi64ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 276,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi32ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:232 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 283,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi128ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:248 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 318,
+          "BRA": 269,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi64ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 318,
+          "BRA": 274,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi32ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:121 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 318,
+          "BRA": 275,
+          "FMUL": 314,
+          "FSETP": 216,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi128ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:172 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 338,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi64ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:228 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 341,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi32ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:236 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 346,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi128ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:170 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 338,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi64ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:218 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 344,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi32ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 349,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi128ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:170 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 336,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi64ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:186 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 342,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi32ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 383,
+          "BRA": 346,
+          "FMUL": 542,
+          "FSETP": 344,
+          "MUFU.EX2": 156,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:352 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 219,
+          "FMUL": 231,
+          "FSETP": 258,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 112,
+          "STL": 116
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:48 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 218,
+          "FMUL": 231,
+          "FSETP": 258,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 12,
+          "STL": 12
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:32 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 225,
+          "FMUL": 231,
+          "FSETP": 258,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 8,
+          "STL": 8
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:184 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 218,
+          "FMUL": 231,
+          "FSETP": 258,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 50,
+          "STL": 48
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:16 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 217,
+          "FMUL": 231,
+          "FSETP": 258,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 3,
+          "STL": 3
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 224,
+          "FMUL": 231,
+          "FSETP": 258,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 1,
+          "STL": 1
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:128 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 218,
+          "FMUL": 231,
+          "FSETP": 258,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 36,
+          "STL": 34
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 217,
+          "FMUL": 230,
+          "FSETP": 258,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 31,
+          "BRA": 224,
+          "FMUL": 231,
+          "FSETP": 258,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:392 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 378,
+          "FMUL": 556,
+          "FSETP": 254,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 115,
+          "STL": 143
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:120 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 377,
+          "FMUL": 556,
+          "FSETP": 254,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 33,
+          "STL": 43
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 377,
+          "FMUL": 556,
+          "FSETP": 254,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 10,
+          "STL": 12
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:64 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 329,
+          "FMUL": 396,
+          "FSETP": 254,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 17,
+          "STL": 19
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:16 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 328,
+          "FMUL": 396,
+          "FSETP": 254,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 3,
+          "STL": 3
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 328,
+          "FMUL": 397,
+          "FSETP": 254,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 313,
+          "FMUL": 316,
+          "FSETP": 254,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 312,
+          "FMUL": 317,
+          "FSETP": 254,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 31,
+          "BRA": 313,
+          "FMUL": 317,
+          "FSETP": 254,
+          "MUFU.EX2": 92,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      }
+    ]
+  },
+  "tanh_finite_baseline": {
+    "binary": "/tmp/dism-bwd-baseline.QDt5ap/dism_v2_backward_sm120a_tanh_finite.so",
+    "rows": [
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi128ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:234 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 151,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi64ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:203 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 153,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi32ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:204 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 160,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi128ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:248 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 151,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi64ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 156,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi32ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:244 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 163,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi128ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:248 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 318,
+          "BRA": 150,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi64ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 318,
+          "BRA": 155,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi32ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:127 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 318,
+          "BRA": 156,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi128ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:170 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 218,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi64ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:222 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 221,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi32ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:224 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 226,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi128ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:174 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 218,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi64ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:226 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 224,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi32ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 229,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi128ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:180 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 216,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi64ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:227 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 222,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi32ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:144 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 383,
+          "BRA": 220,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:144 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 386,
+          "BRA": 273,
+          "FMUL": 360,
+          "FSETP": 102,
+          "MUFU.EX2": 64,
+          "CALL": 0,
+          "LDL": 39,
+          "STL": 40
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 386,
+          "BRA": 272,
+          "FMUL": 360,
+          "FSETP": 102,
+          "MUFU.EX2": 64,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 383,
+          "BRA": 279,
+          "FMUL": 360,
+          "FSETP": 102,
+          "MUFU.EX2": 64,
+          "CALL": 0,
+          "LDL": 2,
+          "STL": 2
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:96 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 386,
+          "BRA": 272,
+          "FMUL": 360,
+          "FSETP": 102,
+          "MUFU.EX2": 64,
+          "CALL": 0,
+          "LDL": 25,
+          "STL": 25
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 386,
+          "BRA": 271,
+          "FMUL": 360,
+          "FSETP": 102,
+          "MUFU.EX2": 64,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 383,
+          "BRA": 278,
+          "FMUL": 360,
+          "FSETP": 102,
+          "MUFU.EX2": 64,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:64 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 383,
+          "BRA": 272,
+          "FMUL": 360,
+          "FSETP": 102,
+          "MUFU.EX2": 64,
+          "CALL": 0,
+          "LDL": 16,
+          "STL": 18
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 383,
+          "BRA": 271,
+          "FMUL": 360,
+          "FSETP": 102,
+          "MUFU.EX2": 64,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 380,
+          "BRA": 279,
+          "FMUL": 360,
+          "FSETP": 102,
+          "MUFU.EX2": 64,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:224 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 356,
+          "BRA": 433,
+          "FMUL": 624,
+          "FSETP": 68,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 70,
+          "STL": 75
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:112 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 356,
+          "BRA": 432,
+          "FMUL": 624,
+          "FSETP": 68,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 29,
+          "STL": 35
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:56 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 353,
+          "BRA": 432,
+          "FMUL": 624,
+          "FSETP": 68,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 14,
+          "STL": 16
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:24 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 356,
+          "BRA": 384,
+          "FMUL": 464,
+          "FSETP": 68,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 5,
+          "STL": 5
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 356,
+          "BRA": 383,
+          "FMUL": 464,
+          "FSETP": 68,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 353,
+          "BRA": 383,
+          "FMUL": 464,
+          "FSETP": 68,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 353,
+          "BRA": 368,
+          "FMUL": 384,
+          "FSETP": 68,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 353,
+          "BRA": 367,
+          "FMUL": 384,
+          "FSETP": 68,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 350,
+          "BRA": 368,
+          "FMUL": 384,
+          "FSETP": 68,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      }
+    ]
+  },
+  "tanh_finite_opt": {
+    "binary": "/home/cicuvc/.cache/torch_extensions/py312_cu130/dism_v2_backward_sm120a_tanh_finite_opt/dism_v2_backward_sm120a_tanh_finite_opt.so",
+    "rows": [
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi128ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:234 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 151,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi64ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:203 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 153,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi32ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:204 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 160,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi128ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:248 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 151,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi64ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 156,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi32ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:244 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 322,
+          "BRA": 163,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi128ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:248 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 318,
+          "BRA": 150,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi64ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 318,
+          "BRA": 155,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi32ELb0EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:127 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 318,
+          "BRA": 156,
+          "FMUL": 194,
+          "FSETP": 36,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi128ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:170 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 218,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi64ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:222 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 221,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi128ELi32ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:224 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 226,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi128ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:174 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 218,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi64ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:226 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 391,
+          "BRA": 224,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi64ELi32ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 229,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi128ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:180 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 216,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi64ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:227 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 387,
+          "BRA": 222,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v214value_backwardILi32ELi32ELb1EEEvNS_4ArgsE14CUtensorMap_stS2_PK13__nv_bfloat16PfPKfP6float2",
+        "resource": "REG:144 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 383,
+          "BRA": 220,
+          "FMUL": 422,
+          "FSETP": 164,
+          "MUFU.EX2": 96,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:392 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 99,
+          "FMUL": 111,
+          "FSETP": 78,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 105,
+          "STL": 102
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:48 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 98,
+          "FMUL": 111,
+          "FSETP": 78,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 14,
+          "STL": 11
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi128ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 105,
+          "FMUL": 111,
+          "FSETP": 78,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 1,
+          "STL": 1
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:304 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 98,
+          "FMUL": 111,
+          "FSETP": 78,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 80,
+          "STL": 78
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:48 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 97,
+          "FMUL": 111,
+          "FSETP": 78,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 12,
+          "STL": 12
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi64ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 104,
+          "FMUL": 111,
+          "FSETP": 78,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:264 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 98,
+          "FMUL": 111,
+          "FSETP": 78,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 70,
+          "STL": 69
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 97,
+          "FMUL": 110,
+          "FSETP": 78,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 9,
+          "STL": 9
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v22ws14value_backwardILi32ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfPfP6float2",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1440 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 31,
+          "BRA": 105,
+          "FMUL": 111,
+          "FSETP": 78,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:312 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 258,
+          "FMUL": 436,
+          "FSETP": 74,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 93,
+          "STL": 108
+        },
+        "tma": 4
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:168 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 257,
+          "FMUL": 436,
+          "FSETP": 74,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 42,
+          "STL": 49
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi128ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:48 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 257,
+          "FMUL": 436,
+          "FSETP": 74,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 13,
+          "STL": 16
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:48 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 209,
+          "FMUL": 276,
+          "FSETP": 74,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 11,
+          "STL": 11
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 37,
+          "BRA": 208,
+          "FMUL": 276,
+          "FSETP": 74,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi64ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 208,
+          "FMUL": 277,
+          "FSETP": 74,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi128EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:48 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 193,
+          "FMUL": 196,
+          "FSETP": 74,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 12,
+          "STL": 12
+        },
+        "tma": 3
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi64EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 34,
+          "BRA": 192,
+          "FMUL": 197,
+          "FSETP": 74,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      },
+      {
+        "name": "_ZN7dism_v25ab_ws3runILi32ELi32EEEvNS_4ArgsE14CUtensorMap_stS3_PK13__nv_bfloat16PKfS8_S3_PfS9_S9_",
+        "resource": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1688 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "instructions": {
+          "LDG": 31,
+          "BRA": 193,
+          "FMUL": 197,
+          "FSETP": 74,
+          "MUFU.EX2": 32,
+          "CALL": 0,
+          "LDL": 0,
+          "STL": 0
+        },
+        "tma": 2
+      }
+    ]
+  }
+}

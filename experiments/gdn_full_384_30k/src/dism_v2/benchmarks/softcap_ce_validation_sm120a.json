@@ -1,0 +1,80 @@
+{
+  "gpu": "RTX5090 sm120",
+  "softcap": "tanh.approx.f32",
+  "full_suite": {
+    "passed": 96,
+    "failed": 15,
+    "failures": [
+      {
+        "name": "test_torch_reference[7-33-none-dtype0]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 1 / 7 (14.3%)\nGreatest absolute difference: 7.311592235481612e-05 at index (3,) (up to 3e-05 allowed)\nGreatest relative difference: 2.4163487772571214e-05 at index (3,) (up to 3e-06 allowed)"
+      },
+      {
+        "name": "test_torch_reference[7-33-none-dtype1]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 1 / 7 (14.3%)\nGreatest absolute difference: 7.053926406719313e-05 at index (3,) (up to 3e-05 allowed)\nGreatest relative difference: 2.3401034284684658e-05 at index (3,) (up to 3e-06 allowed)"
+      },
+      {
+        "name": "test_torch_reference[7-33-none-dtype2]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 1 / 7 (14.3%)\nGreatest absolute difference: 7.074693429753864e-05 at index (3,) (up to 3e-05 allowed)\nGreatest relative difference: 2.337893710297325e-05 at index (3,) (up to 3e-06 allowed)"
+      },
+      {
+        "name": "test_torch_reference[1031-65-none-dtype0]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 26 / 1031 (2.5%)\nGreatest absolute difference: 8.569299353311521e-05 at index (342,) (up to 3e-05 allowed)\nGreatest relative difference: 5.6072342410554156e-05 at index (105,) (up to 3e-06 allowed)"
+      },
+      {
+        "name": "test_torch_reference[1031-65-none-dtype1]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 26 / 1031 (2.5%)\nGreatest absolute difference: 8.586134216059804e-05 at index (342,) (up to 3e-05 allowed)\nGreatest relative difference: 5.625534602585484e-05 at index (105,) (up to 3e-06 allowed)"
+      },
+      {
+        "name": "test_torch_reference[1031-65-none-dtype2]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 25 / 1031 (2.4%)\nGreatest absolute difference: 8.705558482802189e-05 at index (342,) (up to 3e-05 allowed)\nGreatest relative difference: 5.377016383835298e-05 at index (105,) (up to 3e-06 allowed)"
+      },
+      {
+        "name": "test_torch_reference[1031-65-sum-dtype0]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 1 / 67015 (0.0%)\nGreatest absolute difference: 3.807246685028076e-06 at index (105, 32) (up to 2e-06 allowed)\nGreatest relative difference: 8.027189323911443e-05 at index (105, 32) (up to 3e-05 allowed)"
+      },
+      {
+        "name": "test_gpt2_cap30[none-4.0-dtype0]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 8 / 854369 (0.0%)\nGreatest absolute difference: 7.987022399902344e-06 at index (8, 3458) (up to 2e-06 allowed)\nGreatest relative difference: 0.0001124569826060906 at index (8, 3458) (up to 3e-05 allowed)"
+      },
+      {
+        "name": "test_gpt2_cap30[none-16.0-dtype0]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 1 / 17 (5.9%)\nGreatest absolute difference: 9.447827325459457e-05 at index (6,) (up to 3e-05 allowed)\nGreatest relative difference: 5.239588481869899e-06 at index (6,) (up to 3e-06 allowed)"
+      },
+      {
+        "name": "test_gpt2_cap30[none-16.0-dtype1]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 1 / 17 (5.9%)\nGreatest absolute difference: 0.00010482070888429007 at index (6,) (up to 3e-05 allowed)\nGreatest relative difference: 5.826867382677699e-06 at index (6,) (up to 3e-06 allowed)"
+      },
+      {
+        "name": "test_gpt2_cap30[none-16.0-dtype2]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 1 / 17 (5.9%)\nGreatest absolute difference: 9.878693012410622e-05 at index (6,) (up to 3e-05 allowed)\nGreatest relative difference: 5.4772351056698485e-06 at index (6,) (up to 3e-06 allowed)"
+      },
+      {
+        "name": "test_gpt2_cap30[none-64.0-dtype0]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 1 / 17 (5.9%)\nGreatest absolute difference: 7.639361087363739e-05 at index (13,) (up to 3e-05 allowed)\nGreatest relative difference: 7.49243294682096e-06 at index (13,) (up to 3e-06 allowed)"
+      },
+      {
+        "name": "test_gpt2_cap30[none-64.0-dtype1]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 1 / 17 (5.9%)\nGreatest absolute difference: 7.349813619761392e-05 at index (13,) (up to 3e-05 allowed)\nGreatest relative difference: 7.211259546760636e-06 at index (13,) (up to 3e-06 allowed)"
+      },
+      {
+        "name": "test_gpt2_cap30[none-64.0-dtype2]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 1 / 17 (5.9%)\nGreatest absolute difference: 7.904115959078695e-05 at index (13,) (up to 3e-05 allowed)\nGreatest relative difference: 7.75115530234633e-06 at index (13,) (up to 3e-06 allowed)"
+      },
+      {
+        "name": "test_gpt2_cap30[none-256.0-dtype0]",
+        "message": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 1 / 854369 (0.0%)\nGreatest absolute difference: 3.117951564490795e-06 at index (5, 35249) (up to 2e-06 allowed)\nGreatest relative difference: 0.003577933646738529 at index (5, 35249) (up to 3e-05 allowed)"
+      }
+    ]
+  },
+  "gpt2_cap30_mean": "18 passed; FP32/BF16/FP16 x scales0.25/1/4/16/64/256",
+  "codegen": "three kernels have tanh.approx PTX, no SASS CALL",
+  "sanitizers": {
+    "memcheck": "7 passed; zero errors/hazards",
+    "racecheck": "7 passed; zero errors/hazards",
+    "synccheck": "7 passed; zero errors/hazards"
+  },
+  "lm_wiring": "6 passed",
+  "full_lm_smoke": "2 updates +1 effective validation batch; finite;9.53GiB peak",
+  "timing_caveat": "Kernel tests ran concurrently with old training; no kernel-performance claim"
+}

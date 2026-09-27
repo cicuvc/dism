@@ -1,0 +1,1847 @@
+{
+  "default_optimization": 11,
+  "experiment": 12,
+  "changes": [
+    "Single-FFMA soft score with precomputed scale2/bias2",
+    "Held-key metadata before B/V ready wait",
+    "Query metadata before RNG and A/dO ready wait"
+  ],
+  "resources": {
+    "full": {
+      "B1_128_128_4": {
+        "REG": 168,
+        "STACK": 320,
+        "SHARED": 1024
+      },
+      "B1_128_128_3": {
+        "REG": 168,
+        "STACK": 280,
+        "SHARED": 1024
+      },
+      "B1_128_128_2": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_128_128_1": {
+        "REG": 168,
+        "STACK": 152,
+        "SHARED": 1024
+      },
+      "B1_128_128_0": {
+        "REG": 168,
+        "STACK": 304,
+        "SHARED": 1024
+      },
+      "B1_128_128_9": {
+        "REG": 168,
+        "STACK": 344,
+        "SHARED": 1024
+      },
+      "B1_128_128_8": {
+        "REG": 168,
+        "STACK": 320,
+        "SHARED": 1024
+      },
+      "B1_128_128_7": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_128_128_6": {
+        "REG": 168,
+        "STACK": 152,
+        "SHARED": 1024
+      },
+      "B1_128_128_5": {
+        "REG": 168,
+        "STACK": 256,
+        "SHARED": 1024
+      },
+      "B1_128_64_4": {
+        "REG": 168,
+        "STACK": 40,
+        "SHARED": 1024
+      },
+      "B1_128_64_3": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_128_64_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_64_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_64_0": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_128_64_9": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_128_64_8": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_128_64_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_64_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_64_5": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_128_32_4": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_128_32_3": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_128_32_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_32_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_32_0": {
+        "REG": 168,
+        "STACK": 8,
+        "SHARED": 1024
+      },
+      "B1_128_32_9": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_128_32_8": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_128_32_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_32_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_32_5": {
+        "REG": 168,
+        "STACK": 16,
+        "SHARED": 1024
+      },
+      "B1_64_128_4": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_64_128_3": {
+        "REG": 168,
+        "STACK": 144,
+        "SHARED": 1024
+      },
+      "B1_64_128_2": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_64_128_1": {
+        "REG": 168,
+        "STACK": 152,
+        "SHARED": 1024
+      },
+      "B1_64_128_0": {
+        "REG": 168,
+        "STACK": 128,
+        "SHARED": 1024
+      },
+      "B1_64_128_9": {
+        "REG": 168,
+        "STACK": 168,
+        "SHARED": 1024
+      },
+      "B1_64_128_8": {
+        "REG": 168,
+        "STACK": 168,
+        "SHARED": 1024
+      },
+      "B1_64_128_7": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_64_128_6": {
+        "REG": 168,
+        "STACK": 152,
+        "SHARED": 1024
+      },
+      "B1_64_128_5": {
+        "REG": 168,
+        "STACK": 144,
+        "SHARED": 1024
+      },
+      "B1_64_64_4": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_64_64_3": {
+        "REG": 168,
+        "STACK": 48,
+        "SHARED": 1024
+      },
+      "B1_64_64_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_64_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_64_0": {
+        "REG": 168,
+        "STACK": 48,
+        "SHARED": 1024
+      },
+      "B1_64_64_9": {
+        "REG": 168,
+        "STACK": 16,
+        "SHARED": 1024
+      },
+      "B1_64_64_8": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_64_64_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_64_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_64_5": {
+        "REG": 168,
+        "STACK": 48,
+        "SHARED": 1024
+      },
+      "B1_64_32_4": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_3": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_0": {
+        "REG": 168,
+        "STACK": 8,
+        "SHARED": 1024
+      },
+      "B1_64_32_9": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_8": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_5": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_128_4": {
+        "REG": 168,
+        "STACK": 144,
+        "SHARED": 1024
+      },
+      "B1_32_128_3": {
+        "REG": 168,
+        "STACK": 136,
+        "SHARED": 1024
+      },
+      "B1_32_128_2": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_32_128_1": {
+        "REG": 168,
+        "STACK": 152,
+        "SHARED": 1024
+      },
+      "B1_32_128_0": {
+        "REG": 168,
+        "STACK": 136,
+        "SHARED": 1024
+      },
+      "B1_32_128_9": {
+        "REG": 168,
+        "STACK": 152,
+        "SHARED": 1024
+      },
+      "B1_32_128_8": {
+        "REG": 168,
+        "STACK": 144,
+        "SHARED": 1024
+      },
+      "B1_32_128_7": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_32_128_6": {
+        "REG": 168,
+        "STACK": 152,
+        "SHARED": 1024
+      },
+      "B1_32_128_5": {
+        "REG": 168,
+        "STACK": 136,
+        "SHARED": 1024
+      },
+      "B1_32_64_4": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_32_64_3": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_32_64_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_64_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_64_0": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_32_64_9": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_32_64_8": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_32_64_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_64_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_64_5": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_32_32_4": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_3": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_0": {
+        "REG": 168,
+        "STACK": 8,
+        "SHARED": 1024
+      },
+      "B1_32_32_9": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_8": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_5": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_128_4": {
+        "REG": 168,
+        "STACK": 200,
+        "SHARED": 1024
+      },
+      "B3_128_128_3": {
+        "REG": 168,
+        "STACK": 184,
+        "SHARED": 1024
+      },
+      "B3_128_128_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_128_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_128_0": {
+        "REG": 168,
+        "STACK": 256,
+        "SHARED": 1024
+      },
+      "B3_128_128_9": {
+        "REG": 168,
+        "STACK": 200,
+        "SHARED": 1024
+      },
+      "B3_128_128_8": {
+        "REG": 168,
+        "STACK": 192,
+        "SHARED": 1024
+      },
+      "B3_128_128_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_128_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_128_5": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B3_128_64_4": {
+        "REG": 168,
+        "STACK": 104,
+        "SHARED": 1024
+      },
+      "B3_128_64_3": {
+        "REG": 168,
+        "STACK": 80,
+        "SHARED": 1024
+      },
+      "B3_128_64_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_64_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_64_0": {
+        "REG": 168,
+        "STACK": 160,
+        "SHARED": 1024
+      },
+      "B3_128_64_9": {
+        "REG": 168,
+        "STACK": 104,
+        "SHARED": 1024
+      },
+      "B3_128_64_8": {
+        "REG": 168,
+        "STACK": 112,
+        "SHARED": 1024
+      },
+      "B3_128_64_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_64_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_64_5": {
+        "REG": 168,
+        "STACK": 80,
+        "SHARED": 1024
+      },
+      "B3_128_32_4": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B3_128_32_3": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B3_128_32_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_32_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_32_0": {
+        "REG": 168,
+        "STACK": 96,
+        "SHARED": 1024
+      },
+      "B3_128_32_9": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B3_128_32_8": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B3_128_32_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_32_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_32_5": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B3_64_128_4": {
+        "REG": 168,
+        "STACK": 40,
+        "SHARED": 1024
+      },
+      "B3_64_128_3": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B3_64_128_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_128_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_128_0": {
+        "REG": 168,
+        "STACK": 88,
+        "SHARED": 1024
+      },
+      "B3_64_128_9": {
+        "REG": 168,
+        "STACK": 40,
+        "SHARED": 1024
+      },
+      "B3_64_128_8": {
+        "REG": 168,
+        "STACK": 40,
+        "SHARED": 1024
+      },
+      "B3_64_128_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_128_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_128_5": {
+        "REG": 168,
+        "STACK": 64,
+        "SHARED": 1024
+      },
+      "B3_64_64_4": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_3": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_0": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_9": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_8": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_5": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_4": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_3": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_0": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_9": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_8": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_5": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_4": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_3": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_0": {
+        "REG": 168,
+        "STACK": 8,
+        "SHARED": 1024
+      },
+      "B3_32_128_9": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_8": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_5": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_4": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_3": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_0": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_9": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_8": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_5": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_4": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_3": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_0": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_9": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_8": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_5": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      }
+    },
+    "finite": {
+      "B1_128_128_4": {
+        "REG": 168,
+        "STACK": 312,
+        "SHARED": 1024
+      },
+      "B1_128_128_3": {
+        "REG": 168,
+        "STACK": 280,
+        "SHARED": 1024
+      },
+      "B1_128_128_2": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_128_128_1": {
+        "REG": 168,
+        "STACK": 160,
+        "SHARED": 1024
+      },
+      "B1_128_128_0": {
+        "REG": 168,
+        "STACK": 256,
+        "SHARED": 1024
+      },
+      "B1_128_128_9": {
+        "REG": 168,
+        "STACK": 312,
+        "SHARED": 1024
+      },
+      "B1_128_128_8": {
+        "REG": 168,
+        "STACK": 312,
+        "SHARED": 1024
+      },
+      "B1_128_128_7": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_128_128_6": {
+        "REG": 168,
+        "STACK": 160,
+        "SHARED": 1024
+      },
+      "B1_128_128_5": {
+        "REG": 168,
+        "STACK": 304,
+        "SHARED": 1024
+      },
+      "B1_128_64_4": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_128_64_3": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_128_64_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_64_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_64_0": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_128_64_9": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_128_64_8": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_128_64_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_64_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_64_5": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_128_32_4": {
+        "REG": 168,
+        "STACK": 16,
+        "SHARED": 1024
+      },
+      "B1_128_32_3": {
+        "REG": 168,
+        "STACK": 16,
+        "SHARED": 1024
+      },
+      "B1_128_32_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_32_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_32_0": {
+        "REG": 168,
+        "STACK": 8,
+        "SHARED": 1024
+      },
+      "B1_128_32_9": {
+        "REG": 168,
+        "STACK": 16,
+        "SHARED": 1024
+      },
+      "B1_128_32_8": {
+        "REG": 168,
+        "STACK": 8,
+        "SHARED": 1024
+      },
+      "B1_128_32_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_32_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_128_32_5": {
+        "REG": 168,
+        "STACK": 16,
+        "SHARED": 1024
+      },
+      "B1_64_128_4": {
+        "REG": 168,
+        "STACK": 152,
+        "SHARED": 1024
+      },
+      "B1_64_128_3": {
+        "REG": 168,
+        "STACK": 136,
+        "SHARED": 1024
+      },
+      "B1_64_128_2": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_64_128_1": {
+        "REG": 168,
+        "STACK": 160,
+        "SHARED": 1024
+      },
+      "B1_64_128_0": {
+        "REG": 168,
+        "STACK": 112,
+        "SHARED": 1024
+      },
+      "B1_64_128_9": {
+        "REG": 168,
+        "STACK": 152,
+        "SHARED": 1024
+      },
+      "B1_64_128_8": {
+        "REG": 168,
+        "STACK": 152,
+        "SHARED": 1024
+      },
+      "B1_64_128_7": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_64_128_6": {
+        "REG": 168,
+        "STACK": 160,
+        "SHARED": 1024
+      },
+      "B1_64_128_5": {
+        "REG": 168,
+        "STACK": 152,
+        "SHARED": 1024
+      },
+      "B1_64_64_4": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_64_64_3": {
+        "REG": 168,
+        "STACK": 16,
+        "SHARED": 1024
+      },
+      "B1_64_64_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_64_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_64_0": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_64_64_9": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_64_64_8": {
+        "REG": 168,
+        "STACK": 16,
+        "SHARED": 1024
+      },
+      "B1_64_64_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_64_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_64_5": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_64_32_4": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_3": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_0": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_9": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_8": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_64_32_5": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_128_4": {
+        "REG": 168,
+        "STACK": 152,
+        "SHARED": 1024
+      },
+      "B1_32_128_3": {
+        "REG": 168,
+        "STACK": 120,
+        "SHARED": 1024
+      },
+      "B1_32_128_2": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_32_128_1": {
+        "REG": 168,
+        "STACK": 160,
+        "SHARED": 1024
+      },
+      "B1_32_128_0": {
+        "REG": 168,
+        "STACK": 120,
+        "SHARED": 1024
+      },
+      "B1_32_128_9": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_32_128_8": {
+        "REG": 168,
+        "STACK": 136,
+        "SHARED": 1024
+      },
+      "B1_32_128_7": {
+        "REG": 168,
+        "STACK": 176,
+        "SHARED": 1024
+      },
+      "B1_32_128_6": {
+        "REG": 168,
+        "STACK": 160,
+        "SHARED": 1024
+      },
+      "B1_32_128_5": {
+        "REG": 168,
+        "STACK": 224,
+        "SHARED": 1024
+      },
+      "B1_32_64_4": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_32_64_3": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_32_64_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_64_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_64_0": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_32_64_9": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_32_64_8": {
+        "REG": 168,
+        "STACK": 24,
+        "SHARED": 1024
+      },
+      "B1_32_64_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_64_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_64_5": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B1_32_32_4": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_3": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_0": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_9": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_8": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B1_32_32_5": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_128_4": {
+        "REG": 168,
+        "STACK": 296,
+        "SHARED": 1024
+      },
+      "B3_128_128_3": {
+        "REG": 168,
+        "STACK": 296,
+        "SHARED": 1024
+      },
+      "B3_128_128_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_128_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_128_0": {
+        "REG": 168,
+        "STACK": 224,
+        "SHARED": 1024
+      },
+      "B3_128_128_9": {
+        "REG": 168,
+        "STACK": 312,
+        "SHARED": 1024
+      },
+      "B3_128_128_8": {
+        "REG": 168,
+        "STACK": 304,
+        "SHARED": 1024
+      },
+      "B3_128_128_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_128_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_128_5": {
+        "REG": 168,
+        "STACK": 128,
+        "SHARED": 1024
+      },
+      "B3_128_64_4": {
+        "REG": 168,
+        "STACK": 112,
+        "SHARED": 1024
+      },
+      "B3_128_64_3": {
+        "REG": 168,
+        "STACK": 72,
+        "SHARED": 1024
+      },
+      "B3_128_64_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_64_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_64_0": {
+        "REG": 168,
+        "STACK": 168,
+        "SHARED": 1024
+      },
+      "B3_128_64_9": {
+        "REG": 168,
+        "STACK": 128,
+        "SHARED": 1024
+      },
+      "B3_128_64_8": {
+        "REG": 168,
+        "STACK": 112,
+        "SHARED": 1024
+      },
+      "B3_128_64_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_64_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_64_5": {
+        "REG": 168,
+        "STACK": 120,
+        "SHARED": 1024
+      },
+      "B3_128_32_4": {
+        "REG": 168,
+        "STACK": 48,
+        "SHARED": 1024
+      },
+      "B3_128_32_3": {
+        "REG": 168,
+        "STACK": 40,
+        "SHARED": 1024
+      },
+      "B3_128_32_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_32_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_32_0": {
+        "REG": 168,
+        "STACK": 88,
+        "SHARED": 1024
+      },
+      "B3_128_32_9": {
+        "REG": 168,
+        "STACK": 56,
+        "SHARED": 1024
+      },
+      "B3_128_32_8": {
+        "REG": 168,
+        "STACK": 48,
+        "SHARED": 1024
+      },
+      "B3_128_32_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_32_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_128_32_5": {
+        "REG": 168,
+        "STACK": 48,
+        "SHARED": 1024
+      },
+      "B3_64_128_4": {
+        "REG": 168,
+        "STACK": 40,
+        "SHARED": 1024
+      },
+      "B3_64_128_3": {
+        "REG": 168,
+        "STACK": 48,
+        "SHARED": 1024
+      },
+      "B3_64_128_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_128_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_128_0": {
+        "REG": 168,
+        "STACK": 72,
+        "SHARED": 1024
+      },
+      "B3_64_128_9": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B3_64_128_8": {
+        "REG": 168,
+        "STACK": 48,
+        "SHARED": 1024
+      },
+      "B3_64_128_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_128_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_128_5": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B3_64_64_4": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_3": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_0": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_9": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_8": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_64_5": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_4": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_3": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_0": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_9": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_8": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_64_32_5": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_4": {
+        "REG": 168,
+        "STACK": 40,
+        "SHARED": 1024
+      },
+      "B3_32_128_3": {
+        "REG": 168,
+        "STACK": 40,
+        "SHARED": 1024
+      },
+      "B3_32_128_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_0": {
+        "REG": 168,
+        "STACK": 40,
+        "SHARED": 1024
+      },
+      "B3_32_128_9": {
+        "REG": 168,
+        "STACK": 48,
+        "SHARED": 1024
+      },
+      "B3_32_128_8": {
+        "REG": 168,
+        "STACK": 48,
+        "SHARED": 1024
+      },
+      "B3_32_128_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_128_5": {
+        "REG": 168,
+        "STACK": 32,
+        "SHARED": 1024
+      },
+      "B3_32_64_4": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_3": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_0": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_9": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_8": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_64_5": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_4": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_3": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_2": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_1": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_0": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_9": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_8": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_7": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_6": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      },
+      "B3_32_32_5": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 1024
+      }
+    }
+  },
+  "codegen": {
+    "full": "2 passed",
+    "finite": "2 passed",
+    "score_gate": "B1/B3 D64 mixed both directions:32 annotated score FFMA per warp tile, no score FMUL/FADD/LDG/BRA;180 instance noCALL/nativeTMA/register-role gates"
+  },
+  "full_ab": {
+    "passed": 129,
+    "failed": 22,
+    "baseline_failure_count": 20,
+    "added": {
+      "tests/test_dism_v2_ab_ws.py::test_ab_tails[bounded_soft-64]": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 12 / 4096 (0.3%)\nGreatest absolute difference: 0.0011062506685036826 at index (47, 40) (up to 0.0005 allowed)\nGreatest relative difference: 0.2002747073225209 at index (47, 9) (up to 0.002 allowed)",
+      "tests/test_dism_v2_ab_ws.py::test_ab_tails[bounded_soft-65]": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 40 / 4160 (1.0%)\nGreatest absolute difference: 0.021240234375 at index (5, 36) (up to 0.0005 allowed)\nGreatest relative difference: 0.04824365099590332 at index (5, 6) (up to 0.002 allowed)"
+    },
+    "resolved": []
+  },
+  "finite_ab_dv": {
+    "passed": 117,
+    "failed": 131,
+    "baseline_passed": 119,
+    "baseline_failed": 128,
+    "note": "candidate includes one extra codegen test",
+    "added": {
+      "tests/test_dism_v2_ab_ws.py::test_ab_tails[bounded_soft-2049]": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 8 / 2049 (0.4%)\nGreatest absolute difference: 0.0009613299438016032 at index (0, 0, 1931) (up to 0.0005 allowed)\nGreatest relative difference: 0.007226642981053653 at index (0, 0, 1930) (up to 0.002 allowed)",
+      "tests/test_dism_v2_dv_ws.py::test_ws_long_summary[q_from_k-bounded_soft-2049]": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 1 / 2112 (0.0%)\nGreatest absolute difference: 0.0023928474440344516 at index (0, 0, 1925) (up to 0.0005 allowed)\nGreatest relative difference: 0.005775984579905145 at index (0, 0, 1925) (up to 0.001 allowed)",
+      "tests/test_dism_v2_dv_ws.py::test_ws_long_summary[k_from_q-bounded_soft-2049]": "AssertionError: Tensor-likes are not close!\n\nMismatched elements: 1 / 2112 (0.0%)\nGreatest absolute difference: 0.0009799744563597501 at index (0, 0, 391) (up to 0.0005 allowed)\nGreatest relative difference: 0.00824449249018347 at index (0, 0, 391) (up to 0.001 allowed)"
+    },
+    "resolved": []
+  },
+  "selected_autograd": {
+    "full": "507 passed,398 deselected",
+    "finite": "507 passed,398 deselected"
+  }
+}

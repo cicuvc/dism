@@ -1,0 +1,1841 @@
+{
+  "report": "/tmp/dism-output-persistent-lineinfo-q.ncu-rep",
+  "metric": "derived__memory_l2_theoretical_sectors_global_excessive",
+  "source_rows": [
+    {
+      "file": "/usr/local/cuda/include/cuda_bf16.hpp",
+      "line": 254,
+      "source": "NV_IF_ELSE_TARGET(NV_IS_DEVICE,",
+      "excess_sectors": 1048576.0
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 320,
+      "source": "p.horizontal[off+j]=x.u0;",
+      "excess_sectors": 884736.0
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 321,
+      "source": "p.horizontal[off+j+32]=x.u1;",
+      "excess_sectors": 884736.0
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 271,
+      "source": "top.init[0].second={j>=0?p.boundary[off+j]:LOG_ZERO,p.boundary[off+j+32]};",
+      "excess_sectors": 138496.0
+    }
+  ],
+  "stall_source_rows": [
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 23,
+      "source": "return fmaf(result,fmaf(-x,result,1.f),result);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 7.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 74,
+      "source": "int warp=threadIdx.x/32,lane=threadIdx.x&31;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 3.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 75,
+      "source": "int blocks=(p.n+127)/128,total=blocks*p.batch_heads;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 3.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 91,
+      "source": "if(warp>=8) {",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 19.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 1.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 92,
+      "source": "kt::warpgroup::decrease_registers<40>();",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 1.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 93,
+      "source": "bool leader=kt::warp::elect_leader();",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 1.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 94,
+      "source": "if(warp==8 && leader) {",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 2.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 97,
+      "source": "int bh=task/blocks,base=(task%blocks)*128;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 4.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 103,
+      "source": "summary_tma(&qm,shared.q.data,&shared.qready,{base,bh,0,0});",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 0.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 106,
+      "source": "for(int t=0;t*64<key_end;++t,++tile) {",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 3.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 107,
+      "source": "int s=tile%STAGES;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 2.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 108,
+      "source": "if(tile>=STAGES) wait(&shared.free[s],((tile/STAGES)-1)&1);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 1145.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 230.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 110,
+      "source": "if(t*64+64<=p.n) {",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 5.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 112,
+      "source": "expect(&shared.ready[s],sizeof(slot.k)+sizeof(slot.v));",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 1.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 113,
+      "source": "summary_tma(&km,slot.k.data,&shared.ready[s],{0,0,bh*p.n+t*64,0});",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 7.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 114,
+      "source": "summary_tma(&vm,slot.v.data,&shared.ready[s],{0,0,bh*p.n+t*64,0});",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 3.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 2.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 156,
+      "source": "for(int task=blockIdx.x;task<total;task+=gridDim.x,++task_round) {",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 7.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 157,
+      "source": "int bh=task/blocks,base=(task%blocks)*128;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 35.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 158,
+      "source": "int key_end=min(p.padded_n,base+128);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 2.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 21.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 159,
+      "source": "int checkpoint=(task%blocks)*4+(warp&3);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 1.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 164,
+      "source": "wait(&shared.qready,(task_round*QPHASES+phase)&1);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 2.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 174,
+      "source": "else if(p.hard_bits) {",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 3.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 180,
+      "source": "if(lane<16 && qbase+lane<p.n)",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 5.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 181,
+      "source": "decision=row_hard(p.seed,p.offset,uint64_t(bh)*p.n+qbase+lane,p.hard_prob);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 8.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 182,
+      "source": "hard[0]=__shfl_sync(0xffffffff,decision,lane/4);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 1.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 183,
+      "source": "hard[1]=__shfl_sync(0xffffffff,decision,8+lane/4);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 1.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 185,
+      "source": "float tau=p.tau[bh%p.heads], tau2=tau*LOG2E, scale2=p.scale*LOG2E;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 34.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 192,
+      "source": "row_bias2[r]=(tau-(i<p.n?p.lse[int64_t(bh)*p.n+i]:0.f))*LOG2E;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 347.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 5.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 200,
+      "source": "for(int t=0;t*64<key_end;++t,++tile) {",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 24.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 202,
+      "source": "Scalar scalar;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 11.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 210,
+      "source": "key_label[e]=j<p.n?reinterpret_cast<const Label*>(p.k_label)[int64_t(bh)*p.n+j]:Label(-1);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 10.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 18.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 214,
+      "source": "wait(&shared.ready[s],phase);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 10.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 217,
+      "source": "load_rhs_tile(kreg,shared.slot[s].k);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 11.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 218,
+      "source": "kt::warp::wmma::mma_AB(accum,qreg,kreg,accum);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 435.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 0.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 233,
+      "source": "score=fmaf(e==0?x.x:x.y,scale2,bias);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 128.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 236,
+      "source": "Label label=__shfl_sync(0xffffffff,key_label[e],col);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 2.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 15.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 237,
+      "source": "float hs=summary_select(cached_label[r]==label,tau2,LOG_ZERO);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 12.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 239,
+      "source": "else score=summary_select(hard[r],hs,score);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 3.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 0.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 241,
+      "source": "int j=t*64+col+e*32;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 2.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 242,
+      "source": "values[e]=summary_select(i<p.n && j<p.n && j<=i,score,LOG_ZERO);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 28.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 327.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 257,
+      "source": "if(i>=p.n || j>=p.n) { data.data[r][c].first.u0=0; data.data[r][c].second.u0=LOG_ZERO; }",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 167.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 258,
+      "source": "if(i>=p.n || j+32>=p.n) { data.data[r][c].first.u1=0; data.data[r][c].second.u1=LOG_ZERO; }",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 9.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 210.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 262,
+      "source": "if(warp>=4) {",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 5.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 263,
+      "source": "wait(&shared.mail_ready[s],phase);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 59.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 18.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 264,
+      "source": "top=Buffer::HState::load_shared(shared.mail[warp-4][s]);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 6.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 267,
+      "source": "if(checkpoint>0 && checkpoint<=p.checkpoints) {",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 25.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 269,
+      "source": "int64_t off=(int64_t(bh)*p.checkpoints+checkpoint-1)*p.padded_n;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 6.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 33.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 271,
+      "source": "top.init[0].second={j>=0?p.boundary[off+j]:LOG_ZERO,p.boundary[off+j+32]};",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 8.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 59.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 279,
+      "source": "if(tile>=STAGES) wait(&shared.mail_free[s],phase^1);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 66.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 2.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 43.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 280,
+      "source": "result.second.store_shared(shared.mail[warp][s]);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 6.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 281,
+      "source": "arrive(&shared.mail_ready[s]);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 6.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 12.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 300,
+      "source": "if(p.vertical && (lane&1)) {",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 76.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 304,
+      "source": "if(i<p.padded_n) {",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 10.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 59.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 308,
+      "source": "p.vertical[off+int64_t(edge)*p.padded_n+i]=x.u0;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 5.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 113.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 309,
+      "source": "p.vertical[off+int64_t(edge+2)*p.padded_n+i]=x.u1;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 3.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 71.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 313,
+      "source": "scalar.template roll<false>();",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 33.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 315,
+      "source": "int64_t off=(int64_t(bh)*(p.padded_n/64)+qbase/64)*p.padded_n+t*64;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 4.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 33.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 320,
+      "source": "p.horizontal[off+j]=x.u0;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 39.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 321,
+      "source": "p.horizontal[off+j+32]=x.u1;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 25.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 333,
+      "source": "if(qbase+pos.first>=p.n || t*64+pos.second>=p.n) x.u0=LOG_ZERO;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 7.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 67.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 334,
+      "source": "if(qbase+pos.first>=p.n || t*64+pos.second+32>=p.n) x.u1=LOG_ZERO;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 13.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 50.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 335,
+      "source": "scalar.data[r][c].value=x; m=fmaxf(m,fmaxf(x.u0,x.u1));",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 7.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 62.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 337,
+      "source": "m=fmaxf(m,__shfl_xor_sync(0xffffffff,m,1));",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 8.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 25.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 338,
+      "source": "m=fmaxf(m,__shfl_xor_sync(0xffffffff,m,2));",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 1.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 339,
+      "source": "float alpha=exp2f(maximum[r]-m), sum=0;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 19.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 343,
+      "source": "float a=exp2f(x.u0-m),b=exp2f(x.u1-m); sum+=a+b;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 154.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 346,
+      "source": "sum+=__shfl_xor_sync(0xffffffff,sum,1); sum+=__shfl_xor_sync(0xffffffff,sum,2);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 4.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 351,
+      "source": "for(int k=r;k<4;k+=2) { out.tiles[0][c].data[k].x*=alpha; out.tiles[0][c].data[k].y*=alpha; }",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 3.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 9.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 355,
+      "source": "kt::warp::load(vreg,shared.slot[s].v);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 4.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 19.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 356,
+      "source": "kt::warp::wmma::mma_AB(out,weights,vreg,out);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 352.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 0.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 372,
+      "source": "if(p.vertical)",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 21.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 373,
+      "source": "for(int e=end/16;e<p.padded_n/16;++e)",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 125.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 374,
+      "source": "for(int r=lane;r<16;r+=32) {",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 28.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 376,
+      "source": "if(i<p.padded_n) p.vertical[(int64_t(bh)*(p.padded_n/16)+e)*p.padded_n+i]=LOG_ZERO;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 29.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 312.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 378,
+      "source": "if(p.horizontal && qbase%64==48 && qbase<p.padded_n)",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 12.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 379,
+      "source": "for(int j=end+lane;j<p.padded_n;j+=32)",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 3.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 380,
+      "source": "p.horizontal[(int64_t(bh)*(p.padded_n/64)+qbase/64)*p.padded_n+j]=LOG_ZERO;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 3.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 7.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 393,
+      "source": "auto* dest=static_cast<__nv_bfloat16*>(p.output)+(int64_t(bh)*p.n+i)*DV+j;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 1.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 404,
+      "source": "if((lane&3)==0 && i<p.n) p.normalizer[int64_t(bh)*p.n+i]=maximum[r]+log2f(denominator[r]);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 16.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 65.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 409,
+      "source": "kt::warpgroup::sync(1+warp/4); // Independent, collective role exit.",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 78.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/core_fwd.cu",
+      "line": 410,
+      "source": "}",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 10349.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 1.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/log_affine.cuh",
+      "line": 28,
+      "source": "float p = fmaf(fabsf(x-y), 0.34114549f, 0.48232999f);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 37.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/log_affine.cuh",
+      "line": 35,
+      "source": "float base = fmaxf(x,y) + amplitude;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 24.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/log_affine.cuh",
+      "line": 55,
+      "source": "return {x.first+y.first,",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 20.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/log_affine.cuh",
+      "line": 56,
+      "source": "{tile_logadd2(x.second.u0+y.first.u0,y.second.u0),",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 724.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 20.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/log_affine.cuh",
+      "line": 57,
+      "source": "tile_logadd2(x.second.u1+y.first.u1,y.second.u1)}};",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 19.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/pipeline.cuh",
+      "line": 7,
+      "source": "__device__ inline unsigned smaddr(const void* p) { return unsigned(__cvta_generic_to_shared(p)); }",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 125.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 2.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 48.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/row_rng.cuh",
+      "line": 9,
+      "source": "uint4 c=make_uint4(uint32_t(offset/4),uint32_t((offset/4)>>32),uint32_t(row),uint32_t(row>>32));",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 1.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/row_rng.cuh",
+      "line": 13,
+      "source": "uint32_t lo0=0xD2511F53u*c.x,lo1=0xCD9E8D57u*c.z;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 4.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 10.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/row_rng.cuh",
+      "line": 15,
+      "source": "uint32_t hi0=__umulhi(0xD2511F53u,c.x),hi1=__umulhi(0xCD9E8D57u,c.z);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 3.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 4.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/row_rng.cuh",
+      "line": 19,
+      "source": "c=make_uint4(hi1^c.y^k0,lo1,hi0^c.w^k1,lo0);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 4.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/row_rng.cuh",
+      "line": 25,
+      "source": "if(probability==0.f) return false;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 5.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/row_rng.cuh",
+      "line": 26,
+      "source": "if(probability==1.f) return true;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 3.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/row_rng.cuh",
+      "line": 27,
+      "source": "return float(row_bits(seed,offset,row)>>8)*0x1p-24f<probability;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 7.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/summary_persistent.cuh",
+      "line": 30,
+      "source": "kt::tma::atoms::load_async_atom<kt::cache_policy::NORMAL>(smaddr(dst), reinterpret_cast<uint64_t>(map),",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 3.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 4.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/summary_persistent.cuh",
+      "line": 45,
+      "source": "uint32_t shared_addr = static_cast<uint32_t>(__cvta_generic_to_shared(&src.data[0]));",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 11.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/dism_v2/csrc/summary_persistent.cuh",
+      "line": 56,
+      "source": "kt::move<kt::bf16_2>::ldsm4(tmp[0], tmp[2], tmp[1], tmp[3], src.idx(shared_addr, {row, col}));",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 14.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/include/ops/group/group.cuh",
+      "line": 56,
+      "source": ": r\"(0xFFFFFFFF)\"",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 1.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/include/ops/group/group.cuh",
+      "line": 347,
+      "source": "asm volatile(setmaxnreg.dec.sync.aligned.u32 %0;\\n\" ::\"n\"(n_reg));\"",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 1.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/include/ops/group/memory/tile/s2r_impl.cuh",
+      "line": 30,
+      "source": "uint32_t shared_addr = static_cast<uint32_t>(__cvta_generic_to_shared(&src.data[0]));",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 4.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 19.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/include/ops/group/mma/warp/warp_impl.cuh",
+      "line": 268,
+      "source": "hmma16816(d.data[0], d.data[1], a.data[0], a.data[1], a.data[2], a.data[3], b.data[0], b.data[2], c.data[0],",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 893.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 19.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/include/ops/group/mma/warp/warp_impl.cuh",
+      "line": 270,
+      "source": "hmma16816(d.data[2], d.data[3], a.data[0], a.data[1], a.data[2], a.data[3], b.data[1], b.data[3], c.data[2],",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 427.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 116.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/include/ops/group/mma/warp/warp_impl.cuh",
+      "line": 607,
+      "source": "mma_AB_base(d.tiles[n][m], a.tiles[n][0], b.tiles[0][m], c.tiles[n][m]);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 787.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 0.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/include/ops/group/mma/warp/warp_impl.cuh",
+      "line": 610,
+      "source": "mma_AB_base(d.tiles[n][m], a.tiles[n][k], b.tiles[k][m], d.tiles[n][m]);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 106.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 19.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/include/ops/thread/memory/util/util.cuh",
+      "line": 102,
+      "source": ": r\"(src));\"",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 295.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/include/ops/thread/memory/util/util.cuh",
+      "line": 109,
+      "source": ": r\"(src));\"",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 212.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/include/types/shared/st.cuh",
+      "line": 84,
+      "source": "const int swizzle = ((addr % swizzle_repeat) >> 7) << 4;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 20.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 146.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/project/dism-exp/include/types/shared/st.cuh",
+      "line": 85,
+      "source": "return (addr ^ swizzle);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 17.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 222.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 120,
+      "source": "return select(idx >> 2, lo, hi);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 2.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 129,
+      "source": "__forceinline__ __host__ __device__ PackedF2 operator+(const PackedF2& rhs) const { return {u0 + rhs.u0, u1 + rhs.u1}; }",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 20.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 133,
+      "source": "__shfl_sync(0xffffffff, u0, src_lane, 32),",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 163.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 134,
+      "source": "__shfl_sync(0xffffffff, u1, src_lane, 32),",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 8.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 215.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 139,
+      "source": "__shfl_xor_sync(0xffffffff, u0, lane_mask, 32),",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 92.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 140,
+      "source": "__shfl_xor_sync(0xffffffff, u1, lane_mask, 32),",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 89.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 157,
+      "source": "return { UnpackedF1::select(idx,{x0.u0},{x1.u0}).u0, UnpackedF1::select(idx,{x0.u1},{x1.u1}).u0 };",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 22.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 138.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 350,
+      "source": "return {value.shuffle(src_lane)};",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 140.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 353,
+      "source": "return {value.shuffle_xor(lane_mask)};",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 16.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 376,
+      "source": "return {TMaybePacked::select(idx, args.value...)};",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 13.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 36.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 401,
+      "source": "return {first.shuffle(src_lane), second.shuffle(src_lane)};",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 40.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 404,
+      "source": "return {first.shuffle_xor(lane_mask), second.shuffle_xor(lane_mask)};",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 76.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 427,
+      "source": "return {TMaybePacked::select(idx, args.first...),",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 8.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 428,
+      "source": "TMaybePacked::select(idx, args.second...)};",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 10.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 585,
+      "source": "*reinterpret_cast<uint4*>(address) = packet;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 6.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 598,
+      "source": "packet = *reinterpret_cast<const uint4*>(address);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 2.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 609,
+      "source": "struct MMABuffer{",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 15.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 663,
+      "source": "return Op::apply(lhs, rhs);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 12.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 668,
+      "source": "return E::select(condition, if_false, if_true);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 13.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 46.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 677,
+      "source": "auto combined = combine(lhs, *rhs);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 4.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 758,
+      "source": "Codec::store(address, init[i]);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 6.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 769,
+      "source": "+ (i * 32 + lane) * Codec::words;",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 6.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 770,
+      "source": "state.init[i] = Codec::load(address);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 2.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 807,
+      "source": "return value.shuffle_xor(16);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 16.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 810,
+      "source": "return value.shuffle(lane + (FWD ? -4 * J : 4 * J));",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 140.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 819,
+      "source": "auto t0 = roll_shuffle<FWD, J>(data[0][k], lane);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 71.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 820,
+      "source": "auto t1 = roll_shuffle<FWD, J>(data[1][k], lane);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 85.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 823,
+      "source": "data[0][k] = choose(crosses_block, t0, t1);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 4.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 2.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 824,
+      "source": "data[1][k] = choose(crosses_block, t1, t0);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 9.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 34.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 842,
+      "source": "roll_columns<FWD, J + 1>(lane, lar3);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 57.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 849,
+      "source": "roll_columns<FWD>(lane, lane >> 2);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 33.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 920,
+      "source": "fn.template operator()<INDEX>();",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 26.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 921,
+      "source": "static_for<COUNT, INDEX + 1>(std::forward<F>(fn));",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 16.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 1853,
+      "source": "if(lam4 >= 3) { ",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 24.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 1857,
+      "source": "tmp[r] = send_value.shuffle(boundary_lane);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 16.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 1861,
+      "source": "static_for<ROW_BLOCKS>([&]<int r>(){",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 4.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 1866,
+      "source": "combine_if(lhs, &data[r][COL_BLOCKS - 1], pred);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 4.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 1871,
+      "source": "if(lam4 >= 2) { ",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 15.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 1876,
+      "source": "tmp[r] = send_value.shuffle_xor(lane_mask);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 23.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 1913,
+      "source": "if(lam4 >= 3) { ",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 18.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 1917,
+      "source": "tmp[r] = send_value.shuffle(boundary_lane);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 13.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 1920,
+      "source": "static_for<bits>([&]<int sweep>(){",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 2.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 1923,
+      "source": "static_for<COL_BLOCKS>([&]<int c>(){",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 2.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 1926,
+      "source": "static_for<ROW_BLOCKS>([&]<int r>(){",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 10.0
+      }
+    },
+    {
+      "file": "/home/cicuvc/cs/projects/glx/include/glx/diagonal_scan.cuh",
+      "line": 1937,
+      "source": "auto new_val = combine(choose(pred, hstate.init[c / THREAD_ROWS], lhs), data[r][c]);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 18.0
+      }
+    },
+    {
+      "file": "/usr/local/cuda/include/cuda_bf16.hpp",
+      "line": 254,
+      "source": "NV_IF_ELSE_TARGET(NV_IS_DEVICE,",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 12.0
+      }
+    },
+    {
+      "file": "/usr/local/cuda/include/cuda_bf16.hpp",
+      "line": 572,
+      "source": "NV_IF_ELSE_TARGET(NV_PROVIDES_SM_80,",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 21.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 15.0
+      }
+    },
+    {
+      "file": "/usr/local/cuda/include/sm_20_intrinsics.hpp",
+      "line": 151,
+      "source": "return __nv_cvta_generic_to_shared_impl(p);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 256.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 9.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 121.0
+      }
+    },
+    {
+      "file": "/usr/local/cuda/include/sm_30_intrinsics.hpp",
+      "line": 373,
+      "source": "ret = __nvvm_shfl_idx_sync(mask, var, srcLane, c);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 2.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 55.0
+      }
+    },
+    {
+      "file": "/usr/local/cuda/include/sm_30_intrinsics.hpp",
+      "line": 422,
+      "source": "ret = __nvvm_shfl_idx_sync(mask, __float_as_int(var), srcLane, c);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 1.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 8.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 470.0
+      }
+    },
+    {
+      "file": "/usr/local/cuda/include/sm_30_intrinsics.hpp",
+      "line": 449,
+      "source": "ret = __nvvm_shfl_bfly_sync(mask, __float_as_int(var), laneMask, c);",
+      "samples": {
+        "smsp__pcsamp_warps_issue_stalled_barrier": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_long_scoreboard": 0.0,
+        "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": 8.0,
+        "smsp__pcsamp_warps_issue_stalled_wait": 211.0
+      }
+    }
+  ],
+  "metrics": {
+    "derived__memory_l2_theoretical_sectors_global_excessive": {
+      "unit": "byte",
+      "value": "2956544"
+    },
+    "gpu__time_duration.sum": {
+      "unit": "ns",
+      "value": "467584"
+    },
+    "memory_l2_theoretical_sectors_global": {
+      "unit": "sectors",
+      "value": "8801536"
+    },
+    "memory_l2_theoretical_sectors_global_ideal": {
+      "unit": "sectors",
+      "value": "5844992"
+    },
+    "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+      "unit": "%",
+      "value": "37.08"
+    },
+    "sm__throughput.avg.pct_of_peak_sustained_elapsed": {
+      "unit": "%",
+      "value": "37.32"
+    },
+    "smsp__pcsamp_sample_count": {
+      "unit": "",
+      "value": "41426"
+    },
+    "smsp__pcsamp_warps_issue_stalled_barrier": {
+      "unit": "warp",
+      "value": "10368"
+    },
+    "smsp__pcsamp_warps_issue_stalled_long_scoreboard": {
+      "unit": "warp",
+      "value": "2988"
+    },
+    "smsp__pcsamp_warps_issue_stalled_math_pipe_throttle": {
+      "unit": "warp",
+      "value": "6852"
+    },
+    "smsp__pcsamp_warps_issue_stalled_wait": {
+      "unit": "warp",
+      "value": "6192"
+    }
+  },
+  "mode": "tanh_finite",
+  "lineinfo": true,
+  "clock_control": "none",
+  "cache_control": "none",
+  "shape": {
+    "b": 64,
+    "h": 4,
+    "n": 1024,
+    "d": 64,
+    "dv": 64,
+    "vocab": 512,
+    "direction": "q_from_k",
+    "hard_prob": 0.5
+  }
+}

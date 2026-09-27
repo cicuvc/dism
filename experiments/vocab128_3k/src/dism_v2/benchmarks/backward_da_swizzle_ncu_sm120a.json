@@ -1,0 +1,84 @@
+[
+  {
+    "kernel": "void ws::value_backward<64, 64>(Args, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, const __nv_bfloat16 *, const float *, float *, float2 *)",
+    "metrics": {
+      "gpu__time_duration.sum": {
+        "value": "0.933472",
+        "unit": "ms"
+      },
+      "sm__throughput.avg.pct_of_peak_sustained_elapsed": {
+        "value": "39.272947",
+        "unit": "%"
+      },
+      "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+        "value": "39.272947",
+        "unit": "%"
+      },
+      "launch__shared_mem_per_block_dynamic": {
+        "value": "36.992000",
+        "unit": "Kbyte/block"
+      },
+      "launch__registers_per_thread": {
+        "value": "168",
+        "unit": "register/thread"
+      },
+      "derived__local_spilling_requests": {
+        "value": "2272568",
+        "unit": ""
+      },
+      "smsp__warps_eligible.avg.per_cycle_active": {
+        "value": "0.642265",
+        "unit": "warp"
+      },
+      "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum": {
+        "value": "48442",
+        "unit": ""
+      },
+      "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_st.sum": {
+        "value": "343191",
+        "unit": ""
+      }
+    }
+  },
+  {
+    "kernel": "void ab_ws::run<64, 64>(Args, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, CUtensorMap_st, const __nv_bfloat16 *, const float *, const float *, CUtensorMap_st, float *, float *, float *)",
+    "metrics": {
+      "gpu__time_duration.sum": {
+        "value": "2.058080",
+        "unit": "ms"
+      },
+      "sm__throughput.avg.pct_of_peak_sustained_elapsed": {
+        "value": "28.995922",
+        "unit": "%"
+      },
+      "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+        "value": "23.256962",
+        "unit": "%"
+      },
+      "launch__shared_mem_per_block_dynamic": {
+        "value": "53.376000",
+        "unit": "Kbyte/block"
+      },
+      "launch__registers_per_thread": {
+        "value": "168",
+        "unit": "register/thread"
+      },
+      "derived__local_spilling_requests": {
+        "value": "3915776",
+        "unit": ""
+      },
+      "smsp__warps_eligible.avg.per_cycle_active": {
+        "value": "0.405999",
+        "unit": "warp"
+      },
+      "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum": {
+        "value": "36080134",
+        "unit": ""
+      },
+      "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_st.sum": {
+        "value": "59980902",
+        "unit": ""
+      }
+    }
+  }
+]

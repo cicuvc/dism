@@ -1,0 +1,67 @@
+{
+  "/tmp/dism-bwd-baseline-tests.log": {
+    "failures": [
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.0-q_from_k-32-64]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.0-q_from_k-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.0-q_from_k-128-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.0-k_from_q-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-q_from_k-64-32]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-q_from_k-64-64]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-q_from_k-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-q_from_k-128-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-k_from_q-64-32]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-k_from_q-64-64]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-k_from_q-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-k_from_q-128-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[1.0-q_from_k-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[1.0-k_from_q-64-128]"
+    ],
+    "new": [],
+    "resolved": []
+  },
+  "/tmp/dism-bwd-opt-full.log": {
+    "failures": [
+      "tests/test_dism_v2_ab_ws.py::test_ab_tails[bounded_soft-64]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_tails[bounded_soft-65]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.0-q_from_k-32-64]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.0-q_from_k-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.0-q_from_k-128-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.0-k_from_q-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-q_from_k-64-32]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-q_from_k-64-64]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-q_from_k-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-q_from_k-128-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-k_from_q-64-32]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-k_from_q-64-64]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-k_from_q-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-k_from_q-128-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[1.0-q_from_k-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[1.0-k_from_q-64-128]"
+    ],
+    "new": [
+      "tests/test_dism_v2_ab_ws.py::test_ab_tails[bounded_soft-64]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_tails[bounded_soft-65]"
+    ],
+    "resolved": []
+  },
+  "/tmp/dism-bwd-opt-cached-full.log": {
+    "failures": [
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.0-q_from_k-32-64]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.0-q_from_k-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.0-q_from_k-128-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.0-k_from_q-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-q_from_k-64-32]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-q_from_k-64-64]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-q_from_k-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-q_from_k-128-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-k_from_q-64-32]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-k_from_q-64-64]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-k_from_q-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[0.37-k_from_q-128-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[1.0-q_from_k-64-128]",
+      "tests/test_dism_v2_ab_ws.py::test_ab_reference_dimensions[1.0-k_from_q-64-128]"
+    ],
+    "new": [],
+    "resolved": []
+  }
+}
