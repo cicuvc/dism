@@ -24,3 +24,9 @@
   classified as suspected tool issues, with evidence and explicit warning.
   Never extend this exception to memcheck, synccheck or numerical failures.
 - Docs live here; tools contains only required test helpers. Preserve user edits.
+- SAM full-hard inference lives in python/flash_dism/inference, including native
+  csrc. It is shared inference infrastructure, not v4 training. Its explicit
+  prefill/decode APIs accept arbitrary positive lengths; the 256-alignment rule
+  above applies to training CUDA operators. Keep model/cache dispatch explicit,
+  preserve complete-history prime, and test rebuild/graph boundaries. Wheel
+  builds include both SAM native modules; checkout JIT must use a user cache.

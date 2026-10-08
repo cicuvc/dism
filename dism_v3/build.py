@@ -351,9 +351,9 @@ if __name__ == "__main__":
     output_path = Path('python')
     archs = ['120a'] # Architecture-specific setmaxnreg on RTX5090.
 
-    python_executable = Path(sys.executable)
-    python_home = python_executable.parent.parent
     python_version = sysconfig.get_python_version()
+    python_include = Path(sysconfig.get_path('include'))
+    python_lib = Path(sysconfig.get_config_var('LIBDIR'))
 
     libpython_name = f"python{python_version}"
 
@@ -368,9 +368,9 @@ if __name__ == "__main__":
     cxx_build_args.add_includedir(Path('/usr/local/cuda/include/cccl'))
     cxx_build_args.add_includedir(torch_path / 'include/torch/csrc/api/include')
     cxx_build_args.add_includedir(torch_path / 'include')
-    cxx_build_args.add_includedir(python_home / 'include' / libpython_name)
+    cxx_build_args.add_includedir(python_include)
 
-    target = DynamicLibrary(output_path / f"{package_name}{sysconfig.get_config_var('EXT_SUFFIX')}", [python_home /'lib', torch_path/'lib'], python_links + torch_links + ['m', 'stdc++'])
+    target = DynamicLibrary(output_path / f"{package_name}{sysconfig.get_config_var('EXT_SUFFIX')}", [python_lib, torch_path/'lib'], python_links + torch_links + ['m', 'stdc++'])
 
     configs = list(product((16,32),(32,64),(32,64)))
     if os.environ.get('DISM_BUILD_CONFIGS'):

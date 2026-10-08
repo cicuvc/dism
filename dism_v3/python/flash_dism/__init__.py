@@ -1,4 +1,5 @@
 """DISM v3: one extension, shape-selected fixed or packed CUDA kernels."""
+import torch  # Load Torch's shared libraries before importing the native extension.
 from .backend import supported_configs
 from .forward import forward_core
 from .backward import backward_core, dism_core as _fixed_core

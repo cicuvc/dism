@@ -1,0 +1,11 @@
+include build.py pyproject.toml setup.py MANIFEST.in README.md AGENTS.md pytest.ini
+recursive-include include *.h *.hpp *.cuh *.inl
+recursive-include src *.cpp *.cu *.h *.hpp *.cuh
+recursive-include python/flash_dism *.py
+recursive-include python/flash_dism/inference/csrc *.cpp *.cu *.h *.hpp *.cuh
+recursive-include docs *.md
+recursive-include tests *.py
+recursive-include tools *.py
+prune build
+prune dist
+global-exclude __pycache__ *.py[cod] *.so *.o *.cubin *.fatbin

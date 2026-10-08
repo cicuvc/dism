@@ -5,8 +5,7 @@ Source: `/root/autodl-tmp/dism-randomness-code/nanochat` on
 `randomness-sequence_true-786m` (2026-10-06). Curated import: v4, hashed-symbol
 experiments and chat/RL launchers are excluded. The dataloader, checkpoint
 manager and base training loop retain the remote implementation.
-Original source hashes are in `source_manifest.json`; import adjustments and
-verification are recorded in the repository's `CLEANUP.md`.
+Original source hashes are in `source_manifest.json`.
 
 ## Baseline
 
@@ -67,5 +66,6 @@ PYTHONPATH="$PWD/nanochat:$PWD/dism_v3/python" python -m pytest nanochat/tests
 ```
 
 GDN hybrid supports packed prefill/recomputed generation, not cached decoding.
-Pure DISM/SWA Torch cache references remain in flash_dism. No SAM/v4 inference
-backend is included on this branch.
+The explicit SAM prefill/decoding backend is available in flash_dism.inference;
+it does not automatically replace nanochat's model/cache dispatch. V4 training
+operators remain excluded.
