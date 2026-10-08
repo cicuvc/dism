@@ -1,4 +1,0 @@
-PASS torch.bfloat16 32 64 repeat prime 2048 graph True max_abs 5.9508673686536895e-06
-PASS torch.bfloat16 32 64 random prime 2048 graph True max_abs 4.201400944481293e-06
-PASS torch.bfloat16 32 64 no_match prime 2048 graph True max_abs 0.0
-GPU_PLANNER_PASS

@@ -1,2 +1,0 @@
-API_PASS gpu torch.float32
-API_PASS gpu torch.bfloat16

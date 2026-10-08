@@ -1,12 +1,21 @@
-# Xmake cache
-.xmake/
-build/
-
-# MacOS Cache
-.DS_Store
-
-
-backup
-.vscode
-
 __pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+artifacts/
+results/
+*.so
+*.o
+*.cubin
+*.fatbin
+*.ncu-rep
+*.nsys-rep
+*.sqlite
+compile_commands.json
+.vscode/
+.xmake/
+wandb/
+runs/
+base_checkpoints/
+*.pt
+*.parquet
