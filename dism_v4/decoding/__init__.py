@@ -49,5 +49,7 @@ construction stays FP64, uploaded counts/weights and vector summaries are FP32.
 from .runtime import NativeDecodeCache
 from .api import HardDismDecoder
 from .gpu_runtime import GpuPlannerCache
+from .prefill import HardPrefillPlan
+from .prefill_batch import HardDismPrefill
 
-__all__=['NativeDecodeCache','HardDismDecoder','GpuPlannerCache']
+__all__=['NativeDecodeCache','HardDismDecoder','GpuPlannerCache','HardPrefillPlan','HardDismPrefill']

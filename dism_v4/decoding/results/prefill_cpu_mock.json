@@ -1,0 +1,131 @@
+{
+  "status": "PASS",
+  "cases": 100,
+  "max_abs": {
+    "fp64": 5.435651928564766e-13,
+    "fp32": 6.382104515978426e-06,
+    "torch": 9.673175593860606e-10
+  },
+  "timings": [
+    {
+      "pattern": "repeat",
+      "n": 256,
+      "states": 257,
+      "streams": 632,
+      "events": 3738,
+      "program_bytes": 81872,
+      "plan_ms": 0.5856869975104928,
+      "mock_fp64_ms": 0.5024770071031526
+    },
+    {
+      "pattern": "repeat",
+      "n": 1024,
+      "states": 1025,
+      "streams": 2550,
+      "events": 18976,
+      "program_bytes": 408120,
+      "plan_ms": 2.297674000146799,
+      "mock_fp64_ms": 2.5360160070704296
+    },
+    {
+      "pattern": "repeat",
+      "n": 4096,
+      "states": 4097,
+      "streams": 10228,
+      "events": 92198,
+      "program_bytes": 1958560,
+      "plan_ms": 12.567531986860558,
+      "mock_fp64_ms": 12.162508995970711
+    },
+    {
+      "pattern": "repeat",
+      "n": 16384,
+      "states": 16385,
+      "streams": 40946,
+      "events": 434220,
+      "program_bytes": 9143048,
+      "plan_ms": 54.36541698873043,
+      "mock_fp64_ms": null
+    },
+    {
+      "pattern": "random",
+      "n": 256,
+      "states": 349,
+      "streams": 282,
+      "events": 1473,
+      "program_bytes": 33772,
+      "plan_ms": 0.8119859994621947,
+      "mock_fp64_ms": 0.22553099552169442
+    },
+    {
+      "pattern": "random",
+      "n": 1024,
+      "states": 1385,
+      "streams": 1245,
+      "events": 9908,
+      "program_bytes": 216320,
+      "plan_ms": 2.106211002683267,
+      "mock_fp64_ms": 1.3309360074345022
+    },
+    {
+      "pattern": "random",
+      "n": 4096,
+      "states": 5522,
+      "streams": 5240,
+      "events": 56067,
+      "program_bytes": 1196036,
+      "plan_ms": 9.244794011465274,
+      "mock_fp64_ms": 7.6531340018846095
+    },
+    {
+      "pattern": "random",
+      "n": 16384,
+      "states": 22110,
+      "streams": 20433,
+      "events": 288282,
+      "program_bytes": 6060184,
+      "plan_ms": 46.595009000157006,
+      "mock_fp64_ms": null
+    },
+    {
+      "pattern": "distinct",
+      "n": 256,
+      "states": 257,
+      "streams": 256,
+      "events": 512,
+      "program_bytes": 14344,
+      "plan_ms": 0.5414619954535738,
+      "mock_fp64_ms": 0.09528599912300706
+    },
+    {
+      "pattern": "distinct",
+      "n": 1024,
+      "states": 1025,
+      "streams": 1024,
+      "events": 2048,
+      "program_bytes": 57352,
+      "plan_ms": 1.2727500143228099,
+      "mock_fp64_ms": 0.2848409931175411
+    },
+    {
+      "pattern": "distinct",
+      "n": 4096,
+      "states": 4097,
+      "streams": 4096,
+      "events": 8192,
+      "program_bytes": 229384,
+      "plan_ms": 4.232324994518422,
+      "mock_fp64_ms": 1.1634330003289506
+    },
+    {
+      "pattern": "distinct",
+      "n": 16384,
+      "states": 16385,
+      "streams": 16384,
+      "events": 32768,
+      "program_bytes": 917512,
+      "plan_ms": 17.51228899229318,
+      "mock_fp64_ms": null
+    }
+  ]
+}

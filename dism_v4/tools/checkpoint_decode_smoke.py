@@ -27,10 +27,11 @@ from dism_v4.decoding import HardDismDecoder
 
 
 class Runner:
-    def __init__(self, model, capacity, backend='native', dtype=torch.float32, interval=32, planner='cpu'):
+    def __init__(self, model, capacity, backend='native', dtype=torch.float32, interval=32, planner='cpu', prefill_engine=None):
         self.model, self.capacity, self.backend = model, capacity, backend
         self.dtype, self.interval = dtype, interval
         self.planner=planner
+        self.prefill_engine=prefill_engine
         self.states = [None] * len(model.layers)
 
     def attention(self, module, x, index):
@@ -59,9 +60,13 @@ class Runner:
                 self.capacity, tau, cache_dtype=self.dtype, rebuild_interval=self.interval,
                 planner_backend=self.planner,
                 sample_interval=32, materialize_threshold=64, rebuild_chunk=128)
-            # Prefill output is deliberately identical to the existing reference.
-            out, _ = dism_wrapper_decode(q, k, sq, sk, module.q_vocab, module.k_vocab,
-                                        v, tau, direction=direction, hard_prob=1.)
+            if self.prefill_engine is None:
+                # Preserve the original decoding-only diagnostic unchanged.
+                out, _ = dism_wrapper_decode(q, k, sq, sk, module.q_vocab, module.k_vocab,
+                                            v, tau, direction=direction, hard_prob=1.)
+            else:
+                out = self.prefill_engine(iq, ik, sq.to(self.dtype).contiguous(),
+                    sk.to(self.dtype).contiguous(), v.to(self.dtype).contiguous(), tau)
             cache.prime(iq, ik, sk.to(self.dtype), v.to(self.dtype))
             extra, old_v = (), v[:, :0]
         else:
