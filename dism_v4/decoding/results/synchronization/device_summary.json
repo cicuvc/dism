@@ -1,0 +1,54 @@
+{
+  "native_step_trace": {
+    "Memcpy DtoH (Device -> Pageable)": {
+      "count": 16,
+      "median_us": 1.216,
+      "p95_us": 1.368
+    },
+    "Memcpy HtoD (Pinned -> Device)": {
+      "count": 16,
+      "median_us": 0.48,
+      "p95_us": 0.52
+    },
+    "void query_kernel<__nv_bfloat16, true>(__nv_bfloat16*, __nv_bfloat16*, __nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16 const*, float const*, int const*, float const*, float const*, float*, int, int, int, int, int)": {
+      "count": 16,
+      "median_us": 8.832,
+      "p95_us": 10.30475
+    }
+  },
+  "gdn_b1": {
+    "fused_recurrent_gated_delta_rule_fwd_kernel": {
+      "count": 32,
+      "median_us": 1.184,
+      "p95_us": 1.408
+    }
+  },
+  "gdn_b8": {
+    "fused_recurrent_gated_delta_rule_fwd_kernel": {
+      "count": 32,
+      "median_us": 1.76,
+      "p95_us": 2.02985
+    }
+  },
+  "gdn_b32": {
+    "fused_recurrent_gated_delta_rule_fwd_kernel": {
+      "count": 32,
+      "median_us": 4.688000000000001,
+      "p95_us": 5.06025
+    }
+  },
+  "host_node_probe": {
+    "passed": true,
+    "replays": 320,
+    "host_calls": 320,
+    "median_us": 29.381,
+    "p95_us": 36.837
+  },
+  "caveats": [
+    "NativeCache benchmark: synthetic Zipf labels, B1 H12 R32 DV64 N2048, ordinary steps only.",
+    "CPU stage instrumentation is a separate build; do not sum its measurements with profiler GPU durations.",
+    "GDN is only the recurrent state kernel with FP32 state, not projections/convolution/gating of a complete layer.",
+    "Host-node graph is a toy correctness/latency probe, not the full decoder or a hardware lower bound.",
+    "CUDA event intervals for tiny copies include host submission gaps; memcpy trace durations are the actual device activity."
+  ]
+}

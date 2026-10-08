@@ -1,0 +1,12 @@
+USDT:2026-10-08 19:51:06 169462:169462 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-10-08 19:51:06 169462:169462 SyncActivityProfilerHandler.cpp:59] profiler_stop
+{"n": 2048, "pattern": "zipf", "heads": 12, "r": 32, "dv": 64, "steps": 128, "options": {"rebuild_interval": 512, "sample_interval": 32, "materialize_threshold": 64, "rebuild_chunk": 128}, "cpu_wall_median_us": 56.0285, "cpu_wall_p95_us": 64.7053, "gpu_wall_median_us": 36.696, "gpu_wall_p95_us": 92.40854999999885, "graph_sequence_us_per_step": 25.428999215364456, "kernel_median_us": 25.488, "kernel_p95_us": 30.776, "ordinary_step_memcpy_count": 0}
+USDT:2026-10-08 19:51:06 169462:169462 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-10-08 19:51:06 169462:169462 SyncActivityProfilerHandler.cpp:59] profiler_stop
+{"n": 2048, "pattern": "repeat", "heads": 12, "r": 32, "dv": 64, "steps": 128, "options": {"rebuild_interval": 512, "sample_interval": 32, "materialize_threshold": 64, "rebuild_chunk": 128}, "cpu_wall_median_us": 64.92099999999999, "cpu_wall_p95_us": 78.4068, "gpu_wall_median_us": 30.7185, "gpu_wall_p95_us": 36.390299999999996, "graph_sequence_us_per_step": 19.001999869942665, "kernel_median_us": 11.808, "kernel_p95_us": 13.5184, "ordinary_step_memcpy_count": 0}
+USDT:2026-10-08 19:51:07 169462:169462 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-10-08 19:51:07 169462:169462 SyncActivityProfilerHandler.cpp:59] profiler_stop
+{"n": 16384, "pattern": "zipf", "heads": 12, "r": 32, "dv": 64, "steps": 128, "options": {"rebuild_interval": 512, "sample_interval": 128, "materialize_threshold": 160, "rebuild_chunk": 128}, "cpu_wall_median_us": 94.90299999999999, "cpu_wall_p95_us": 108.36299999999999, "gpu_wall_median_us": 71.58, "gpu_wall_p95_us": 103.51659999999963, "graph_sequence_us_per_step": 64.18900191783905, "kernel_median_us": 61.2025, "kernel_p95_us": 73.1036, "ordinary_step_memcpy_count": 0}
+USDT:2026-10-08 19:51:07 169462:169462 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-10-08 19:51:07 169462:169462 SyncActivityProfilerHandler.cpp:59] profiler_stop
+{"n": 16384, "pattern": "repeat", "heads": 12, "r": 32, "dv": 64, "steps": 128, "options": {"rebuild_interval": 512, "sample_interval": 128, "materialize_threshold": 160, "rebuild_chunk": 128}, "cpu_wall_median_us": 76.988, "cpu_wall_p95_us": 86.5484, "gpu_wall_median_us": 36.9095, "gpu_wall_p95_us": 39.50895, "graph_sequence_us_per_step": 31.447000801563263, "kernel_median_us": 22.6715, "kernel_p95_us": 23.4352, "ordinary_step_memcpy_count": 0}

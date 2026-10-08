@@ -1,0 +1,51 @@
+{
+  "config": {
+    "n": 2048,
+    "steps": 513,
+    "heads": 6,
+    "r": 32,
+    "dv": 64,
+    "interval": 512,
+    "sample": 256,
+    "threshold": 320,
+    "chunk": 128,
+    "pattern": "zipf",
+    "output": "/home/cicuvc/cs/project/dism-exp/dism_v4/decoding/results/sweep/2k_fewer_matrices.json"
+  },
+  "prime_ms": 12.162058003013954,
+  "ordinary_median_us": 80.70300100371242,
+  "ordinary_p95_us": 106.63280263543129,
+  "rebuild_us": [
+    6388.153997249901
+  ],
+  "amortized_us": 92.08369796340432,
+  "peak_allocated_bytes": 14597632,
+  "live": {
+    "capacity": 2561,
+    "last_tasks_per_head": 116,
+    "max_single_rebuild_scratch_bytes": 4935680,
+    "position": 2561,
+    "raw_bytes": 2950272,
+    "rebuilds": 2,
+    "sam_nodes": 19137,
+    "summary_bytes": 81920,
+    "summary_matrices": 10
+  },
+  "torch": "2.13.0+cu130",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "linear_prime_ms": 0.28287700843065977,
+  "linear_median_us": 82.85399235319346,
+  "linear_mean_us": 79.75046636040193,
+  "linear_over_snapshot_amortized": 0.8660649835337431,
+  "source_sha256": {
+    "rebuild_parallel.cu": "b95edc83f99670d926eb2e1e16c2da2c911700e5bde6b7f1a597f8a6f16edf3d",
+    "cuda_kernels.cu": "1f1d0ef20c67e1447ed7d6e7348cdb4ebda66f2170bf88c507e5758bb84680ff",
+    "linear.cu": "72de5cad6a6c8ac4560563762e392d4a127517d977e122b7cc9c11d100ebda2e",
+    "device_math.cuh": "95c73bf31aa8c8a16a5ee5c556a73fe0c039a60e583ca1441ede78265b3c17ef",
+    "cuda_bind.cpp": "8ee3489f0d4356d0c2c2411c5e567ba2322f0490c755f42f5e7e4b4d10b5be5a",
+    "planner_bind.cpp": "cf2481880ed160cccb890568156e0be52f2174724d2debccd1bf1bfaf63e31e1",
+    "planner.hpp": "5fcc6d37d9b5391c30fbea9f394aede67a4f8f25eedf93d1cae27aa2c8ea9ba3",
+    "prefix_type.hpp": "89d14af15339e36f6d652d8a8cf8e2d421d5b235166a3c187554aa7913346a92",
+    "runtime.py": "02e02f28480a9eca5bc951ae20f0ff0084d88eda93f4c2d74fa04f655e936749"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "config": {
+    "n": 2048,
+    "steps": 129,
+    "heads": 6,
+    "r": 32,
+    "dv": 64,
+    "interval": 128,
+    "sample": 128,
+    "threshold": 160,
+    "chunk": 128,
+    "pattern": "repeat",
+    "output": "dism_v4/decoding/results/repeat_2k.json"
+  },
+  "prime_ms": 12.41509200190194,
+  "ordinary_median_us": 58.00199505756609,
+  "ordinary_p95_us": 162.97974507324386,
+  "rebuild_us": [
+    6917.313003214076
+  ],
+  "amortized_us": 135.04878311217655,
+  "peak_allocated_bytes": 16161280,
+  "live": {
+    "capacity": 2177,
+    "last_tasks_per_head": 129,
+    "max_single_rebuild_scratch_bytes": 4467712,
+    "position": 2177,
+    "raw_bytes": 2507904,
+    "rebuilds": 2,
+    "sam_nodes": 13062,
+    "summary_bytes": 1622808,
+    "summary_matrices": 198
+  },
+  "torch": "2.13.0+cu130",
+  "gpu": "NVIDIA GeForce RTX 5090"
+}

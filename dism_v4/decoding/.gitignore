@@ -1,0 +1,6 @@
+build/
+__pycache__/
+results/synchronization/host_node_probe
+results/*_trace.json
+results/synchronization/*_trace.json
+results/synchronization/gdn_b*.json

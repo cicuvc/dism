@@ -1,0 +1,66 @@
+
+Fatbin elf code:
+================
+arch = sm_120
+code version = [1,8]
+host = linux
+compile_size = 64bit
+identifier = /home/cicuvc/cs/project/dism-exp/dism_v4/decoding/cuda_kernels.cu
+
+Resource usage:
+ Common:
+  GLOBAL:0
+ Function _Z12query_kernelIfLb0EEvPT_S1_PKS0_S3_S3_PKfPKiS5_S5_Pfiiiii:
+  REG:48 STACK:0 SHARED:2064 LOCAL:0 CONSTANT[0]:996 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _Z12query_kernelIfLb1EEvPT_S1_PKS0_S3_S3_PKfPKiS5_S5_Pfiiiii:
+  REG:48 STACK:0 SHARED:2064 LOCAL:0 CONSTANT[0]:996 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _Z12query_kernelI13__nv_bfloat16Lb0EEvPT_S2_PKS1_S4_S4_PKfPKiS6_S6_Pfiiiii:
+  REG:40 STACK:0 SHARED:2064 LOCAL:0 CONSTANT[0]:996 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _Z12query_kernelI13__nv_bfloat16Lb1EEvPT_S2_PKS1_S4_S4_PKfPKiS6_S6_Pfiiiii:
+  REG:48 STACK:0 SHARED:2064 LOCAL:0 CONSTANT[0]:996 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _Z14rebuild_kernelIfEvPKT_S2_PKiPfS5_iiiiiif:
+  REG:40 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:964 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _Z14rebuild_kernelI13__nv_bfloat16EvPKT_S3_PKiPfS6_iiiiiif:
+  REG:40 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:964 TEXTURE:0 SURFACE:0 SAMPLER:0
+
+Fatbin elf code:
+================
+arch = sm_120
+code version = [1,8]
+host = linux
+compile_size = 64bit
+identifier = /home/cicuvc/cs/project/dism-exp/dism_v4/decoding/rebuild_parallel.cu
+
+Resource usage:
+ Common:
+  GLOBAL:25 CONSTANT[4]:200
+ Function _Z10euler_scanIfEvPKT_S2_PKiPfS5_iiii:
+  REG:31 STACK:0 SHARED:2208 LOCAL:0 CONSTANT[0]:952 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _Z10euler_scanI13__nv_bfloat16EvPKT_S3_PKiPfS6_iiii:
+  REG:31 STACK:0 SHARED:2208 LOCAL:0 CONSTANT[0]:952 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _Z12save_samplesPKiPKfPfiiiii:
+  REG:16 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:940 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _Z13ancestor_stepPKiS0_PKfS2_Pfiif:
+  REG:16 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:948 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _Z12subtree_initPKiPKfS2_S2_PfS3_iiiiif:
+  REG:28 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:968 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _Z11scan_totalsPfii:
+  REG:39 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:912 TEXTURE:0 SURFACE:0 SAMPLER:0
+
+Fatbin elf code:
+================
+arch = sm_120
+code version = [1,8]
+host = linux
+compile_size = 64bit
+identifier = /home/cicuvc/cs/project/dism-exp/dism_v4/decoding/linear.cu
+
+Resource usage:
+ Common:
+  GLOBAL:25 CONSTANT[4]:200
+ Function _Z11linear_stepIfEvPT_S1_PiPKiS2_S4_PKS0_S6_S6_PKfPfiiiii:
+  REG:38 STACK:0 SHARED:2092 LOCAL:0 CONSTANT[0]:1004 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _Z11linear_stepI13__nv_bfloat16EvPT_S2_PiPKiS3_S5_PKS1_S7_S7_PKfPfiiiii:
+  REG:38 STACK:0 SHARED:2092 LOCAL:0 CONSTANT[0]:1004 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _Z13prime_lengthsPKiPiS1_iii:
+  REG:22 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:932 TEXTURE:0 SURFACE:0 SAMPLER:0

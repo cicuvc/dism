@@ -1,0 +1,87 @@
+{
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "torch": "2.13.0+cu130",
+  "protocol": "Synthetic Zipf(1.2), B1 H12 R32 DV64 N2048; ordinary steps only, no rebuild; idle stream start; wall includes final stream sync",
+  "step": {
+    "gpu_labels": {
+      "median_us": 54.0505,
+      "p95_us": 64.24125,
+      "cache": {
+        "capacity": 2176,
+        "last_tasks_per_head": 49,
+        "max_single_rebuild_scratch_bytes": 3954688,
+        "position": 2176,
+        "raw_bytes": 5013504,
+        "rebuilds": 1,
+        "sam_nodes": 30547,
+        "summary_bytes": 753664,
+        "summary_matrices": 92
+      }
+    },
+    "cpu_labels": {
+      "median_us": 45.176500000000004,
+      "p95_us": 54.58479999999999,
+      "cache": {
+        "capacity": 2176,
+        "last_tasks_per_head": 49,
+        "max_single_rebuild_scratch_bytes": 3954688,
+        "position": 2176,
+        "raw_bytes": 5013504,
+        "rebuilds": 1,
+        "sam_nodes": 30547,
+        "summary_bytes": 753664,
+        "summary_matrices": 92
+      }
+    },
+    "serial_gdn": {
+      "median_us": 66.8245,
+      "p95_us": 74.8757
+    },
+    "overlap_gdn": {
+      "median_us": 73.4105,
+      "p95_us": 82.29679999999999
+    }
+  },
+  "gdn": {
+    "1": {
+      "graph_replay_device_interval": {
+        "median_us": 3.3032000064849854,
+        "p95_us": 3.440279856324196
+      }
+    },
+    "8": {
+      "graph_replay_device_interval": {
+        "median_us": 3.6722400784492493,
+        "p95_us": 3.8618400245904922
+      }
+    },
+    "32": {
+      "graph_replay_device_interval": {
+        "median_us": 6.168000102043152,
+        "p95_us": 6.187640160322189
+      }
+    }
+  },
+  "copies": {
+    "pinned_d2h_144B": {
+      "wall": {
+        "median_us": 19.293999999999997,
+        "p95_us": 19.95715
+      },
+      "event_interval": {
+        "median_us": 9.8879998549819,
+        "p95_us": 10.465599596500397
+      }
+    },
+    "pinned_h2d_144B": {
+      "wall": {
+        "median_us": 19.5595,
+        "p95_us": 20.53885
+      },
+      "event_interval": {
+        "median_us": 10.239999741315842,
+        "p95_us": 10.862399730831385
+      }
+    }
+  }
+}

@@ -1,0 +1,3 @@
+USDT:2026-10-08 19:10:51 149808:149808 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-10-08 19:10:51 149808:149808 SyncActivityProfilerHandler.cpp:59] profiler_stop
+ONE_QUERY_KERNEL_PASS ['void query_kernel<__nv_bfloat16, true>(__nv_bfloat16*, __nv_bfloat16*, __nv_bfloat16 const*, __nv_bfloat16 const*, __nv_bfloat16 const*, float const*, int const*, float const*, float const*, float*, int, int, int, int, int)']

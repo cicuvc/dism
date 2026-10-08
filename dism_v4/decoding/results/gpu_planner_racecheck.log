@@ -1,0 +1,5 @@
+========= COMPUTE-SANITIZER
+PASS torch.bfloat16 16 32 repeat prime 11 graph True max_abs 2.1334840134557e-06
+PASS torch.float32 32 64 random prime 11 graph False max_abs 3.4674394822076238e-06
+GPU_PLANNER_PASS
+========= RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)

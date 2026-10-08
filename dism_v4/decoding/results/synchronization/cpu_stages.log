@@ -1,0 +1,99 @@
+{
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "torch": "2.13.0+cu130",
+  "protocol": "Synthetic Zipf(1.2), B1 H12 R32 DV64 N2048; ordinary steps only, no rebuild; idle stream start; wall includes final stream sync",
+  "step": {
+    "gpu_labels": {
+      "median_us": 67.4505,
+      "p95_us": 79.9957,
+      "cache": {
+        "capacity": 2176,
+        "last_tasks_per_head": 49,
+        "max_single_rebuild_scratch_bytes": 3954688,
+        "position": 2176,
+        "raw_bytes": 5013504,
+        "rebuilds": 1,
+        "sam_nodes": 30547,
+        "summary_bytes": 753664,
+        "summary_matrices": 92
+      },
+      "cpu_stages": {
+        "validation": {
+          "median_us": 0.488,
+          "p95_us": 0.5287999999999999
+        },
+        "labels_cpu": {
+          "median_us": 11.363,
+          "p95_us": 11.875449999999999
+        },
+        "rebuild_check": {
+          "median_us": 0.153,
+          "p95_us": 0.18434999999999996
+        },
+        "planner": {
+          "median_us": 22.341,
+          "p95_us": 29.91195
+        },
+        "packing": {
+          "median_us": 1.969,
+          "p95_us": 2.19895
+        },
+        "upload_enqueue": {
+          "median_us": 6.3535,
+          "p95_us": 6.829649999999999
+        },
+        "query_enqueue": {
+          "median_us": 5.1475,
+          "p95_us": 5.46525
+        }
+      }
+    },
+    "cpu_labels": {
+      "median_us": 55.715,
+      "p95_us": 63.472449999999995,
+      "cache": {
+        "capacity": 2176,
+        "last_tasks_per_head": 49,
+        "max_single_rebuild_scratch_bytes": 3954688,
+        "position": 2176,
+        "raw_bytes": 5013504,
+        "rebuilds": 1,
+        "sam_nodes": 30547,
+        "summary_bytes": 753664,
+        "summary_matrices": 92
+      },
+      "cpu_stages": {
+        "validation": {
+          "median_us": 0.462,
+          "p95_us": 0.50225
+        },
+        "labels_cpu": {
+          "median_us": 0.254,
+          "p95_us": 0.27145
+        },
+        "rebuild_check": {
+          "median_us": 0.054,
+          "p95_us": 0.219
+        },
+        "planner": {
+          "median_us": 22.0535,
+          "p95_us": 28.298499999999994
+        },
+        "packing": {
+          "median_us": 1.8355000000000001,
+          "p95_us": 2.0066
+        },
+        "upload_enqueue": {
+          "median_us": 6.7375,
+          "p95_us": 6.9719999999999995
+        },
+        "query_enqueue": {
+          "median_us": 4.813,
+          "p95_us": 5.01835
+        }
+      }
+    }
+  },
+  "gdn": {},
+  "copies": {}
+}
