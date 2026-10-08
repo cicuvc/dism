@@ -47,6 +47,19 @@ class PreparedHardPrefill:
                               value.view(-1,value.shape[-1]))
         return out.view(*expected,value.shape[-1])
 
+    def execute_dispatch(self, sq, sk, value):
+        """Same as execute() but routes long streams to the chunk-parallel path."""
+        expected=(self.batch,self.n,self.heads)
+        if sq.ndim!=4 or sk.shape!=sq.shape or value.ndim!=4 or sq.shape[:3]!=expected or value.shape[:3]!=expected:
+            raise ValueError("vectors must be sq/sk [B,N,H,R], value [B,N,H,DV]")
+        if any(not x.is_contiguous() for x in (sq,sk,value)):
+            raise ValueError("contiguous BNHD vectors required; no implicit transpose")
+        if torch.cuda.current_stream(self.core.device)!=self.stream:
+            raise ValueError("prepared prefill must execute on its upload stream")
+        out=self.core.execute_dispatch(sq.view(-1,sq.shape[-1]),sk.view(-1,sk.shape[-1]),
+                                       value.view(-1,value.shape[-1]))
+        return out.view(*expected,value.shape[-1])
+
     def statistics(self):
         return dict(batch=self.batch,heads=self.heads,n=self.n,**self.core.statistics())
 
@@ -59,13 +72,15 @@ class HardDismPrefill:
     Full-hard inference only; no finite soft delta, autograd or graph capture
     of preparation. No cache prime is implicit. workers=1 is a serial fallback.
     """
-    def __init__(self, *, workers=8, chunk_size=16, mma_precision="bf16", device="cuda"):
+    def __init__(self, *, workers=8, chunk_size=16, mma_precision="bf16", device="cuda",
+                 dispatch_threshold=64):
         if chunk_size not in (16,32,64):raise ValueError("invalid chunk_size")
         if mma_precision not in ("bf16","tf32x3"):raise ValueError("invalid mma_precision")
         self.device=torch.device(device)
         if self.device.type!="cuda":raise ValueError("CUDA device required")
         if self.device.index is None:self.device=torch.device("cuda",torch.cuda.current_device())
         self.chunk_size,self.mma_precision=chunk_size,mma_precision
+        self.dispatch_threshold=dispatch_threshold
         self.workers=workers
         self.planner=ParallelPrefillPlanner(workers)
 
@@ -90,11 +105,16 @@ class HardDismPrefill:
         merged=_merge_chunks(results,b,h,n)
         del results  # Drop SAM programs/individual packed copies before upload.
         core=TritonPrefillPlan.from_packed(merged,b*h*n,device=self.device,
-                                         chunk_size=self.chunk_size,mma_precision=self.mma_precision)
+                                         chunk_size=self.chunk_size,mma_precision=self.mma_precision,
+                                         dispatch_threshold=self.dispatch_threshold)
         return PreparedHardPrefill(core,b,h,n)
 
     def __call__(self, idx_q, idx_k, sq, sk, value, tau, *, reset=None):
-        return self.prepare(idx_q,idx_k,tau,reset=reset).execute(sq,sk,value)
+        # Default engine path routes pathologically long streams (more than
+        # dispatch_threshold chunks) to the chunk-parallel phases; ordinary
+        # streams stay on the register-carried serial kernel, so workloads
+        # without such streams execute exactly as before.
+        return self.prepare(idx_q,idx_k,tau,reset=reset).execute_dispatch(sq,sk,value)
 
     def close(self):self.planner.close()
     def __enter__(self):return self

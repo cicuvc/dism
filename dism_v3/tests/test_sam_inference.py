@@ -173,3 +173,58 @@ def test_prefill_lca_matches_binary_lifting(pattern, reset, tau):
     for name in ('offsets', 'rows', 'decay', 'weight', 'logden'):
         np.testing.assert_array_equal(fast[name], slow[name],
                                       err_msg=f'{pattern} reset={reset} tau={tau} {name}')
+
+
+@pytest.mark.parametrize('precision', ['bf16', 'tf32x3'])
+@pytest.mark.parametrize('pattern', ['random', 'repeat', 'mismatch'])
+@pytest.mark.parametrize('reset', [False, True])
+@pytest.mark.parametrize('chunk_size', [16, 32])
+def test_prefill_parallel_state(precision, pattern, reset, chunk_size):
+    """Chunk-parallel summary/passing path vs serial stream carry and oracle."""
+    iq, ik, sq, sk, v, tau = inputs(pattern)
+    rst = None
+    if reset:
+        rst = torch.zeros_like(iq, dtype=torch.bool)
+        rst[..., 11::17] = True
+    expected = oracle(iq, ik, sq, sk, v, tau, rst)
+    with HardDismPrefill(mma_precision=precision, chunk_size=chunk_size) as engine:
+        prepared = engine.prepare(iq, ik, tau, reset=rst)
+        serial = prepared.execute(sq, sk, v)
+        b, n, h, r = sq.shape
+        dv = v.shape[-1]
+        parallel = prepared.core.execute_parallel(
+            sq.reshape(-1, r), sk.reshape(-1, r), v.reshape(-1, dv)).view(b, n, h, dv)
+    atol = 3e-4 if precision == 'bf16' else 2e-6
+    rtol = .025 if precision == 'bf16' else 2e-4
+    torch.testing.assert_close(parallel.cpu().double(), serial.cpu().double(),
+                               atol=atol, rtol=rtol)
+    torch.testing.assert_close(parallel.cpu().double(), expected[:, :, :, :],
+                               atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize('precision', ['bf16', 'tf32x3'])
+@pytest.mark.parametrize('pattern', ['random', 'repeat'])
+@pytest.mark.parametrize('reset', [False, True])
+@pytest.mark.parametrize('threshold', [0, 1, 64])
+def test_prefill_dispatch(precision, pattern, reset, threshold):
+    """Serial/short and chunk-parallel/long routing must match the oracle.
+
+    threshold=0 sends every stream to the parallel phases, threshold=64 keeps
+    everything serial, threshold=1 gives a genuine mix on these patterns.
+    """
+    iq, ik, sq, sk, v, tau = inputs(pattern)
+    rst = None
+    if reset:
+        rst = torch.zeros_like(iq, dtype=torch.bool)
+        rst[..., 11::17] = True
+    expected = oracle(iq, ik, sq, sk, v, tau, rst)
+    with HardDismPrefill(mma_precision=precision, dispatch_threshold=threshold) as engine:
+        prepared = engine.prepare(iq, ik, tau, reset=rst)
+        serial = prepared.execute(sq, sk, v)
+        dispatched = prepared.execute_dispatch(sq, sk, v)
+    atol = 3e-4 if precision == 'bf16' else 2e-6
+    rtol = .025 if precision == 'bf16' else 2e-4
+    torch.testing.assert_close(dispatched.cpu().double(), serial.cpu().double(),
+                               atol=atol, rtol=rtol)
+    torch.testing.assert_close(dispatched.cpu().double(), expected,
+                               atol=atol, rtol=rtol)
