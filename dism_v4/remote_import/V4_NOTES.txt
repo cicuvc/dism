@@ -1,0 +1,71 @@
+DISM v4 CUDA implementation (isolated workspace /root/dism125m-v4)
+
+API: optional gate_delta, CUDA FP32 contiguous [B,H,N], natural logarithms,
+nonnegative attenuation. zero recovers v3; +inf resets diagonal recurrence.
+The tensor may require gradients. Callers can form it from trainable logits
+using softplus(-logits). The low-level API imposes no gate projection.
+Dedicated DismV4Attention / DismV4SwaAttention now include a learned projection
+and annealed sign hardening; see V4_LAYERS.txt.
+Supported entry points: dism_core, voc_dism, fixed and packed paths,
+DismAttention/DismSwaAttention keyword gate_delta, fullgraph torch.compile.
+Torch cached decoding accepts gates for the new rows only.
+
+Forward: retain the original unary score roll, expand (m,m), then subtract
+row_gate[row]*LOG2E from the first component. Shared row buffers are outside
+key-reuse unions. Summary consumes the row buffer before releasing its packet.
+Backward: recompute gated W; reverse coefficient uses delta at NEXT query row,
+with a Q+1 shared buffer for the halo. Gradient of delta_(i+1) is the negative
+sum of (total dW - local readout dW) at row i. Packed document ends never use
+another document's gate. Existing readout output_dot_grad is separate from gates.
+Optional operands are appended; old calls retain their v3 behavior.
+
+Numerical limitation inherited from v3: readout tensor-core products round
+weights to BF16 even when requesting FP32 outputs. For long repeated matches,
+rounding in saved output affects the backward normalization correction and is
+amplified along the recurrence. Stress tests separately measure its exact
+linear effect in FP64 and check reverse recurrence against that same state.
+512/2048-token stress: ideal delta-gradient L2 errors ~.0222/.0182; using the
+same saved output, ~.00138/.00169 (relative ~.22%/.39%). Scalar tau is especially
+sensitive to cancellation. Ordinary randomized tests use unadjusted FP64
+references. This implementation does not claim exact FP64 equivalence.
+
+Active experiments: original and nodiag directories, launchers, caches and
+binaries are not edited. protected_extensions.json records their SHA256 hashes.
+Build uses the isolated toolchain link and low-priority CPU jobs. Test caches
+are local artifacts/inductor and artifacts/triton; compiled smoke tests limit
+CUDA allocator usage to 8% of the GPU.
+
+Sanitizer diagnosis:
+The production SASS includes ARRIVES.LDGSTSBAR.64.TRANSCNT [UR5+0x8].
+As recorded for v13, Compute Sanitizer mishandles UR+immediate forms. Original
+v3 reproduces the metadata race warnings and 32 barrier-overflow reports.
+No production synchronization change was made for these reports.
+An isolated sanitizer_build adds an identity warp shuffle of the uniform
+barrier address before cp.async.mbarrier.arrive. Its 22 ARRIVES instructions
+all have complete register addresses and no immediate offset. Six tests
+cover fixed, packed, empty documents, 2048-token documents and persistent
+multi-task reuse: racecheck reports zero hazards. Logs and SASS are retained.
+Synccheck remains non-clean: it reports 32 overflows at the existing counted
+mbarrier arrival in both unmodified v3 and v4, including the materialized
+ARRIVES build. Thus only racecheck (not synccheck) is counted as passing.
+The remaining synccheck diagnostic is retained, not silently waived as a pass.
+
+Build:
+  cd /root/dism125m-v4/dism_v3
+  PATH=/root/dism125m-v4/toolchain/bin:/usr/local/cuda/bin:/root/miniconda3/bin:$PATH \
+    DISM_BUILD_JOBS=2 DISM_ENABLE_FP32=1 nice -n 10 python build.py
+All eight R in {16,32}, D/DV in {32,64} combinations are included. FP32 is
+available for diagnostics in addition to the normal BF16 training dispatch.
+Tests asserting a production build with FP32 disabled are inapplicable to
+this build; the eight configuration registry entries were independently checked.
+
+Tests use PYTHONPATH=python:tests OMP_NUM_THREADS=1 and local Inductor/Triton
+cache directories under /root/dism125m-v4/artifacts. No v4 pretraining has been
+launched. v4.patch contains the source changes relative to the original tree.
+
+Final verification: 81 v4/native-interface checks, 161 legacy regression checks,
+86 reference/decode checks passed. All eight dimension combinations passed
+memcheck (16 fixed/packed cases, zero errors). See verification.json for
+individual logs, build-specific exclusions and sanitizer limitations.
+The isolated host metadata-cache cleanup prevents cached CUDA tensor teardown
+from aborting packed test processes; it is separate from the v4 math change.

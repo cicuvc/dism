@@ -1,0 +1,61 @@
+{
+  "checked_at": "2026-10-01T16:06:55.663429+00:00",
+  "workspace": "/root/dism125m-v4",
+  "extension_sha256": "55019303b2d50babc6dda457883d9c188237a0afbccf49b93b73134e8a9b5bf0",
+  "all_eight_configs": true,
+  "fp32_diagnostics_enabled": true,
+  "tests": {
+    "v4_and_native_frontend": {
+      "passed": 81,
+      "log": "test_v4_release.log",
+      "note": "Run then stopped on old test_registry assertion that FP32 must be disabled. Config identities independently checked."
+    },
+    "legacy_regressions": {
+      "passed": 161,
+      "deselected": 2,
+      "log": "test_v3_regression.log",
+      "note": "Excluded test_registry and test_disabled_fp32: require a BF16-only build."
+    },
+    "reference_and_decode": {
+      "passed": 86,
+      "log": "test_v4_reference.log"
+    }
+  },
+  "memcheck": {
+    "cases": 16,
+    "errors": 0,
+    "log": "memcheck_v4_all_dimensions.log"
+  },
+  "racecheck": {
+    "production": "Known UR+immediate ARRIVES instrumentation limitation, also reproduced on v3.",
+    "validation_variant": {
+      "cases": 6,
+      "hazards": 0,
+      "log": "racecheck_materialized_barrier.log",
+      "sass": "artifacts/sanitizer.sass",
+      "difference": "identity warp shuffle materializes barrier address; production synchronization unchanged"
+    }
+  },
+  "synccheck": {
+    "status": "not passing; not used as evidence of success",
+    "note": "32 existing counted-barrier overflow reports reproduced on original v3 and v4, including materialized ARRIVES variant.",
+    "logs": [
+      "synccheck_legacy.log",
+      "synccheck_v4.log",
+      "synccheck_materialized_barrier.log"
+    ]
+  },
+  "protected_extensions_unchanged": true,
+  "limitations": [
+    "First-order gradients only, as existing API.",
+    "BF16 readout rounding can amplify scalar gradient error on long repeated matches; quantified in V4_NOTES.txt."
+  ],
+  "learned_v4_layers": {
+    "layer_tests": 22,
+    "nanochat_tests": 7,
+    "model_regression_tests": 7,
+    "compiled_probability_endpoint": "passed; updated GPU probability=1 yields exactly zero gate-projection gradient without recompilation",
+    "full_model_smoke": "/root/dism125m-v4-hard095-shuffle/smoke_report.json",
+    "queued_experiment": "/root/dism125m-v4-hard095-shuffle/queue_state.json"
+  }
+}

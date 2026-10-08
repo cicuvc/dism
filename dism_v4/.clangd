@@ -1,0 +1,16 @@
+CompileFlags:
+  CompilationDatabase: build
+  Compiler: clang++
+  Remove:
+    - -forward-unknown-to-host-compiler
+    - --options-file
+    - --generate-code=*
+    - -std=*
+    - --split-compile=*
+  Add:
+    - -std=c++20
+    # compile_commands.json keeps NVCC's include path in an options file,
+    # which clangd cannot expand after filtering the NVCC-only flag.
+    - -I./include
+    - --cuda-path=/usr/local/cuda
+    - --cuda-gpu-arch=sm_120

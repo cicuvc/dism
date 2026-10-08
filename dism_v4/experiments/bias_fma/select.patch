@@ -1,0 +1,151 @@
+diff --git a/include/summary/kernel_common.cuh b/include/summary/kernel_common.cuh
+index be8ca12..5c1d2eb 100644
+--- a/include/summary/kernel_common.cuh
++++ b/include/summary/kernel_common.cuh
+@@ -4,7 +4,7 @@
+ 
+ // Metadata follows the SAME column permutation as the score MMA. Loading it
+ // directly in this layout avoids a register transpose after LDSM.
+-template <class KeyIndex, class KeyBias, class Shared>
++template <bool BASE2 = false, class KeyIndex, class KeyBias, class Shared>
+ __device__ __forceinline__ void load_key_metadata(KeyIndex &labels, KeyBias &bias,
+                                                   const Shared &shared, bool query_lse) {
+     int strip = 2 * (kt::warp::laneid() & 3);
+@@ -16,8 +16,9 @@ __device__ __forceinline__ void load_key_metadata(KeyIndex &labels, KeyBias &bia
+             labels.data[block][half].x = shared.k_idx.data[column];
+             labels.data[block][half].y = shared.k_idx.data[column + 8];
+             if (!query_lse) {
+-                bias.data[block][half].x = -shared.klse.data[column];
+-                bias.data[block][half].y = -shared.klse.data[column + 8];
++                constexpr float factor = BASE2 ? -1.4426950408889634f : -1.f;
++                bias.data[block][half].x = factor * shared.klse.data[column];
++                bias.data[block][half].y = factor * shared.klse.data[column + 8];
+             }
+         }
+     }
+@@ -38,7 +39,8 @@ __device__ __forceinline__ void initialize_score(Score &score, const QBias &q_bi
+ // float operand: the old hand-written 0xfff0bdc0 literal was not -1e6f.
+ __device__ __forceinline__ void finish_score_pair(float2 &value, uint32_t hard, int q_label,
+                                                   int k_label_x, int k_label_y, float tau2, int row,
+-                                                  int col) {
++                                                  int col, float bias_x2 = 0.f,
++                                                  float bias_y2 = 0.f) {
+     constexpr float LOG2E = 1.4426950408889634f;
+     asm volatile("{ .reg .pred ph, px, py, cx, cy;\n"
+                  "setp.ne.u32 ph, %5, 0;\n"
+@@ -46,15 +48,16 @@ __device__ __forceinline__ void finish_score_pair(float2 &value, uint32_t hard,
+                  "setp.eq.s32 py, %6, %8;\n"
+                  "setp.le.s32 cx, %9, %11;\n"
+                  "setp.le.s32 cy, %10, %11;\n"
+-                 "mul.f32 %0, %0, %4;\n"
+-                 "mul.f32 %1, %1, %4;\n"
++                 "fma.rn.f32 %0, %0, %4, %12;\n"
++                 "fma.rn.f32 %1, %1, %4, %13;\n"
+                  "@ph selp.f32 %0, %2, %3, px;\n"
+                  "@ph selp.f32 %1, %2, %3, py;\n"
+                  "selp.f32 %0, %0, %3, cx;\n"
+                  "selp.f32 %1, %1, %3, cy; }"
+                  : "+&f"(value.x), "+&f"(value.y)
+                  : "f"(tau2), "f"(LOG_ZERO), "f"(LOG2E), "r"(hard), "r"(q_label), "r"(k_label_x),
+-                   "r"(k_label_y), "r"(col), "r"(col + 8), "r"(row));
++                   "r"(k_label_y), "r"(col), "r"(col + 8), "r"(row),
++                   "f"(bias_x2), "f"(bias_y2));
+ }
+ 
+ template <class Score, class QIndex, class KIndex>
+@@ -83,6 +86,45 @@ __device__ __forceinline__ void finish_score(Score &score, const QIndex &q_label
+     }
+ }
+ 
++// Select compact vector elements without duplicating the score finalization
++// loop for the two directions or broadcasting bias into an accumulator tile.
++template <class Score, class QIndex, class KIndex,
++          class QBias, class KBias>
++__device__ __forceinline__ void finish_score_fma(
++    Score &score, const QIndex &q_labels, const KIndex &k_labels,
++    const QBias &q_bias2, const KBias &k_bias2, uint32_t hard_rows,
++    float tau2, int q_start, int k_start, bool query_lse) {
++    int lane = kt::warp::laneid();
++#pragma unroll
++    for (int rb = 0; rb < score.height; ++rb) {
++#pragma unroll
++        for (int cb = 0; cb < score.width; ++cb) {
++#pragma unroll
++            for (int rh = 0; rh < 2; ++rh) {
++                int row = q_start + rb * 16 + rh * 8 + lane / 4;
++                uint32_t hard = (hard_rows >> (rb * 2 + rh)) & 1;
++                int label = rh ? q_labels.data[rb][0].y : q_labels.data[rb][0].x;
++#pragma unroll
++                for (int ch = 0; ch < 2; ++ch) {
++                    float2 bias;
++                    float q_bias = rh ? q_bias2.data[rb][0].y : q_bias2.data[rb][0].x;
++                    auto k_bias = k_bias2.data[cb][ch];
++                    asm("slct.f32.s32 %0, %2, %3, %5;\n"
++                        "slct.f32.s32 %1, %2, %4, %5;"
++                        : "=&f"(bias.x), "=&f"(bias.y)
++                        : "f"(q_bias), "f"(k_bias.x), "f"(k_bias.y),
++                          "r"(query_lse ? 0 : -1));
++                    auto &value = score.tiles[rb][cb].data[rh + 2 * ch];
++                    auto labels = k_labels.data[cb][ch];
++                    int col = k_start + 2 * cb + ch + 16 * (lane & 3);
++                    finish_score_pair(value, hard, label, labels.x, labels.y,
++                                      tau2, row, col, bias.x, bias.y);
++                }
++            }
++        }
++    }
++}
++
+ // HState now contains every bottom-edge column, including the corner. No
+ // special last-lane store from VState, unlike v2's shifted horizontal state.
+ template <class HState>
+diff --git a/src/wmma_tma_preprocess.cu b/src/wmma_tma_preprocess.cu
+index afd190a..0c078df 100644
+--- a/src/wmma_tma_preprocess.cu
++++ b/src/wmma_tma_preprocess.cu
+@@ -57,8 +57,8 @@ __global__ __launch_bounds__(384, 1) void wmma_tma_wasp_persistent_summarization
+             }
+ #pragma unroll
+             for (int row = 0; row < CONFIG.WarpQSize / 16; ++row) {
+-                query_bias.data[row][0].x *= -1.f;
+-                query_bias.data[row][0].y *= -1.f;
++                query_bias.data[row][0].x *= -1.4426950408889634f;
++                query_bias.data[row][0].y *= -1.4426950408889634f;
+             }
+             uint32_t hard_rows = 0;
+ #pragma unroll
+@@ -80,17 +80,18 @@ __global__ __launch_bounds__(384, 1) void wmma_tma_wasp_persistent_summarization
+                 kt::rv_fl<CONFIG.WarpKSize, kt::ducks::rv_layout::align> key_bias;
+                 kt::rt_fl<CONFIG.WarpQSize, CONFIG.WarpKSize> score;
+                 kt::warp::rv_maps::zero(key_bias);
+-                load_key_metadata(key_labels, key_bias, packet.template get<1>(), query_lse);
++                load_key_metadata<true>(key_labels, key_bias, packet.template get<1>(), query_lse);
+                 // swap_axis=true: direct RHS LDSM -> HMMA layout.
+                 kt::warp::load<true>(key, packet.template get<0>().kbuffer.payload);
+-                initialize_score(score, query_bias, key_bias, query_lse);
++                kt::warp::rt_maps::zero(score);
+                 kt::warp::wmma::mma_ABt(score, query, key, score);
+                 // Every reader publishes its own release arrival. The producer
+                 // waits for all256; no additional WG rendezvous is required.
+                 packet.submitToNextAndTrigger();
+ 
+-                finish_score(score, query_labels, key_labels, hard_rows, tau2, q_start,
+-                             tile * CONFIG.WarpKSize);
++                finish_score_fma(score, query_labels, key_labels, query_bias,
++                                 key_bias, hard_rows, tau2, q_start,
++                                 tile * CONFIG.WarpKSize, query_lse);
+                 auto scan = make_scan(score);
+                 auto result = scan.reduce_forward(left, {});
+                 left = result.first;
+diff --git a/tests/test_summary_codegen.py b/tests/test_summary_codegen.py
+index 0393d7b..5868b00 100644
+--- a/tests/test_summary_codegen.py
++++ b/tests/test_summary_codegen.py
+@@ -68,4 +68,7 @@ def test_mask_predication_codegen():
+     if not selected:
+         pytest.skip('build with DISM_LINEINFO=1 for source-mapped predication check')
+     assert any('SEL' in line for line in selected)
++    if cu_flash_dism.summary_variant() == 0:
++        assert any('FFMA' in line for line in selected)
++        assert not any(re.search(r'\bFMUL(?:\.|\s)', line) for line in selected)
+     assert not any(re.search(r'\b(?:BRA|BRX|CALL)(?:\.|\s)', line) for line in selected), selected

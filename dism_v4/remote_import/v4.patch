@@ -1,0 +1,2113 @@
+--- a/dism_v3/include/backward/recompute.cuh
++++ b/dism_v3/include/backward/recompute.cuh
+@@ -28,6 +28,7 @@
+     const float *q_lse, *k_lse, *tau, *vertical, *horizontal;
+     const int *q_label, *k_label;
+     const uint8_t *hard, *direction;
++    const float *gate_delta = nullptr;
+ };
+ 
+ // Natural-log bias is seeded before MMA, as in the saved forward computation.
+@@ -36,7 +37,8 @@
+ template<class ScoreArgs>
+ __device__ __forceinline__ Scalar recompute(
+         const ScoreArgs& args, const kt::rt_bf<K,D>& keys,
+-        const QueryTile& query_shared, int bh, int k0, int q0) {
++        const QueryTile& query_shared, int bh, int k0, int q0,
++        const float* row_gate=nullptr) {
+     constexpr float LOG2E = 1.4426950408889634f;
+     kt::rt_fl<K,Q> score;
+     int64_t offset = int64_t(bh) * args.padded;
+@@ -83,8 +85,14 @@
+ #pragma unroll
+     for (int r = 0; r < 2; ++r) {
+ #pragma unroll
+-        for (int c = 0; c < 4; ++c)
++        for (int c = 0; c < 4; ++c) {
+             scan.data[r][c] = {values.data[r][c].value,values.data[r][c].value};
++            if (row_gate) {
++                auto pos=Scalar::layout(r,c,0);
++                scan.data[r][c].first.u0 -= row_gate[pos.second];
++                scan.data[r][c].first.u1 -= row_gate[pos.second+4];
++            }
++        }
+     }
+     int lane = kt::warp::laneid();
+     Forward::HState top;
+@@ -108,7 +116,9 @@
+ #pragma unroll
+     for (int r = 0; r < 2; ++r) {
+ #pragma unroll
+-        for (int c = 0; c < 4; ++c) values.data[r][c].value = scan.data[r][c].second;
++        for (int c = 0; c < 4; ++c) {
++            values.data[r][c].value = scan.data[r][c].second;
++        }
+     }
+     values.roll<false>();
+     return values;
+@@ -117,7 +127,7 @@
+ #if DISM_HOST_API
+ inline RecomputeArgs make_recompute_args(const std::vector<at::Tensor>& operands,
+                                          const at::Tensor& vertical, int n) {
+-    TORCH_CHECK(operands.size()==13,"expected saved forward operands");
++    TORCH_CHECK((operands.size()==13 || operands.size()==14),"expected saved forward operands");
+     auto q = operands[0], k = operands[1];
+     TORCH_CHECK(q.is_cuda() && q.dim()==4 && q.scalar_type()==at::kBFloat16 &&
+                 q.size(3)==D && q.is_contiguous() && k.sizes()==q.sizes() &&
+@@ -138,13 +148,15 @@
+     check(operands[11],at::kFloat,{heads});
+     check(operands[12],at::kFloat,{batch,heads,(n-1)/32,padded});
+     check(vertical,at::kFloat,{batch,heads,(n-1)/16,padded});
++    if(operands.size()==14) check(operands[13],at::kFloat,{batch,heads,padded});
+     return {batch,heads,n,padded,
+         QueryGlobal(reinterpret_cast<kt::bf16*>(q.data_ptr()),batch,padded,heads,D),
+         KeyGlobal(reinterpret_cast<kt::bf16*>(k.data_ptr()),batch,heads,padded,D,
+                   kt::gl_strides{size_t(padded*heads*D),D,size_t(heads*D)}),
+         operands[5].data_ptr<float>(),operands[6].data_ptr<float>(),operands[11].data_ptr<float>(),
+         vertical.data_ptr<float>(),operands[12].data_ptr<float>(),operands[7].data_ptr<int>(),
+-        operands[8].data_ptr<int>(),operands[9].data_ptr<uint8_t>(),operands[10].data_ptr<uint8_t>()};
++        operands[8].data_ptr<int>(),operands[9].data_ptr<uint8_t>(),operands[10].data_ptr<uint8_t>(),
++        operands.size()==14 ? operands[13].data_ptr<float>() : nullptr};
+ }
+ #endif
+ } // namespace dism_backward
+--- a/dism_v3/include/backward/types.cuh
++++ b/dism_v3/include/backward/types.cuh
+@@ -56,6 +56,7 @@
+         {nullptr,0,0,0,0}, {nullptr,0,0,0,0}, {nullptr,0,0,0,0}};
+     OutputMap query_output;
+     OutputMap lse_output;
++    float *dgate = nullptr;
+ };
+ 
+ struct Shared {
+@@ -68,6 +69,7 @@
+         QueryTile q;
+         SoftQueryTile sq;
+         DerivativeTile dout;
++        float row_gate[Q+1];
+     } input[InputStages];
+     // Reverse affine boundary exchange between the two compute warpgroups.
+     struct Mail { float4 pairs[4][32]; } mail[2];
+@@ -126,11 +128,13 @@
+             auto packet = input.waitBuffer(0,shared.input);
+             if (leader) {
+                 auto& data = packet.template get<0>();
+-                kt::tma::expect_bytes(packet.getBarrier(),sizeof(Shared::Input));
++                kt::tma::expect_bytes(packet.getBarrier(),sizeof(QueryTile)+sizeof(SoftQueryTile)+sizeof(DerivativeTile));
+                 kt::tma::load_async(data.q,a.score.q,{task.batch,q0,task.head,0},packet.getBarrier());
+                 kt::tma::load_async(data.sq,a.sq,{task.batch,q0,task.head,0},packet.getBarrier());
+                 kt::tma::load_async(data.dout,a.dout,{task.batch,q0,task.head,0},packet.getBarrier());
+             }
++            load_row_gate(packet.template get<0>().row_gate,
++                a.score.gate_delta ? a.score.gate_delta+int64_t(task.bh)*a.score.padded+q0 : nullptr,min(Q+1,a.score.n-q0));
+             packet.submitToNextAndTrigger();
+             input.moveNext();
+         }
+--- a/dism_v3/include/forward/producer.cuh
++++ b/dism_v3/include/forward/producer.cuh
+@@ -33,6 +33,7 @@
+         }
+         load_async_any(metadata.hard, args.hard +
+             (int64_t(task.batch) * args.heads + task.head) * args.padded + task.q_start);
++        load_row_gate(shared.row_gate,args.gate_delta ? args.gate_delta+(int64_t(task.batch)*args.heads+task.head)*args.padded+task.q_start : nullptr,QROWS);
+         kt::warp::load_async_commit_group(first.getBarrier());
+         first.submitToNextAndTrigger();
+         prefetch.moveNext();
+--- a/dism_v3/include/forward/scan.cuh
++++ b/dism_v3/include/forward/scan.cuh
+@@ -32,7 +32,7 @@
+     }
+ }
+ 
+-__device__ __forceinline__ Scan make_forward_scan(const kt::rt_fl<16,WarpKSize>& score) {
++__device__ __forceinline__ Scan make_forward_scan(const kt::rt_fl<16,WarpKSize>& score, const float* row_gate = nullptr) {
+     Scalar scalar;
+ #pragma unroll
+     for (int r = 0; r < 2; ++r) {
+@@ -47,8 +47,13 @@
+ #pragma unroll
+     for (int r = 0; r < 2; ++r) {
+ #pragma unroll
+-        for (int c = 0; c < Scalar::COL_BLOCKS; ++c)
++        for (int c = 0; c < Scalar::COL_BLOCKS; ++c) {
+             scan.data[r][c].first = scan.data[r][c].second = scalar.data[r][c].value;
++            if (row_gate) {
++                int row=Scan::physical_row(r,c,kt::warp::laneid()/4);
++                scan.data[r][c].first = scan.data[r][c].first + pscore::F32x2{-row_gate[row]};
++            }
++        }
+     }
+     return scan;
+ }
+--- a/dism_v3/include/forward/types.cuh
++++ b/dism_v3/include/forward/types.cuh
+@@ -50,6 +50,7 @@
+     } metadata;
+     // Necessary WG communication only. All128 writers/readers participate.
+     struct Mail { float2 value[4][32]; } mail[2];
++    float row_gate[QROWS]; // task lifetime; never aliases metadata.kv
+     bool query_lse;
+     float tau2;
+     // Warp-private output-layout staging; no cross-warp communication.
+@@ -73,6 +74,7 @@
+     // Optional training checkpoint: S2[q,16*(c+1)-1], query contiguous.
+     float *vertical;
+     OutputGlobal<FP32Output> output_map;
++    const float *gate_delta = nullptr;
+ };
+ 
+ // Same persistent task order as summary; output includes every128-row block.
+--- a/dism_v3/include/host/metadata_upload.h
++++ b/dism_v3/include/host/metadata_upload.h
+@@ -11,14 +11,22 @@
+ // is essential: callers reuse cu_seqlens storage with different contents.
+ // Per-thread, device+stream-specific entries avoid cross-stream readiness and
+ // allocator-lifetime hazards. Both host keys and device allocations are bounded.
+-inline at::Tensor upload(const void* data, size_t bytes, at::Device device) {
+-    struct Entry {
++struct Entry {
+         std::string bytes;
+         int device;
+         int64_t stream;
+         at::Tensor tensor;
+     };
++inline std::list<Entry>& cache_entries() {
+     static thread_local std::list<Entry> cache;
++    return cache;
++}
++
++// Release CUDA tensors while the runtime is alive, before main-thread TLS teardown.
++inline void clear_cache() { cache_entries().clear(); }
++
++inline at::Tensor upload(const void* data, size_t bytes, at::Device device) {
++    auto& cache = cache_entries();
+     constexpr size_t MaxEntries = 32, MaxBytes = 8 * 1024 * 1024;
+     auto stream = at::cuda::getCurrentCUDAStream(device.index()).id();
+     for (auto it = cache.begin(); it != cache.end(); ++it) {
+--- a/dism_v3/include/summary/kernel_common.cuh
++++ b/dism_v3/include/summary/kernel_common.cuh
+@@ -127,6 +127,7 @@
+                 load_key_vector_async(vectors.preflight_k[0].klse, args.KLseVec,
+                                      {task.Batch, task.Head, 0, 0});
+             }
++            load_row_gate(shared.row_gate,args.gate_delta ? args.gate_delta+(int64_t(task.Batch)*args.Head+task.Head)*args.PaddedSeqlen+task.QStart : nullptr,CONFIG.getQBlockSize());
+             kt::warp::load_async_commit_group(prefetch.getBarrier());
+             prefetch.submitToNextAndTrigger();
+             prefetch_pipe.moveNext();
+--- a/dism_v3/include/summary/launch.cuh
++++ b/dism_v3/include/summary/launch.cuh
+@@ -13,7 +13,7 @@
+ std::tuple<at::Tensor, at::Tensor> launch_summary(Kernel kernel, at::Tensor query, at::Tensor key, at::Tensor q_lse,
+                           at::Tensor k_lse, at::Tensor q_labels, at::Tensor k_labels,
+                           at::Tensor hard, at::Tensor direction, at::Tensor tau, int64_t seqlen,
+-                          int64_t requested_ctas) {
++                          int64_t requested_ctas, std::optional<at::Tensor> gate_delta = std::nullopt) {
+     TORCH_CHECK(query.is_cuda() && query.scalar_type() == at::kBFloat16, "query must be CUDA BF16");
+     c10::cuda::CUDAGuard guard(query.device());
+     TORCH_CHECK(query.dim() == 4 && query.size(3) == CONFIG.KcKeyDim,
+@@ -37,6 +37,7 @@
+     check(hard, at::kByte, q_lse.sizes(), "hard");
+     check(direction, at::kByte, {batch, heads}, "direction");
+     check(tau, at::kFloat, {heads}, "tau");
++    if(gate_delta) check(*gate_delta,at::kFloat,{batch,heads,padded},"gate_delta");
+     // Omit only the32-row warp block containing the final token, not its CTA.
+     int checkpoints = (seqlen - 1) / CONFIG.WarpQSize;
+     constexpr int warps_per_workload = CONFIG.getQBlockSize() / CONFIG.WarpQSize;
+@@ -70,6 +71,7 @@
+                                     tau.data_ptr<float>(),
+                                     summary_a.data_ptr<float>(),
+                                     summary_b.data_ptr<float>()};
++    args.gate_delta=gate_delta ? gate_delta->data_ptr<float>() : nullptr;
+     // Two pipe allocations, each rounded to1024, then the1024-aligned union.
+     constexpr size_t shared_bytes = SUMMARY_SHARED_BYTES;
+     int tasks = batch * heads * summary_workloads;
+--- a/dism_v3/include/summary/primitives.cuh
++++ b/dism_v3/include/summary/primitives.cuh
+@@ -311,6 +311,7 @@
+     // Independent contiguous SoA buffers: [B,H,floor((N-1)/32),padded_N].
+     float *SummaryA; // log2 affine first component
+     float *SummaryB; // log2 affine second component; retained after passing
++    const float *gate_delta = nullptr; // natural-log [B,H,N] attenuation
+ };
+ 
+ struct LoadSharedMemoryLayouts {
+@@ -335,6 +336,7 @@
+             uint8_t hard_flags[CONFIG.getQBlockSize()];
+         } Prefetch[1];
+     } Vectors;
++    float row_gate[CONFIG.getQBlockSize()]; // task lifetime; never aliases the K ring
+     bool direction;
+     float tau2; // Producer converts natural-log rtau to log2 for hard matches.
+ };
+@@ -405,6 +407,16 @@
+ // Bounded-domain sentinel, deliberately not an exact log-affine zero/identity.
+ inline constexpr float LOG_ZERO = -1e6f;
+ 
++// A producer warp stages one query-row attenuation vector, including optional
++// halo. The caller publishes its normal pipe packet only after this completes.
++template<int Count>
++__device__ __forceinline__ void load_row_gate(float (&dst)[Count], const float* src,
++                                             int valid) {
++    for (int i=kt::warp::laneid(); i<Count; i+=32)
++        dst[i]=(src && i<valid) ? src[i]*1.4426950408889634f : 0.f;
++    __syncwarp();
++}
++
+ struct LogAffineOp {
+     template <typename T>
+     __forceinline__ __host__ __device__ static pscore::BinaryElement<T> identity() {
+@@ -441,7 +453,7 @@
+ };
+ 
+ template <int ROWS, int COLS>
+-__device__ __forceinline__ auto make_scan(const kt::rt_fl<ROWS, COLS> &buffer) {
++__device__ __forceinline__ auto make_scan(const kt::rt_fl<ROWS, COLS> &buffer, const float* row_gate = nullptr) {
+     pscore::AltLayoutSplitScanBuffer<ROWS, COLS, pscore::UnaryElement> single;
+ #pragma unroll
+     for (int i = 0; i < buffer.height; i++) {
+@@ -467,6 +479,10 @@
+ #pragma unroll
+         for (int j = 0; j < res.COL_BLOCKS; j++) {
+             res.data[i][j].first = res.data[i][j].second = single.data[i][j].value;
++            if (row_gate) {
++                int row=decltype(res)::physical_row(i,j,kt::warp::laneid()/4);
++                res.data[i][j].first = res.data[i][j].first + pscore::F32x2{-row_gate[row]};
++            }
+         }
+     }
+     // Caller skips the final warp block; every scanned query row is valid.
+--- a/dism_v3/include/varlen/backward.cuh
++++ b/dism_v3/include/varlen/backward.cuh
+@@ -24,7 +24,7 @@
+             TORCH_CHECK(tensor.device()==x[0].device() && tensor.scalar_type()==dtype &&
+                         tensor.is_contiguous() && tensor.sizes()==shape,"invalid varlen backward input");
+         };
+-        TORCH_CHECK(x.size()==13,"missing saved horizontal checkpoints");
++        TORCH_CHECK((x.size()==13 || x.size()==14),"missing saved horizontal checkpoints");
+         check(x[12],at::kFloat,{layout.forward*heads});
+         check(w,at::kFloat,{layout.vertical*heads});
+         check(d,at::kBFloat16,{layout.padded,heads,dism_backward::DV});
+@@ -43,7 +43,7 @@
+             KeyGlobal(ptr(1),1,h,t,D,kt::gl_strides{size_t(t)*h*D,D,size_t(h*D)}),
+             x[5].data_ptr<float>(),x[6].data_ptr<float>(),x[11].data_ptr<float>(),
+             vertical.data_ptr<float>(),x[12].data_ptr<float>(),
+-            x[7].data_ptr<int>(),x[8].data_ptr<int>(),x[9].data_ptr<uint8_t>(),x[10].data_ptr<uint8_t>()};
++            x[7].data_ptr<int>(),x[8].data_ptr<int>(),x[9].data_ptr<uint8_t>(),x[10].data_ptr<uint8_t>(),x.size()==14 ? x[13].data_ptr<float>() : nullptr};
+         return {score,
+             SoftQueryGlobal(ptr(2),1,t,h,R),
+             DerivativeGlobal(reinterpret_cast<kt::bf16*>(dout.data_ptr()),1,t,h,DV),
+@@ -88,6 +88,7 @@
+     const float *q_lse,*k_lse,*tau,*vertical,*horizontal;
+     const int *q_label,*k_label;
+     const uint8_t *hard,*direction;
++    const float *gate_delta=nullptr;
+ };
+ __device__ __forceinline__ LocalScore local_score(
+         const dism_backward::Args& a,const BackwardTask& task) {
+@@ -97,7 +98,7 @@
+     return {a.score.heads,task.n,task.n,
+         a.score.q_lse+start,a.score.k_lse+start,a.score.tau,
+         a.score.vertical+task.vertical,a.score.horizontal+task.forward,
+-        a.score.q_label+start,a.score.k_label+start,a.score.hard+start,a.score.direction};
++        a.score.q_label+start,a.score.k_label+start,a.score.hard+start,a.score.direction,a.score.gate_delta};
+ }
+ 
+ template<class HeldPipe,class InputPipe>
+@@ -122,11 +123,13 @@
+         auto packet=input.waitBuffer(0,shared.input);
+         if (leader) {
+             auto& data=packet.template get<0>();
+-            kt::tma::expect_bytes(packet.getBarrier(),sizeof(Shared::Input));
++            kt::tma::expect_bytes(packet.getBarrier(),sizeof(QueryTile)+sizeof(SoftQueryTile)+sizeof(DerivativeTile));
+             kt::tma::load_async(data.q,a.score.q,{0,task.begin+q0,task.head,0},packet.getBarrier());
+             kt::tma::load_async(data.sq,a.sq,{0,task.begin+q0,task.head,0},packet.getBarrier());
+             kt::tma::load_async(data.dout,a.dout,{0,task.begin+q0,task.head,0},packet.getBarrier());
+         }
++        load_row_gate(packet.template get<0>().row_gate,
++            a.score.gate_delta ? a.score.gate_delta+task.metadata+q0 : nullptr,min(Q+1,task.n-q0));
+         packet.submitToNextAndTrigger();
+         input.moveNext();
+     }
+--- a/dism_v3/include/varlen/forward.cuh
++++ b/dism_v3/include/varlen/forward.cuh
+@@ -50,6 +50,7 @@
+         }
+         load_async_any(metadata.hard, args.hard +
+             task.metadata + task.q_start);
++        load_row_gate(shared.row_gate,args.gate_delta ? args.gate_delta+task.metadata+task.q_start : nullptr,QROWS);
+         kt::warp::load_async_commit_group(first.getBarrier());
+         first.submitToNextAndTrigger();
+         prefetch.moveNext();
+--- a/dism_v3/include/varlen/operands.cuh
++++ b/dism_v3/include/varlen/operands.cuh
+@@ -29,6 +29,7 @@
+     check(9,at::kByte,{layout.padded*h});
+     check(10,at::kByte,{1,h});
+     check(11,at::kFloat,{h});
++    if(operands.size()==14) check(13,at::kFloat,{layout.padded*h});
+     return h;
+ }
+ 
+--- a/dism_v3/include/varlen/summary.cuh
++++ b/dism_v3/include/varlen/summary.cuh
+@@ -72,6 +72,7 @@
+                 load_key_vector_async(vectors.preflight_k[0].klse, args.KLseVec,
+                                      {0, 0, 0, int(task.metadata)});
+             }
++            load_row_gate(shared.row_gate,args.gate_delta ? args.gate_delta+task.metadata+task.QStart : nullptr,CONFIG.getQBlockSize());
+             kt::warp::load_async_commit_group(prefetch.getBarrier());
+             prefetch.submitToNextAndTrigger();
+             prefetch_pipe.moveNext();
+--- a/dism_v3/src/backward_qk.cu
++++ b/dism_v3/src/backward_qk.cu
+@@ -44,7 +44,8 @@
+             for (int q0=((args.score.n+Q-1)/Q-1)*Q;q0>=task.k0;q0-=Q) {
+                 auto packet=input.waitBuffer(2,shared.input);
+                 auto& data=packet.template get<0>();
+-                auto score=recompute(args.score,keys,data.q,task.bh,k0,q0);
++                auto score=recompute(args.score,keys,data.q,task.bh,k0,q0,
++                    args.score.gate_delta ? data.row_gate : nullptr);
+                 kt::rt_fl<K,Q> a{0.f},b{0.f};
+                 {
+                     kt::rt_bf<Q,R> soft_queries;
+@@ -57,6 +58,7 @@
+                     [[clang::always_inline]] kt::warp::wmma::mma_ABt(b,values,derivative,b);
+                 }
+                 Reverse reverse;
++                Scalar local_beta;
+ #pragma unroll
+                 for (int r=0;r<2;++r) {
+ #pragma unroll
+@@ -73,10 +75,12 @@
+                             float norm=valid?args.normalizer[off]:INFINITY;
+                             float delta=valid?args.delta[off]:0.f;
+                             float w=e?score.data[r][c].value.u1:score.data[r][c].value.u0;
+-                            alpha[e]=valid?sigmoid2(w):1.f;
++                            alpha[e]=valid ? ((query+1<args.score.n) ?
++                                sigmoid2(w-(args.score.gate_delta ? data.row_gate[pos.second+4*e+1] : 0.f)) : 0.f) : 1.f;
+                             beta[e]=exp2_ftz(w-norm)*fmaf(e?av.y:av.x,e?bv.y:bv.x,-delta);
+                         }
+                         reverse.data[r][c]={{alpha[0],alpha[1]},{beta[0],beta[1]}};
++                        if(args.dgate) local_beta.data[r][c].value={beta[0],beta[1]};
+                     }
+                 }
+                 reverse.reverse_roll();
+@@ -116,6 +120,7 @@
+                 kt::rt_bf<K,Q> soft_gradient;
+                 bool query_lse=args.score.direction[task.bh];
+                 float row_lse[4][2]{};
++                float gate_gradient[4][2]{};
+ #pragma unroll
+                 for (int r=0;r<2;++r) {
+ #pragma unroll
+@@ -132,6 +137,12 @@
+                                 args.debug_g[(int64_t(task.bh)*args.score.n+query)*args.score.n+k0+pos.first]=g;
+ #endif
+                             tau_sum+=g;
++                            // G_ij-beta_ij = alpha_(i+1,j+1)*G_(i+1,j+1).
++                            // Sum this flow into the NEXT query's gate gradient.
++                            // This uses the actual reverse recurrence and avoids
++                            // recovering alpha from approximate forward logadd.
++                            if(args.dgate && query+1<args.score.n)
++                                gate_gradient[c][e]-=g-(e ? local_beta.data[r][c].value.u1 : local_beta.data[r][c].value.u0);
+                             bool hard=args.score.hard[int64_t(task.bh)*args.score.padded+query];
+                             soft[e]=hard?0.f:g;
+                             if (query_lse) row_lse[c][e]-=soft[e];
+@@ -139,6 +150,15 @@
+                         }
+                         soft_gradient.tiles[0][c/2].data[r+2*(c&1)]=
+                             __floats2bfloat162_rn(soft[0],soft[1]);
++                    }
++                }
++                if(args.dgate) {
++                    for(int c=0;c<4;++c) for(int e=0;e<2;++e) {
++                        float sum=gate_gradient[c][e];
++                        sum+=__shfl_xor_sync(0xffffffff,sum,4);
++                        sum+=__shfl_xor_sync(0xffffffff,sum,8);
++                        sum+=__shfl_xor_sync(0xffffffff,sum,16);
++                        if(lane/4==0 && q0+c+(2*(lane&3)+e)*4+1<args.score.n) atomicAdd(args.dgate+int64_t(task.bh)*args.score.n+q0+c+(2*(lane&3)+e)*4+1,sum);
+                     }
+                 }
+                 if (query_lse) {
+--- a/dism_v3/src/backward_summary.cu
++++ b/dism_v3/src/backward_summary.cu
+@@ -43,7 +43,8 @@
+             for (int q0=((args.score.n+Q-1)/Q-1)*Q;q0>=task.k0;q0-=Q) {
+                 auto packet=input.waitBuffer(2,shared.input);
+                 auto& data=packet.template get<0>();
+-                auto score=recompute(args.score,keys,data.q,task.bh,k0,q0);
++                auto score=recompute(args.score,keys,data.q,task.bh,k0,q0,
++                    args.score.gate_delta ? data.row_gate : nullptr);
+                 kt::rt_fl<K,Q> a{0.f},b{0.f};
+                 {
+                     kt::rt_bf<Q,R> soft_queries;
+@@ -110,7 +111,8 @@
+                             bool valid=query<args.score.n && k0+pos.first<args.score.n;
+                             float delta=valid?args.delta[int64_t(task.bh)*args.score.n+query]:0.f;
+                             float w=e?score.data[r][c].value.u1:score.data[r][c].value.u0;
+-                            alpha[e]=valid?sigmoid2(w):1.f;
++                            alpha[e]=valid ? ((query+1<args.score.n) ?
++                                sigmoid2(w-(args.score.gate_delta ? data.row_gate[pos.second+4*e+1] : 0.f)) : 0.f) : 1.f;
+                             beta[e]=(e?p.u1:p.u0)*fmaf(e?av.y:av.x,e?bv.y:bv.x,-delta);
+                         }
+                         reverse.data[r][c]={{alpha[0],alpha[1]},{beta[0],beta[1]}};
+--- a/dism_v3/src/forward.cu
++++ b/dism_v3/src/forward.cu
+@@ -82,7 +82,7 @@
+                     [[clang::always_inline]] kt::warp::wmma::mma_ABt(score, query, key, score);
+                     finish_score(score, labels, key_labels, hard, tau2);
+                 }
+-                auto scan = make_forward_scan(score);
++                auto scan = make_forward_scan(score, args.gate_delta ? shared.row_gate+16*query_block : nullptr);
+                 Scan::HState incoming;
+                 if (group == 0) {
+                     int checkpoint = q_start / 32 - 1;
+--- a/dism_v3/src/frontend.cpp
++++ b/dism_v3/src/frontend.cpp
+@@ -13,9 +13,9 @@
+ using Triple=std::tuple<T,T,T>;
+ 
+ #define DECLARE(R,D,DV) namespace dism_r##R##_d##D##_v##DV { \
+-Pair summarization_cuda(T,T,T,T,T,T,T,T,T,int64_t,int64_t); \
++Pair summarization_cuda(T,T,T,T,T,T,T,T,T,int64_t,int64_t,std::optional<T>); \
+ T chunk_scan_cuda(T,T,int64_t); \
+-Pair forward_cuda(T,T,T,T,T,T,T,T,T,T,T,T,T,int64_t,int64_t,std::optional<T>,bool); \
++Pair forward_cuda(T,T,T,T,T,T,T,T,T,T,T,T,T,int64_t,int64_t,std::optional<T>,bool,std::optional<T>); \
+ T backward_delta_cuda(T,T); \
+ V backward_summary_cuda(V,T,T,T,T,int64_t,int64_t,bool); \
+ T backward_chunk_cuda(T,T); \
+@@ -30,9 +30,9 @@
+ 
+ struct Backend {
+     int r,d,dv;
+-    Pair (*summary)(T,T,T,T,T,T,T,T,T,int64_t,int64_t);
++    Pair (*summary)(T,T,T,T,T,T,T,T,T,int64_t,int64_t,std::optional<T>);
+     T (*chunk)(T,T,int64_t);
+-    Pair (*forward)(T,T,T,T,T,T,T,T,T,T,T,T,T,int64_t,int64_t,std::optional<T>,bool);
++    Pair (*forward)(T,T,T,T,T,T,T,T,T,T,T,T,T,int64_t,int64_t,std::optional<T>,bool,std::optional<T>);
+     T (*delta)(T,T);
+     V (*b1)(V,T,T,T,T,int64_t,int64_t,bool);
+     T (*b2)(T,T);
+@@ -70,7 +70,7 @@
+ 
+ // Raw public argument order: Q,K,SQ,SK,V,LQ,LK,IQ,IK,direction,hard,tau.
+ static V prepare(const V& x,bool packed,bool absorbed=false) {
+-    TORCH_CHECK(x.size()==12,"expected twelve core operands");
++    TORCH_CHECK(x.size()==12 || x.size()==13,"expected twelve core operands plus optional gate_delta");
+     const auto& q=x[0];
+     TORCH_CHECK(q.is_cuda() && q.dim()==4,"q must be CUDA [B,N,H,D]");
+     auto b=q.size(0),n=q.size(1),h=q.size(2),d=q.size(3);
+@@ -105,6 +105,11 @@
+     if (packed) for (int i=5;i<10;++i) result[i]=result[i].view({-1});
+     result.push_back(x[9].to(at::kByte).contiguous());
+     result.push_back(x[11].contiguous());
++    if(x.size()==13) {
++        check_tensor(x[12],q,at::kFloat,{b,h,n},"gate_delta");
++        result.push_back(T()); // horizontal checkpoint is filled after summary
++        result.push_back(x[12].contiguous().view(packed ? std::vector<int64_t>{b*h*n} : std::vector<int64_t>{b,h,n}));
++    }
+     return result;
+ }
+ 
+@@ -120,16 +125,16 @@
+         std::tie(a,s)=backend.vs(x,*table);
+         boundary=backend.vc(a,s,*table,h);
+     } else {
+-        std::tie(a,s)=backend.summary(x[0],x[1],x[5],x[6],x[7],x[8],x[9],x[10],x[11],n,ctas);
++        std::tie(a,s)=backend.summary(x[0],x[1],x[5],x[6],x[7],x[8],x[9],x[10],x[11],n,ctas,x.size()==14?std::optional<T>(x[13]):std::nullopt);
+         boundary=backend.chunk(a,s,n);
+     }
+     a=T(); s=T();
+-    x.push_back(boundary);
++    if(x.size()==14) x[12]=boundary; else x.push_back(boundary);
+     if (table) std::tie(out,norm,vertical)=backend.vf(x,*table,save,fp32);
+     else {
+         if (save) vertical=at::full({b,h,(n-1)/16,n},-1e6,raw[0].options().dtype(at::kFloat));
+         std::tie(out,norm)=backend.forward(x[0],x[1],x[2],x[3],x[4],x[5],x[6],x[7],x[8],
+-            x[9],x[10],x[11],x[12],n,ctas,save?std::optional<T>(vertical):std::nullopt,fp32);
++            x[9],x[10],x[11],x[12],n,ctas,save?std::optional<T>(vertical):std::nullopt,fp32,x.size()==14?std::optional<T>(x[13]):std::nullopt);
+     }
+     auto lse2=norm.view({b,h,n});
+     py::dict state;
+@@ -144,7 +149,7 @@
+                               std::optional<T> table,int64_t ctas,bool fp32,bool diagnostics) {
+     at::NoGradGuard no_grad;
+     precision(fp32);
+-    TORCH_CHECK(x.size()==13 && x[0].dim()==(table?3:4),"invalid saved operands");
++    TORCH_CHECK((x.size()==13 || x.size()==14) && x[0].dim()==(table?3:4),"invalid saved operands");
+     TORCH_CHECK(!table || ctas==0,"ctas is only supported for fixed execution");
+     check_tensor(dout,output,at::kBFloat16,output.sizes(),"dout");
+     int64_t n=output.size(1),h=output.size(2),b=output.size(0);
+@@ -165,6 +170,7 @@
+     V last=table?backend.vb3(x,vertical,input,normalizer,delta,boundary,*table,fp32):
+         backend.b3(x,vertical,input,normalizer,delta,boundary,n,ctas,fp32);
+     py::dict gradients;
++    if(x.size()==14) gradients["gate_delta"]=last[5].view({b,h,n});
+     gradients["q_vec"]=last[0]; gradients["k_vec"]=last[1]; gradients["rtau"]=last[4];
+     gradients["v"]=first[0]; gradients["sq_vec"]=first[1]; gradients["sk_vec"]=first[2];
+     // Public gradients are BNH views of native BHN storage. Interpolation
+@@ -240,7 +246,7 @@
+         }
+         return backend.summary(q.contiguous(),k.contiguous(),lq.transpose(1,2).contiguous(),
+             lk.transpose(1,2).contiguous(),iq.to(at::kInt).contiguous(),ik.to(at::kInt).contiguous(),
+-            hard.to(at::kByte).contiguous(),direction.to(at::kByte).contiguous(),tau.contiguous(),n,ctas);
++            hard.to(at::kByte).contiguous(),direction.to(at::kByte).contiguous(),tau.contiguous(),n,ctas,std::nullopt);
+     });
+     m.def("prepare_embedding",[](T q,T k,T sq,T sk,T v,T eq,T ek,T tau,T direction,T hard,bool materialize) {
+         // ATen autograd must stay enabled here: vocabulary casts/expansion and
+--- a/dism_v3/src/host/backward_qk.cpp
++++ b/dism_v3/src/host/backward_qk.cpp
+@@ -28,6 +28,8 @@
+     auto dlq=at::zeros({b,h,n},options);
+     auto dlk=at::empty({b,h,n},options.dtype(fp32_output?at::kFloat:at::kBFloat16));
+     auto dtau=at::zeros({h},options);
++    auto dgate=operands.size()==14 ? at::zeros({b,h,n},options) : at::Tensor();
++    args.dgate=dgate.defined()?dgate.data_ptr<float>():nullptr;
+     args.dq=dq.data_ptr<float>(); args.dk=dk.data_ptr();
+     set_key_output(args,2,dk);
+     args.dlq=dlq.data_ptr<float>(); args.dlk=dlk.data_ptr(); args.dtau=dtau.data_ptr<float>();
+@@ -49,6 +51,7 @@
+ #endif
+         launch(backward_qk_address<false>(),args,ctas);
+     if (diagnostic) return {dq,dk,dlq,dlk,dtau,g};
++    if(dgate.defined()) return {dq,dk,dlq,dlk,dtau,dgate};
+     return {dq,dk,dlq,dlk,dtau};
+ }
+ 
+--- a/dism_v3/src/host/forward.cpp
++++ b/dism_v3/src/host/forward.cpp
+@@ -12,7 +12,7 @@
+         at::Tensor q, at::Tensor k, at::Tensor sq, at::Tensor sk, at::Tensor v,
+         at::Tensor q_lse, at::Tensor k_lse, at::Tensor q_label, at::Tensor k_label,
+         at::Tensor hard, at::Tensor direction, at::Tensor tau, at::Tensor boundary,
+-        int64_t n, int64_t requested_ctas, std::optional<at::Tensor> vertical, bool fp32_output) {
++        int64_t n, int64_t requested_ctas, std::optional<at::Tensor> vertical, bool fp32_output, std::optional<at::Tensor> gate_delta) {
+     auto run = [&]<bool FP32Output>() -> std::tuple<at::Tensor,at::Tensor> {
+         using Args = ArgsT<FP32Output>;
+         using DType = OutputDType<FP32Output>;
+@@ -41,6 +41,7 @@
+         check(hard, at::kByte, q_lse.sizes(), "hard");
+         check(direction, at::kByte, {batch,heads}, "direction");
+         check(tau, at::kFloat, {heads}, "tau");
++        if(gate_delta) check(*gate_delta,at::kFloat,{batch,heads,padded},"gate_delta");
+         int checkpoints = (n - 1) / 32;
+         check(boundary, at::kFloat, {batch,heads,checkpoints,padded}, "boundary");
+         if (vertical)
+@@ -71,6 +72,7 @@
+             , OutputMap(reinterpret_cast<DType*>(output.data_ptr()),batch,heads,n,DIM,
+                 kt::gl_strides{size_t(n*heads*DIM),DIM,size_t(heads*DIM)})
+         };
++        args.gate_delta=gate_delta ? gate_delta->data_ptr<float>() : nullptr;
+         int tasks = batch * heads * ((n + QROWS - 1) / QROWS);
+         int sms = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
+         int ctas = std::min(tasks, requested_ctas > 0 ? int(requested_ctas) : sms);
+--- /dev/null
++++ b/dism_v3/src/host/metadata_cache.cpp
+@@ -0,0 +1,5 @@
++#include "host/metadata_upload.h"
++#include "variant.cuh"
++namespace DISM_VARIANT {
++void clear_metadata_cache() { dism_metadata::clear_cache(); }
++}
+--- a/dism_v3/src/host/varlen_backward_qk.cpp
++++ b/dism_v3/src/host/varlen_backward_qk.cpp
+@@ -28,8 +28,13 @@
+     auto dlq=at::zeros({layout.padded*h},options);
+     auto dlk=at::empty({layout.padded*h},private_options);
+     auto dtau=at::zeros({h},options);
+-    if (!layout.tokens) return {dq,dk,dlq,dlk,dtau};
++    auto dgate=operands.size()==14 ? at::zeros({layout.padded*h},options) : at::Tensor();
++    if (!layout.tokens) {
++        if(dgate.defined()) return {dq,dk,dlq,dlk,dtau,dgate};
++        return {dq,dk,dlq,dlk,dtau};
++    }
+     auto args=input.common();
++    args.dgate=dgate.defined()?dgate.data_ptr<float>():nullptr;
+     args.dq=dq.data_ptr<float>(); args.dk=dk.data_ptr();
+     args.dlq=dlq.data_ptr<float>(); args.dlk=dlk.data_ptr(); args.dtau=dtau.data_ptr<float>();
+     args.g_boundary=boundary.data_ptr<float>();
+@@ -47,6 +52,7 @@
+     TORCH_CHECK(!fp32_output,"FP32 output instances are disabled in this build");
+ #endif
+         launch_backward(varlen_backward_qk_address<false>(),args,layout,operands[0].device());
++    if(dgate.defined()) return {dq,dk,dlq,dlk,dtau,dgate};
+     return {dq,dk,dlq,dlk,dtau};
+ }
+ 
+--- a/dism_v3/src/host/varlen_forward.cpp
++++ b/dism_v3/src/host/varlen_forward.cpp
+@@ -18,7 +18,7 @@
+         using namespace dism_varlen;
+         Layout layout(table);
+         int h=validate_operands(operands,layout);
+-        TORCH_CHECK(operands.size()==13 && operands[12].device()==operands[0].device() &&
++        TORCH_CHECK((operands.size()==13 || operands.size()==14) && operands[12].device()==operands[0].device() &&
+                     operands[12].scalar_type()==at::kFloat && operands[12].dim()==1 &&
+                     operands[12].is_contiguous() && operands[12].numel()==layout.forward*h,
+                     "expected ragged horizontal boundary buffer");
+@@ -51,6 +51,7 @@
+             x[12].data_ptr<float>(),out,normalizer.data_ptr<float>(),
+             save_boundaries?vertical.data_ptr<float>():nullptr,
+             OutputMap(out,1,h,t,DIM,kt::gl_strides{size_t(t)*h*DIM,DIM,size_t(h*DIM)})};
++        args.gate_delta=x.size()==14 ? x[13].data_ptr<float>() : nullptr;
+         std::vector<int2> tasks;
+         for (int s=0;s<layout.sequences;++s)
+             append_tasks(tasks,s,h*(layout.get(s,Length)/QROWS));
+--- a/dism_v3/src/host/varlen_summary.cpp
++++ b/dism_v3/src/host/varlen_summary.cpp
+@@ -33,6 +33,7 @@
+         IG(x[7].data_ptr<int>(),1,1,1,t*h),IG(x[8].data_ptr<int>(),1,1,1,t*h),
+         x[9].data_ptr<uint8_t>(),x[10].data_ptr<uint8_t>(),x[11].data_ptr<float>(),
+         a.data_ptr<float>(),b.data_ptr<float>()};
++    args.gate_delta=x.size()==14 ? x[13].data_ptr<float>() : nullptr;
+     std::vector<int2> tasks;
+     for (int s=0;s<layout.sequences;++s)
+         append_tasks(tasks,s,h*(layout.get(s,Length)/CONFIG.getQBlockSize()));
+--- a/dism_v3/src/host/wmma_tma_preprocess.cpp
++++ b/dism_v3/src/host/wmma_tma_preprocess.cpp
+@@ -11,11 +11,11 @@
+ std::tuple<at::Tensor, at::Tensor> summarization_cuda(at::Tensor query, at::Tensor key, at::Tensor q_lse, at::Tensor k_lse,
+                               at::Tensor q_labels, at::Tensor k_labels, at::Tensor hard,
+                               at::Tensor direction, at::Tensor tau, int64_t seqlen,
+-                              int64_t requested_ctas) {
++                              int64_t requested_ctas, std::optional<at::Tensor> gate_delta = std::nullopt) {
+     TORCH_CHECK(query.dim()==4 && seqlen>0 && seqlen%256==0 && query.size(1)==seqlen,
+                 "sequence length must be256-token aligned; padding is not accepted");
+     return launch_summary(summary_address(), query, key, q_lse, k_lse,
+-                          q_labels, k_labels, hard, direction, tau, seqlen, requested_ctas);
++                          q_labels, k_labels, hard, direction, tau, seqlen, requested_ctas, gate_delta);
+ }
+ 
+ int summary_variant_cuda() { return 0; }
+--- a/dism_v3/src/interface.cpp
++++ b/dism_v3/src/interface.cpp
+@@ -12,7 +12,7 @@
+ 
+ std::tuple<at::Tensor, at::Tensor> summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+                               at::Tensor, at::Tensor, at::Tensor, at::Tensor, int64_t,
+-                              int64_t);
++                              int64_t, std::optional<at::Tensor>);
+ at::Tensor scan_probe_cuda(at::Tensor);
+ std::tuple<at::Tensor,at::Tensor> backward_scan_probe_cuda(at::Tensor,at::Tensor,at::Tensor);
+ at::Tensor backward_recompute_probe_cuda(std::vector<at::Tensor>,at::Tensor,int64_t);
+@@ -36,7 +36,7 @@
+ std::tuple<at::Tensor, at::Tensor> forward_cuda(
+     at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor,
+     at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, int64_t, int64_t,
+-    std::optional<at::Tensor>, bool);
++    std::optional<at::Tensor>, bool, std::optional<at::Tensor>);
+ std::tuple<at::Tensor, at::Tensor> forward_scan_probe_cuda(at::Tensor, at::Tensor, bool);
+ at::Tensor chunk_scan_cuda(at::Tensor, at::Tensor, int64_t);
+ at::Tensor pipe_probe_cuda(at::Tensor, int64_t);
+@@ -65,14 +65,17 @@
+ 
+ void bind_config(pybind11::module_& m) {
+     bind_varlen(m);
+-    m.def("summarization", &summarization_cuda);
++    m.def("summarization", &summarization_cuda,
++        pybind11::arg("q"),pybind11::arg("k"),pybind11::arg("lq"),pybind11::arg("lk"),
++        pybind11::arg("iq"),pybind11::arg("ik"),pybind11::arg("hard"),pybind11::arg("direction"),
++        pybind11::arg("tau"),pybind11::arg("n"),pybind11::arg("ctas"),pybind11::arg("gate_delta")=pybind11::none());
+     m.def("forward_output", &forward_cuda,
+           pybind11::arg("q"), pybind11::arg("k"), pybind11::arg("sq"), pybind11::arg("sk"),
+           pybind11::arg("v"), pybind11::arg("q_lse"), pybind11::arg("k_lse"),
+           pybind11::arg("q_label"), pybind11::arg("k_label"), pybind11::arg("hard"),
+           pybind11::arg("direction"), pybind11::arg("tau"), pybind11::arg("boundary"),
+           pybind11::arg("n"), pybind11::arg("ctas"), pybind11::arg("vertical") = pybind11::none(),
+-          pybind11::arg("fp32_output") = false);
++          pybind11::arg("fp32_output") = false, pybind11::arg("gate_delta") = pybind11::none());
+     m.def("forward_head_dim", &forward_head_dim_cuda);
+     m.def("chunk_scan", &chunk_scan_cuda, pybind11::arg("summary_a"),
+           pybind11::arg("summary_b"), pybind11::arg("seqlen"));
+--- a/dism_v3/src/module.cpp
++++ b/dism_v3/src/module.cpp
+@@ -4,7 +4,7 @@
+ 
+ namespace py = pybind11;
+ void bind_frontend(py::module_&);
+-#define DECLARE(R,D,V) namespace dism_r##R##_d##D##_v##V { void bind_config(py::module_&); }
++#define DECLARE(R,D,V) namespace dism_r##R##_d##D##_v##V { void bind_config(py::module_&); void clear_metadata_cache(); }
+ DISM_CONFIGS(DECLARE)
+ #undef DECLARE
+ 
+@@ -25,6 +25,13 @@
+     });
+     module.def("fp32_enabled", [] { return bool(DISM_ENABLE_FP32); });
+     bind_frontend(module);
++    module.def("clear_metadata_cache", [] {
++#define CLEAR(R,D,V) dism_r##R##_d##D##_v##V::clear_metadata_cache();
++        DISM_CONFIGS(CLEAR)
++#undef CLEAR
++    });
++    // Python atexit precedes C++ TLS/CUDA teardown; also covers direct extension users.
++    py::module_::import("atexit").attr("register")(module.attr("clear_metadata_cache"));
+     // Default-shape production aliases; diagnostic aliases exist only in probe builds.
+     auto key = py::make_tuple(32,64,64);
+     if (configurations.contains(key)) {
+--- a/dism_v3/src/varlen_backward_qk.cu
++++ b/dism_v3/src/varlen_backward_qk.cu
+@@ -45,7 +45,8 @@
+             for (int q0=((score_args.n+Q-1)/Q-1)*Q;q0>=task.k0;q0-=Q) {
+                 auto packet=input.waitBuffer(2,shared.input);
+                 auto& data=packet.template get<0>();
+-                auto score=recompute(score_args,keys,data.q,task.bh,k0,q0);
++                auto score=recompute(score_args,keys,data.q,task.bh,k0,q0,
++                    score_args.gate_delta ? data.row_gate : nullptr);
+                 kt::rt_fl<K,Q> a{0.f},b{0.f};
+                 {
+                     kt::rt_bf<Q,R> soft_queries;
+@@ -58,6 +59,7 @@
+                     [[clang::always_inline]] kt::warp::wmma::mma_ABt(b,values,derivative,b);
+                 }
+                 Reverse reverse;
++                Scalar local_beta;
+ #pragma unroll
+                 for (int r=0;r<2;++r) {
+ #pragma unroll
+@@ -74,10 +76,12 @@
+                             float norm=valid?args.normalizer[off]:INFINITY;
+                             float delta=valid?args.delta[off]:0.f;
+                             float w=e?score.data[r][c].value.u1:score.data[r][c].value.u0;
+-                            alpha[e]=valid?sigmoid2(w):1.f;
++                            alpha[e]=valid ? ((query+1<score_args.n) ?
++                                sigmoid2(w-(score_args.gate_delta ? data.row_gate[pos.second+4*e+1] : 0.f)) : 0.f) : 1.f;
+                             beta[e]=exp2_ftz(w-norm)*fmaf(e?av.y:av.x,e?bv.y:bv.x,-delta);
+                         }
+                         reverse.data[r][c]={{alpha[0],alpha[1]},{beta[0],beta[1]}};
++                        if(args.dgate) local_beta.data[r][c].value={beta[0],beta[1]};
+                     }
+                 }
+                 reverse.reverse_roll();
+@@ -117,6 +121,7 @@
+                 kt::rt_bf<K,Q> soft_gradient;
+                 bool query_lse=score_args.direction[task.bh];
+                 float row_lse[4][2]{};
++                float gate_gradient[4][2]{};
+ #pragma unroll
+                 for (int r=0;r<2;++r) {
+ #pragma unroll
+@@ -133,6 +138,12 @@
+                                 args.debug_g[(int64_t(task.bh)*score_args.n+query)*score_args.n+k0+pos.first]=g;
+ #endif
+                             tau_sum+=g;
++                            // G_ij-beta_ij = alpha_(i+1,j+1)*G_(i+1,j+1).
++                            // Sum this flow into the NEXT query's gate gradient.
++                            // This uses the actual reverse recurrence and avoids
++                            // recovering alpha from approximate forward logadd.
++                            if(args.dgate && query+1<score_args.n)
++                                gate_gradient[c][e]-=g-(e ? local_beta.data[r][c].value.u1 : local_beta.data[r][c].value.u0);
+                             bool hard=score_args.hard[int64_t(task.bh)*score_args.padded+query];
+                             soft[e]=hard?0.f:g;
+                             if (query_lse) row_lse[c][e]-=soft[e];
+@@ -140,6 +151,15 @@
+                         }
+                         soft_gradient.tiles[0][c/2].data[r+2*(c&1)]=
+                             __floats2bfloat162_rn(soft[0],soft[1]);
++                    }
++                }
++                if(args.dgate) {
++                    for(int c=0;c<4;++c) for(int e=0;e<2;++e) {
++                        float sum=gate_gradient[c][e];
++                        sum+=__shfl_xor_sync(0xffffffff,sum,4);
++                        sum+=__shfl_xor_sync(0xffffffff,sum,8);
++                        sum+=__shfl_xor_sync(0xffffffff,sum,16);
++                        if(lane/4==0 && q0+c+(2*(lane&3)+e)*4+1<score_args.n) atomicAdd(args.dgate+task.metadata+q0+c+(2*(lane&3)+e)*4+1,sum);
+                     }
+                 }
+                 if (query_lse) {
+--- a/dism_v3/src/varlen_backward_summary.cu
++++ b/dism_v3/src/varlen_backward_summary.cu
+@@ -44,7 +44,8 @@
+             for (int q0=((score_args.n+Q-1)/Q-1)*Q;q0>=task.k0;q0-=Q) {
+                 auto packet=input.waitBuffer(2,shared.input);
+                 auto& data=packet.template get<0>();
+-                auto score=recompute(score_args,keys,data.q,task.bh,k0,q0);
++                auto score=recompute(score_args,keys,data.q,task.bh,k0,q0,
++                    score_args.gate_delta ? data.row_gate : nullptr);
+                 kt::rt_fl<K,Q> a{0.f},b{0.f};
+                 {
+                     kt::rt_bf<Q,R> soft_queries;
+@@ -111,7 +112,8 @@
+                             bool valid=query<score_args.n && k0+pos.first<score_args.n;
+                             float delta=valid?args.delta[task.metadata+query]:0.f;
+                             float w=e?score.data[r][c].value.u1:score.data[r][c].value.u0;
+-                            alpha[e]=valid?sigmoid2(w):1.f;
++                            alpha[e]=valid ? ((query+1<score_args.n) ?
++                                sigmoid2(w-(score_args.gate_delta ? data.row_gate[pos.second+4*e+1] : 0.f)) : 0.f) : 1.f;
+                             beta[e]=(e?p.u1:p.u0)*fmaf(e?av.y:av.x,e?bv.y:bv.x,-delta);
+                         }
+                         reverse.data[r][c]={{alpha[0],alpha[1]},{beta[0],beta[1]}};
+--- a/dism_v3/src/varlen_forward.cu
++++ b/dism_v3/src/varlen_forward.cu
+@@ -82,7 +82,7 @@
+                     [[clang::always_inline]] kt::warp::wmma::mma_ABt(score, query, key, score);
+                     finish_score(score, labels, key_labels, hard, tau2);
+                 }
+-                auto scan = make_forward_scan(score);
++                auto scan = make_forward_scan(score, args.gate_delta ? shared.row_gate+16*query_block : nullptr);
+                 Scan::HState incoming;
+                 if (group == 0) {
+                     int checkpoint = q_start / 32 - 1;
+--- a/dism_v3/src/varlen_summary.cu
++++ b/dism_v3/src/varlen_summary.cu
+@@ -99,13 +99,14 @@
+                 kt::warp::load<true>(key, packet.template get<0>().kbuffer.payload);
+                 initialize_score(score, query_bias, key_bias, query_lse);
+                 [[clang::always_inline]] kt::warp::wmma::mma_ABt(score, query, key, score);
+-                // Every reader publishes its own release arrival. The producer
+-                // waits for all256; no additional WG rendezvous is required.
++                finish_score(score, query_labels, key_labels, hard_rows, tau2);
++                auto scan = make_scan(score, args.gate_delta ?
++                    shared.row_gate+query_block*CONFIG.WarpQSize : nullptr);
++                // All delta reads precede release; the producer may now reuse
++                // the task-level shared row buffer after the final K slot.
+                 packet.submitToNextAndTrigger();
+                 load_pipe.moveNext();
+ 
+-                finish_score(score, query_labels, key_labels, hard_rows, tau2);
+-                auto scan = make_scan(score);
+                 auto result = scan.reduce_forward(left, {});
+                 left = result.first;
+                 auto bottom = result.second;
+--- a/dism_v3/src/wmma_tma_preprocess.cu
++++ b/dism_v3/src/wmma_tma_preprocess.cu
+@@ -96,13 +96,14 @@
+                 kt::warp::load<true>(key, packet.template get<0>().kbuffer.payload);
+                 initialize_score(score, query_bias, key_bias, query_lse);
+                 [[clang::always_inline]] kt::warp::wmma::mma_ABt(score, query, key, score);
+-                // Every reader publishes its own release arrival. The producer
+-                // waits for all256; no additional WG rendezvous is required.
++                finish_score(score, query_labels, key_labels, hard_rows, tau2);
++                auto scan = make_scan(score, args.gate_delta ?
++                    shared.row_gate+query_block*CONFIG.WarpQSize : nullptr);
++                // All delta reads precede release; the producer may now reuse
++                // the task-level shared row buffer after the final K slot.
+                 packet.submitToNextAndTrigger();
+                 load_pipe.moveNext();
+ 
+-                finish_score(score, query_labels, key_labels, hard_rows, tau2);
+-                auto scan = make_scan(score);
+                 auto result = scan.reduce_forward(left, {});
+                 left = result.first;
+                 auto bottom = result.second;
+--- a/dism_v3/python/flash_dism/__init__.py
++++ b/dism_v3/python/flash_dism/__init__.py
+@@ -5,6 +5,7 @@
+ from .voc import voc_dism as _fixed_voc
+ from .module import DismAttention
+ from .hybrid import DismSwaAttention
++from .module_v4 import DismV4Attention, DismV4SwaAttention
+ from .cache import DismCache
+ from .configuration_dism import DismConfig
+ from .modeling_dism import DismModel, DismForCausalLM
+@@ -17,7 +18,7 @@
+                      dism_core_varlen, voc_dism_varlen)
+ 
+ 
+-def dism_core(*args, cu_seqlens=None, layout=None, ctas=0):
++def dism_core(*args, cu_seqlens=None, layout=None, ctas=0, gate_delta=None):
+     """Differentiable core; infer R/D/DV from sq/q/v, BF16 output.
+ 
+     Supplying cu_seqlens or layout selects packed batch1 execution. All packed
+@@ -27,20 +28,20 @@
+     if cu_seqlens is not None or layout is not None:
+         if ctas:
+             raise ValueError('ctas is only supported for fixed-length execution')
+-        return dism_core_varlen(*args,cu_seqlens=cu_seqlens,layout=layout)
+-    return _fixed_core(*args,ctas=ctas)
++        return dism_core_varlen(*args,cu_seqlens=cu_seqlens,layout=layout,gate_delta=gate_delta)
++    return _fixed_core(*args,ctas=ctas,gate_delta=gate_delta)
+ 
+ 
+-def voc_dism(*args, direction, hard, cu_seqlens=None, layout=None, ctas=0):
++def voc_dism(*args, direction, hard, cu_seqlens=None, layout=None, ctas=0, gate_delta=None):
+     """Triton vocabulary interpolation followed by the shape-selected CUDA core."""
+     if cu_seqlens is not None or layout is not None:
+         if ctas:
+             raise ValueError('ctas is only supported for fixed-length execution')
+         return voc_dism_varlen(*args,cu_seqlens=cu_seqlens,layout=layout,
+-                               direction=direction,hard=hard)
+-    return _fixed_voc(*args,direction=direction,hard=hard,ctas=ctas)
++                               direction=direction,hard=hard,gate_delta=gate_delta)
++    return _fixed_voc(*args,direction=direction,hard=hard,ctas=ctas,gate_delta=gate_delta)
+ 
+ 
+-__all__ = ['DismConfig','DismModel','DismForCausalLM','DismAttention','DismSwaAttention','DismCache','dism_core','voc_dism','forward_core','backward_core',
++__all__ = ['DismV4Attention','DismV4SwaAttention','DismConfig','DismModel','DismForCausalLM','DismAttention','DismSwaAttention','DismCache','dism_core','voc_dism','forward_core','backward_core',
+            'forward_varlen','backward_varlen','VarlenLayout','supported_configs',
+            'dism_core_varlen','voc_dism_varlen']
+--- a/dism_v3/python/flash_dism/backward.py
++++ b/dism_v3/python/flash_dism/backward.py
+@@ -19,10 +19,11 @@
+ 
+ class _Core(torch.autograd.Function):
+     @staticmethod
+-    def forward(ctx,q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau,ctas,absorbed):
++    def forward(ctx,q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau,ctas,absorbed,gate_delta):
+         out,norm,state=forward_core(q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau,
+-                                    ctas=ctas,save_state=True,_lse_preabsorbed=absorbed)
++                                    ctas=ctas,save_state=True,_lse_preabsorbed=absorbed,gate_delta=gate_delta)
+         ctx.save_for_backward(*state['operands'],state['vertical'],out,norm)
++        ctx.operand_count=len(state["operands"])
+         ctx.n=q.shape[1]
+         ctx.ctas=ctas
+         return out
+@@ -31,18 +32,21 @@
+     @torch.autograd.function.once_differentiable
+     def backward(ctx,dout):
+         saved=ctx.saved_tensors
+-        state=dict(operands=saved[:13],vertical=saved[13],output=saved[14],
+-                   lse2=saved[15],n=ctx.n)
++        n=ctx.operand_count
++        state=dict(operands=saved[:n],vertical=saved[n],output=saved[n+1],
++                   lse2=saved[n+2],n=ctx.n)
+         g=backward_core(state,dout.to(torch.bfloat16),ctas=ctx.ctas)
+         return (g['q_vec'],g['k_vec'],g['sq_vec'],g['sk_vec'],g['v'],g['q_lse'],g['k_lse'],
+-                None,None,None,None,g['rtau'],None,None)
++                None,None,None,None,g['rtau'],None,None,g.get('gate_delta'))
+ 
+ 
+-def dism_core(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,*,ctas=0,_lse_preabsorbed=False):
+-    """Differentiable v3 core. q_lse/k_lse are raw natural-log statistics.
++def dism_core(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,*,ctas=0,_lse_preabsorbed=False,gate_delta=None):
++    """Differentiable v3/v4 core. q_lse/k_lse are raw natural-log statistics.
+ 
++    Optional gate_delta is FP32 [B,H,N], nonnegative -log(g), with gradients.
++    Zero recovers v3; +inf resets recurrence.
+     Explicit hard/direction replay; sq/sk have already been activated. First
+     derivatives only. FP32 atomic gradients cast to BF16 only at the upstream
+     BF16 autograd input boundary, not during cross-CTA accumulation.
+     """
+-    return _Core.apply(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,ctas,_lse_preabsorbed)
++    return _Core.apply(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,ctas,_lse_preabsorbed,gate_delta)
+--- a/dism_v3/python/flash_dism/compiler.py
++++ b/dism_v3/python/flash_dism/compiler.py
+@@ -90,20 +90,21 @@
+             torch.empty(((boundaries.numel()-1)*7,), device='cpu', dtype=torch.int64))
+ 
+ 
+-# Version the internal operator identity: saved interpolants changed from
+-# BHND to BNHD, so old Inductor disk-cache output contracts must not be reused.
+-@torch.library.custom_op('flash_dism::voc_forward_bnhd', mutates_args=())
++# Version the internal operator identity for the optional v4 gate input and
++# gradient; old Inductor disk-cache operator contracts must not be reused.
++@torch.library.custom_op('flash_dism::voc_forward_bnhd_v4', mutates_args=())
+ def voc_forward(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.Tensor,
+                 v: torch.Tensor, eq: torch.Tensor, ek: torch.Tensor, tau: torch.Tensor,
+                 direction: torch.Tensor, hard: torch.Tensor,
+-                boundaries: Optional[torch.Tensor], layout: Optional[torch.Tensor] = None) -> list[torch.Tensor]:
++                boundaries: Optional[torch.Tensor], layout: Optional[torch.Tensor] = None,
++                gate_delta: Optional[torch.Tensor] = None) -> list[torch.Tensor]:
+     cu.prepare_embedding(q, k, sq, sk, v, eq, ek, tau, direction, hard, False)
+     query, key, qe, ke = prepare_embedding(q, k, eq, ek)
+     qfk, kfq, lk, lq, _, _, ik, iq = emb_fwd_wrapper(query, key, qe, ke, 1., tau.detach())
+     qv, kv = select_operands(q, k, qfk, kfq, direction)
+     output, norm, state = cu.core_forward(
+         (qv, kv, sq, sk, v, lq.transpose(1, 2), lk.transpose(1, 2),
+-         iq, ik, direction, hard, tau), layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1]),
++         iq, ik, direction, hard, tau)+(() if gate_delta is None else (gate_delta,)), layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1]),
+         0, True, False, True)
+     # All auxiliary results own newly computed storage; no inputs alias outputs.
+     return [output, qfk, kfq, lk, lq, ik, iq,
+@@ -111,7 +112,7 @@
+ 
+ 
+ @voc_forward.register_fake
+-def _forward_fake(q, k, sq, sk, v, eq, ek, tau, direction, hard, boundaries, layout=None):
++def _forward_fake(q, k, sq, sk, v, eq, ek, tau, direction, hard, boundaries, layout=None, gate_delta=None):
+     b, n, h, d = q.shape
+     vector = lambda: q.new_empty((b, n, h, d))
+     scalar = lambda dtype: q.new_empty((b, h, n), dtype=dtype)
+@@ -127,19 +128,21 @@
+             vertical, boundary, scalar(torch.float32)]
+ 
+ 
+-@torch.library.custom_op('flash_dism::voc_backward_bnhd', mutates_args=())
++@torch.library.custom_op('flash_dism::voc_backward_bnhd_v4', mutates_args=())
+ def voc_backward(inputs: list[torch.Tensor], saved: list[torch.Tensor],
+                  boundaries: Optional[torch.Tensor], dout: torch.Tensor,
+                  layout: Optional[torch.Tensor] = None) -> list[torch.Tensor]:
+-    q, k, sq, sk, v, eq, ek, tau, direction, hard = inputs
++    q, k, sq, sk, v, eq, ek, tau, direction, hard = inputs[:10]
++    gate_delta = inputs[10] if len(inputs)==11 else None
+     output, qfk, kfq, lk, lq, ik, iq, vertical, boundary, norm = saved
+     cu.prepare_embedding(q, k, sq, sk, v, eq, ek, tau, direction, hard, False)
+     query, key, qe, ke = prepare_embedding(q, k, eq, ek)
+     qv, kv = select_operands(q, k, qfk, kfq, direction)
+     raw = (qv, kv, sq, sk, v, lq.transpose(1, 2), lk.transpose(1, 2), iq, ik, direction, hard, tau)
+     # Forward already absorbed tau. Do not allocate zeros or subtract it again.
+-    prepared = list(cu.prepare_operands(raw, boundaries is not None, True))
+-    prepared.append(boundary)
++    prepared = list(cu.prepare_operands(raw+(() if gate_delta is None else (gate_delta,)), boundaries is not None, True))
++    if gate_delta is None: prepared.append(boundary)
++    else: prepared[12]=boundary
+     core_norm = norm.flatten() if boundaries is not None else norm
+     g, _ = cu.core_backward(prepared, vertical, output, core_norm, dout.to(torch.bfloat16).contiguous(),
+                             layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1]), 0, False, False)
+@@ -150,31 +153,34 @@
+     dqe, dke = cast_vocabulary_gradients(dqe, dke, eq, ek)
+     gradients = [dq, dk, dsq, g['sk_vec'].to(sk.dtype), g['v'].to(v.dtype),
+                  dqe, dke, g['rtau'].to(tau.dtype)]
++    if gate_delta is not None: gradients.append(g["gate_delta"])
+     return [grad.contiguous() for grad in gradients]
+ 
+ 
+ @voc_backward.register_fake
+ def _backward_fake(inputs, saved, boundaries, dout, layout=None):
+-    return [t.new_empty(t.shape) for t in inputs[:8]]
++    return [t.new_empty(t.shape) for t in inputs[:8]+inputs[10:]]
+ 
+ 
+ def _setup(ctx, inputs, output):
+     ctx.packed = inputs[10] is not None
+     ctx.has_layout = inputs[11] is not None
++    ctx.has_gate = inputs[12] is not None
+     ctx.save_for_backward(*inputs[:10], *output,
+                           *([inputs[10]] if ctx.packed else []),
+-                          *([inputs[11]] if ctx.has_layout else []))
++                          *([inputs[11]] if ctx.has_layout else []),
++                          *([inputs[12]] if ctx.has_gate else []))
+     ctx.mark_non_differentiable(*output[1:])
+ 
+ 
+ def _backward(ctx, grads):
+     saved = ctx.saved_tensors
+-    gradients = voc_backward(list(saved[:10]), list(saved[10:20]),
++    gradients = voc_backward(list(saved[:10])+([saved[-1]] if ctx.has_gate else []), list(saved[10:20]),
+                              saved[20] if ctx.packed else None, grads[0],
+                              saved[20 + int(ctx.packed)] if ctx.has_layout else None)
+     # Dispatcher omits trailing default=None arguments, while setup_context
+     # receives defaults restored. Match the actual autograd input arity.
+-    return (*gradients, None, None, None, None)[:len(ctx.needs_input_grad)]
++    return (*gradients[:8], None, None, None, None, gradients[8] if ctx.has_gate else None)[:len(ctx.needs_input_grad)]
+ 
+ 
+ voc_forward.register_autograd(_backward, setup_context=_setup)
+--- a/dism_v3/python/flash_dism/configuration_dism.py
++++ b/dism_v3/python/flash_dism/configuration_dism.py
+@@ -15,8 +15,8 @@
+                  ce_softcap=30., ce_chunk_size=None, ignore_index=-100,
+                  pad_token_id=None, bos_token_id=50256, eos_token_id=50256,
+                  tie_word_embeddings=False, **kwargs):
+-        if attention_type not in ('hybrid', 'dism'):
+-            raise ValueError("attention_type must be 'hybrid' or 'dism'")
++        if attention_type not in ('hybrid', 'dism', 'hybrid_v4', 'dism_v4'):
++            raise ValueError("attention_type must be hybrid, dism, hybrid_v4 or dism_v4")
+         if min(vocab_size, hidden_size, num_hidden_layers, num_heads) <= 0:
+             raise ValueError('model dimensions must be positive')
+         if intermediate_size is None:
+--- a/dism_v3/python/flash_dism/decoding.py
++++ b/dism_v3/python/flash_dism/decoding.py
+@@ -49,7 +49,7 @@
+ 
+ @torch.no_grad()
+ def forward_torch(module, x, last_state, *, direction=None, hard=None,
+-                  hard_prob=None, hard_seed=None, generator=None):
++                  hard_prob=None, hard_seed=None, generator=None, gate_delta=None):
+     """Exact FP32 (FP64 for double models) inference; no Triton/CUDA kernel calls."""
+     batch, length, _ = x.shape
+     if batch < 1 or length < 1:
+@@ -86,7 +86,7 @@
+             q, k, sq, sk, module.q_vocab.to(dtype), module.k_vocab.to(dtype), v,
+             F.softplus(module.log_sel_tau.to(dtype)), cache=core_cache,
+             direction=direction, hard=hard, hard_prob=probability,
+-            generator=generator)
++            generator=generator, gate_delta=gate_delta)
+         previous_extra = () if last_state is None else last_state['recurrent_state'][8:]
+         output, extra_state = module._combine_torch(output, x, cache, previous_extra)
+         gate = _linear(_linear(x, module.g_proj_down), module.g_proj_up).reshape_as(output)
+--- a/dism_v3/python/flash_dism/forward.py
++++ b/dism_v3/python/flash_dism/forward.py
+@@ -1,15 +1,17 @@
+-"""Aligned v3 forward; validation, preparation and dispatch live in C++."""
++"""Aligned v3/v4 forward; validation, preparation and dispatch live in C++."""
+ import cu_flash_dism as cu
+ 
+ 
+ def forward_core(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,
+-                 *,ctas=0,save_state=False,fp32_output=False,_lse_preabsorbed=False):
++                 *,ctas=0,save_state=False,fp32_output=False,_lse_preabsorbed=False,gate_delta=None):
+     """BF16 operands [B,N,H,C], N>0 divisible by256; no automatic padding.
+ 
+     LSE is raw natural-log [B,N,H]. SQ/SK are already activated.
++    Optional gate_delta is nonnegative natural-log attenuation, FP32 [B,H,N].
++    None or zero gives v3; +inf resets the diagonal recurrence.
+     Returns O, log2-normalizer, and optionally saved backward state.
+     """
+     out,norm,state=cu.core_forward(
+-        (q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau),
++        (q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau)+(() if gate_delta is None else (gate_delta,)),
+         None,ctas,save_state,fp32_output,_lse_preabsorbed)
+     return (out,norm,state) if save_state else (out,norm)
+--- a/dism_v3/python/flash_dism/modeling_dism.py
++++ b/dism_v3/python/flash_dism/modeling_dism.py
+@@ -11,6 +11,7 @@
+ from .configuration_dism import DismConfig
+ from .module import DismAttention
+ from .hybrid import DismSwaAttention
++from .module_v4 import DismV4Attention, DismV4SwaAttention
+ from .cache import DismCache
+ from .kernels.conv1d import CausalShortConv1d
+ from .kernels.linear_rmsnorm_rope import FusedLinearRMSNormRoPE
+@@ -32,14 +33,15 @@
+         super().__init__()
+         self.attn_norm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
+         self.mlp_norm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
+-        attention = DismSwaAttention if config.attention_type == 'hybrid' else DismAttention
++        attention = {'hybrid': DismSwaAttention, 'dism': DismAttention,
++                     'hybrid_v4': DismV4SwaAttention, 'dism_v4': DismV4Attention}[config.attention_type]
+         options = dict(head_dim=config.head_dim, value_dim=config.value_dim,
+                        readout_dim=config.readout_dim, vocab_size=config.qk_vocab_size,
+                        conv_size=config.conv_size, rope_theta=config.rope_theta,
+                        qknorm_eps=config.qknorm_eps, layer_idx=layer_idx,
+                        readout_l2_norm=config.readout_l2_norm,
+                        soft_k_l2_norm=config.soft_k_l2_norm)
+-        if config.attention_type == 'hybrid':
++        if config.attention_type in ('hybrid', 'hybrid_v4'):
+             options['window_size'] = config.window_size
+         self.attn = attention(config.hidden_size, config.num_heads, **options)
+         self.mlp = DismMLP(config)
+--- a/dism_v3/python/flash_dism/module.py
++++ b/dism_v3/python/flash_dism/module.py
+@@ -1,4 +1,4 @@
+-"""Trainable DISM v3 attention; residual addition and PreNorm belong to the caller."""
++"""Trainable DISM v3/v4 attention; residual addition and PreNorm belong to the caller."""
+ import torch
+ import math
+ from torch import nn
+@@ -35,6 +35,8 @@
+     parameters. N and all packed document boundaries must be multiples of 256.
+     Random direction is one global choice per call. Hard decisions are per row.
+     A separate Triton sampler generates flags; RNG is not fused into DISM.
++    Pass gate_delta=softplus(-logits) as FP32 [B,H,N] for v4 attenuation;
++    callers own the gate projection. Omitting it preserves v3 behavior.
+     """
+     _decode_extra_states = 0
+ 
+@@ -108,7 +110,7 @@
+         """FLA interface: returns (output, None, past_key_values).
+ 
+         DISM options (hard_prob, hard, hard_seed, direction, generator, cu_seqlens,
+-        max_seqlen) are keyword arguments. Set layer_idx when supplying a FLA
++        max_seqlen, gate_delta) are keyword arguments. Set layer_idx when supplying a FLA
+         Cache. Cached inference uses Torch, requires eval(), and accepts any
+         positive token count. This layer does not construct a Cache implicitly.
+         """
+@@ -119,6 +121,7 @@
+         last_state = get_layer_cache(self, past_key_values)
+         options = {name: kwargs.get(name) for name in
+                    ('hard_prob', 'direction', 'hard', 'hard_seed', 'generator')}
++        gate_delta = kwargs.get('gate_delta')
+         probability = options['hard_prob']
+         probability = (0.0 if self.training else 1.0) if probability is None else float(probability)
+         if options['hard'] is None and options['hard_seed'] is not None and probability not in (0.0, 1.0):
+@@ -143,7 +146,7 @@
+             if cu_seqlens is not None or (mask is not None and not bool(mask.all())):
+                 raise NotImplementedError("Torch cached decoding currently requires equal-length unpadded batches")
+             from .decoding import forward_torch
+-            output, recurrent, conv = forward_torch(self, x, last_state, **options)
++            output, recurrent, conv = forward_torch(self, x, last_state, gate_delta=gate_delta, **options)
+             if use_cache:
+                 update_layer_cache(self, past_key_values, recurrent_state=recurrent,
+                                    conv_state=conv, offset=x.shape[1])
+@@ -163,14 +166,16 @@
+                 if direction.shape != (batch, self.heads) or not torch.equal(direction, direction[:1].expand_as(direction)):
+                     raise ValueError("packed attention_mask path requires the same direction across batch")
+                 options['direction'] = direction[:1].contiguous()
+-        output = self._forward_cuda(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, **options)
++        if indices is not None and gate_delta is not None:
++            gate_delta = gate_delta.transpose(1,2).reshape(-1,self.heads)[indices].T.unsqueeze(0).contiguous()
++        output = self._forward_cuda(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, gate_delta=gate_delta, **options)
+         if indices is not None:
+             from fla.layers.utils import pad_input
+             output = pad_input(output.squeeze(0), indices, batch, length)
+         return output, None, past_key_values
+ 
+     def _forward_cuda(self, x, hard_prob=None, *, direction=None, hard=None,
+-                hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None):
++                hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None, gate_delta=None):
+         """Default: soft training, hard evaluation; explicit flags override sampling.
+ 
+         direction: bool [B,H] (True selects k-to-qemb, the query-LSE path).
+@@ -251,10 +256,10 @@
+         if compiling:
+             from .compiler import voc_forward
+             output = voc_forward(q, k, sq, sk, v, eq, ek, tau, direction, hard,
+-                                 cu_seqlens, compiled_layout)[0]
++                                 cu_seqlens, compiled_layout, gate_delta)[0]
+         else:
+             output = voc_dism(q, k, sq, sk, v, eq, ek, tau,
+-                              direction=direction, hard=hard, layout=layout)
++                              direction=direction, hard=hard, layout=layout, gate_delta=gate_delta)
+         output = self._combine_cuda(output, x, v, cu_seqlens, max_seqlen)
+         gate = self.g_proj_up(self.g_proj_down(x)).reshape(batch, length, self.heads, self.value_dim)
+         if compiling:
+--- /dev/null
++++ b/dism_v3/python/flash_dism/module_v4.py
+@@ -0,0 +1,85 @@
++"""Data-dependent v4 diagonal gates, sharing the attention hard-probability schedule."""
++import torch
++from torch import nn
++from torch.nn import functional as F
++
++from .module import DismAttention, _salt_hard_seed
++from .hybrid import DismSwaAttention
++from .kernels.random_bool import triton_rand_bool
++
++
++LOG_ZERO = -1e6
++# Keep gate hardening independent of vocabulary hardening with the same seed.
++_GATE_SEED_SALT = 0x36A9F12B5C708D43
++
++
++class _V4Gate:
++    def __init__(self, width, heads, **kwargs):
++        super().__init__(width, heads, **kwargs)
++        self.delta_proj = nn.Linear(width, heads)
++        nn.init.zeros_(self.delta_proj.bias)
++
++    def gate_delta(self, hidden_states, hard_prob=None, *, delta_hard=None,
++                   hard_seed=None, generator=None):
++        """Return FP32 [B,H,N] attenuation, using the pre-logsigmoid sign.
++
++        Soft: -logsigmoid(z), z=delta_proj(x). Hard: 0 for z>=0, 1e6
++        otherwise. Only soft rows propagate gate gradients; no straight-through
++        estimator. The independent gate mask uses the same annealed hard_prob
++        as vocabulary hardening. Explicit delta_hard overrides mask sampling.
++        Defaults match DISM: soft in train mode, hard in eval mode.
++        """
++        if hidden_states.ndim != 3 or hidden_states.shape[-1] != self.width:
++            raise ValueError('hidden_states must have shape [B,N,width]')
++        z = self.delta_proj(hidden_states).float().transpose(1, 2)
++        probability = (0. if self.training else 1.) if hard_prob is None else float(hard_prob)
++        if not 0. <= probability <= 1.:
++            raise ValueError('hard_prob must be in [0,1]')
++        if delta_hard is not None:
++            if (delta_hard.dtype != torch.bool or delta_hard.shape != z.shape
++                    or delta_hard.device != z.device):
++                raise ValueError('delta_hard must be bool [B,H,N] on the input device')
++        elif probability in (0., 1.):
++            delta_hard = torch.full_like(z, bool(probability), dtype=torch.bool)
++        else:
++            seed = _salt_hard_seed(hard_seed, self.layer_idx) if hard_seed is not None else None
++            if seed is not None:
++                seed = seed ^ _GATE_SEED_SALT
++            if z.is_cuda:
++                if seed is None:
++                    seed = torch.randint(0, torch.iinfo(torch.int64).max, (),
++                                         device=z.device, generator=generator)
++                delta_hard = triton_rand_bool(z.shape, probability, device=z.device, seed=seed)
++            else:
++                if seed is not None:
++                    generator = torch.Generator(device=z.device).manual_seed(int(seed))
++                delta_hard = torch.rand(z.shape, device=z.device, generator=generator) < probability
++        soft = -F.logsigmoid(z)
++        hard = torch.where(z >= 0, 0., -LOG_ZERO)
++        return torch.where(delta_hard, hard, soft).contiguous()
++
++    def forward(self, hidden_states, attention_mask=None, past_key_values=None,
++                use_cache=False, output_attentions=False, *, delta_hard=None, **kwargs):
++        """Same interface as v3, plus an optional explicit delta_hard row mask.
++
++        hard_prob/hard_seed/generator also control gate hardening. Vocabulary
++        `hard` and gate `delta_hard` masks are independent. An explicit
++        gate_delta bypasses the learned gate for reference comparisons.
++        """
++        if kwargs.get('gate_delta') is None:
++            kwargs['gate_delta'] = self.gate_delta(
++                hidden_states, kwargs.get('hard_prob'), delta_hard=delta_hard,
++                hard_seed=kwargs.get('hard_seed'), generator=kwargs.get('generator'))
++        elif delta_hard is not None:
++            raise ValueError('provide either gate_delta or delta_hard, not both')
++        return super().forward(hidden_states, attention_mask=attention_mask,
++                               past_key_values=past_key_values, use_cache=use_cache,
++                               output_attentions=output_attentions, **kwargs)
++
++
++class DismV4Attention(_V4Gate, DismAttention):
++    """DISM v4 with a trainable per-token, per-head diagonal continuation gate."""
++
++
++class DismV4SwaAttention(_V4Gate, DismSwaAttention):
++    """DISM v4 + SWA; shared V and output path, independently projected SWA Q/K."""
+--- a/dism_v3/python/flash_dism/reference/dism_decode_ref.py
++++ b/dism_v3/python/flash_dism/reference/dism_decode_ref.py
+@@ -30,7 +30,7 @@
+ 
+ @torch.no_grad()
+ def dism_decode_ref(q_vec, k_vec, sq_vec, sk_vec, q_lse, k_lse,
+-                    idx_q, idx_k, direction, hard, v, rtau, *, cache=None):
++                    idx_q, idx_k, direction, hard, v, rtau, *, cache=None, gate_delta=None):
+     """Same operands/order as dism_ref, but only NEW tokens are supplied.
+ 
+     Returns (output [B,N,H,DV], new_cache); accepts N>=1 for prefill/chunks.
+@@ -89,6 +89,10 @@
+         lses=torch.cat((cache.k_lse,lk),dim=1)
+         labels=torch.cat((cache.idx_k,idx_k),dim=2)
+ 
++    if gate_delta is not None:
++        if gate_delta.shape!=(b,h,n) or gate_delta.device!=q.device or not gate_delta.is_floating_point():
++            raise ValueError('gate_delta must be floating [B,H,new_tokens] on the input device')
++        gate_delta=gate_delta.to(dtype)
+     outputs=[]
+     for i in range(n):
+         end=start+i+1
+@@ -98,7 +102,7 @@
+         logm=torch.where(hard[:,:,i,None],hard_score,dot-bias)+tau[None,:,None]
+         # Old W has length end-1. Shift it right by one, including its last
+         # diagonal element; the new key's predecessor is the old self-key.
+-        previous=logm+F.softplus(F.pad(previous,(1,0),value=-torch.inf))
++        previous=logm+F.softplus(F.pad(previous,(1,0),value=-torch.inf)-(0. if gate_delta is None else gate_delta[:,:,i,None]))
+         maximum=previous.amax(-1,keepdim=True).clamp_min(0.)
+         weight=(previous-maximum).exp()
+         denominator=weight.sum(-1,keepdim=True)+(-maximum).exp()
+@@ -113,7 +117,7 @@
+ 
+ @torch.no_grad()
+ def dism_wrapper_decode(q,k,sq_vec,sk_vec,q_weight,k_weight,v,rtau,*,
+-                        cache=None,direction=None,hard=None,hard_prob=.5,generator=None):
++                        cache=None,direction=None,hard=None,hard_prob=.5,generator=None,gate_delta=None):
+     """Cached counterpart of dism_wrapper, including Torch vocabulary interpolation.
+ 
+     Tables are shared [V,D] or per-head [H,V,D]. Activations belong to
+@@ -148,4 +152,4 @@
+               torch.rand((b,h,n),device=q.device,generator=generator)<hard_prob)
+     choose=direction[:,None,:,None]
+     return dism_decode_ref(torch.where(choose,q,kfq),torch.where(choose,qfk,k),
+-                           sq_vec,sk_vec,lq,lk,iq,ik,direction,hard,v,rtau,cache=cache)
++                           sq_vec,sk_vec,lq,lk,iq,ik,direction,hard,v,rtau,cache=cache,gate_delta=gate_delta)
+--- a/dism_v3/python/flash_dism/varlen.py
++++ b/dism_v3/python/flash_dism/varlen.py
+@@ -39,15 +39,15 @@
+         return 4*heads*(self.forward_elements+self.vertical_elements+3*self.backward_elements)
+ 
+ 
+-def stage_operands(layout,q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau):
++def stage_operands(layout,q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,gate_delta=None):
+     """Native validation, raw-LSE absorption and head-major metadata staging."""
+     return tuple(cu.prepare_operands(
+-        (q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau),True))
++        (q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau)+(() if gate_delta is None else (gate_delta,)),True))
+ 
+ 
+ @torch.no_grad()
+ def forward_varlen(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,
+-                   cu_seqlens=None,*,layout=None,save_state=False,fp32_output=False,_lse_preabsorbed=False):
++                   cu_seqlens=None,*,layout=None,save_state=False,fp32_output=False,_lse_preabsorbed=False,gate_delta=None):
+     """Native three-stage varlen forward; inputs and output retain batch1.
+ 
+     Raw natural-log LSE follows fixed-length semantics. Reusing layout avoids
+@@ -64,7 +64,7 @@
+     elif cu_seqlens is not None:
+         raise ValueError('provide either layout or cu_seqlens, not both')
+     output,lse2,state=cu.core_forward(
+-        (q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau),
++        (q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau)+(() if gate_delta is None else (gate_delta,)),
+         layout.table,0,save_state,fp32_output,_lse_preabsorbed)
+     if save_state:
+         state['layout']=layout
+@@ -86,9 +86,10 @@
+ 
+ class _VarlenCore(torch.autograd.Function):
+     @staticmethod
+-    def forward(ctx,q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau,layout,absorbed):
++    def forward(ctx,q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau,layout,absorbed,gate_delta):
+         out,_,state=forward_varlen(q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau,
+-                                   layout=layout,save_state=True,_lse_preabsorbed=absorbed)
++                                   layout=layout,save_state=True,_lse_preabsorbed=absorbed,gate_delta=gate_delta)
++        ctx.operand_count=len(state["operands"])
+         ctx.layout=layout
+         ctx.save_for_backward(*state['operands'],state['vertical'],out,state['normalizer'],layout.table)
+         return out
+@@ -97,26 +98,27 @@
+     @torch.autograd.function.once_differentiable
+     def backward(ctx,dout):
+         saved=ctx.saved_tensors
+-        state=dict(layout=ctx.layout,operands=saved[:13],vertical=saved[13],
+-                   output=saved[14],normalizer=saved[15])
++        n=ctx.operand_count
++        state=dict(layout=ctx.layout,operands=saved[:n],vertical=saved[n],
++                   output=saved[n+1],normalizer=saved[n+2])
+         g=backward_varlen(state,dout.to(torch.bfloat16))
+         return (g['q_vec'],g['k_vec'],g['sq_vec'],g['sk_vec'],g['v'],g['q_lse'],g['k_lse'],
+-                None,None,None,None,g['rtau'],None,None)
++                None,None,None,None,g['rtau'],None,None,g.get('gate_delta'))
+ 
+ 
+ def dism_core_varlen(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,
+-                     cu_seqlens=None,*,layout=None,_lse_preabsorbed=False):
+-    """Differentiable packed v3 core; first derivatives and runtime R/D/DV dispatch."""
++                     cu_seqlens=None,*,layout=None,_lse_preabsorbed=False,gate_delta=None):
++    """Differentiable packed v3/v4 core; optional FP32 gate_delta is [1,H,T]."""
+     if layout is None:
+         if cu_seqlens is None:
+             raise ValueError('provide cu_seqlens or layout')
+         layout=VarlenLayout.from_cu_seqlens(cu_seqlens,q.shape[1])
+     elif cu_seqlens is not None:
+         raise ValueError('provide either layout or cu_seqlens, not both')
+-    return _VarlenCore.apply(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,layout,_lse_preabsorbed)
++    return _VarlenCore.apply(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,layout,_lse_preabsorbed,gate_delta)
+ 
+ 
+-def voc_dism_varlen(q,k,sq,sk,v,q_vocab,k_vocab,rtau,cu_seqlens=None,*,direction,hard,layout=None):
++def voc_dism_varlen(q,k,sq,sk,v,q_vocab,k_vocab,rtau,cu_seqlens=None,*,direction,hard,layout=None,gate_delta=None):
+     """Existing Triton embedding interpolation followed by native varlen core.
+ 
+     Vocabulary activation and sq/sk activation belong to the caller. Direction
+@@ -135,10 +137,10 @@
+     if not layout.tokens:
+         lse=torch.empty((1,0,heads),dtype=torch.float32,device=q.device)
+         labels=torch.empty((1,heads,0),dtype=torch.int32,device=q.device)
+-        out=dism_core_varlen(q,k,sq,sk,v,lse,lse,labels,labels,direction,hard,rtau,layout=layout)
++        out=dism_core_varlen(q,k,sq,sk,v,lse,lse,labels,labels,direction,hard,rtau,layout=layout,gate_delta=gate_delta)
+         return out+(eq.float().sum()*0+ek.float().sum()*0).to(out.dtype)
+     qfk,kfq,lk,lq,_,_,ik,iq=EmbInterpFunction.apply(
+         query,key,eq,ek,1.,rtau.detach())
+     qv,kv=cu.select_embedding(q,k,qfk,kfq,direction)
+     return dism_core_varlen(qv,kv,sq,sk,v,lq.transpose(1,2),lk.transpose(1,2),iq,ik,
+-                           direction,hard,rtau,layout=layout,_lse_preabsorbed=True)
++                           direction,hard,rtau,layout=layout,_lse_preabsorbed=True,gate_delta=gate_delta)
+--- a/dism_v3/python/flash_dism/voc.py
++++ b/dism_v3/python/flash_dism/voc.py
+@@ -1,10 +1,10 @@
+-"""v3 training wrapper using the existing Triton embedding interpolation."""
++"""v3/v4 training wrapper using the existing Triton embedding interpolation."""
+ import torch
+ import cu_flash_dism
+ from .backward import dism_core
+ 
+ 
+-def voc_dism(q,k,sq,sk,v,q_vocab,k_vocab,rtau,*,direction,hard,ctas=0):
++def voc_dism(q,k,sq,sk,v,q_vocab,k_vocab,rtau,*,direction,hard,ctas=0,gate_delta=None):
+     """BF16 [B,N,H,D] token inputs, already-activated [B,N,H,R] sq/sk.
+ 
+     Vocabularies are [H,V,D] or shared [V,D], with caller-owned activation.
+@@ -19,4 +19,4 @@
+         query,key,eq,ek,1.,rtau.detach())
+     q_vec,k_vec=cu_flash_dism.select_embedding(q,k,q_from_k,k_from_q,direction)
+     return dism_core(q_vec,k_vec,sq,sk,v,q_lse.transpose(1,2),k_lse.transpose(1,2),
+-                     idx_q,idx_k,direction,hard,rtau,ctas=ctas,_lse_preabsorbed=True)
++                     idx_q,idx_k,direction,hard,rtau,ctas=ctas,_lse_preabsorbed=True,gate_delta=gate_delta)
+--- /dev/null
++++ b/dism_v3/tests/test_v4_cuda.py
+@@ -0,0 +1,177 @@
++"""CUDA v4 against independent FP64 CPU forward/backward, including row gates."""
++import pytest
++import torch
++from flash_dism.forward import forward_core
++from flash_dism.backward import backward_core,dism_core
++from flash_dism.varlen import forward_varlen,backward_varlen,dism_core_varlen
++from flash_dism.reference.dism_v4_ref import dism_ref,dism_ref_backward
++from gradient_acceptance import assert_gradient,GradientTolerance
++
++torch.set_num_threads(1)
++
++def sample(n=256,mode='mixed',gate='vary',heads=2,d=64,r=32,dv=64):
++    gen=torch.Generator().manual_seed(551+n)
++    def rand(d):return (.2*torch.randn(1,n,heads,d,generator=gen)).bfloat16()
++    q,k=rand(d),rand(d);sq,sk=rand(r),rand(r);v=rand(dv)
++    lq,lk=[torch.full((1,n,heads),4.) for _ in range(2)]
++    iq,ik=[torch.randint(4,(1,heads,n),generator=gen) for _ in range(2)]
++    direction=(torch.arange(heads)%2==0).unsqueeze(0)
++    hard=torch.rand(1,heads,n,generator=gen)<{'soft':0.,'mixed':.5,'hard':1.}[mode]
++    tau=torch.linspace(.1,2.,heads)
++    delta=torch.rand(1,heads,n,generator=gen)*2
++    if gate=='zero':delta.zero_()
++    elif gate=='reset':delta.fill_(torch.inf)
++    elif gate=='boundaries':
++        delta[:,:,::16]=torch.inf
++        delta[:,:,1::32]=0.
++    return [q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau],delta
++
++
++def oracle(x,delta,upstream):
++    q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau=[a.double() if a.is_floating_point() else a for a in x]
++    args=(q,k,sq,sk,lq,lk,iq,ik,direction,hard,delta.double(),v,tau)
++    return dism_ref(*args),dism_ref_backward(*args,upstream.double())
++
++
++@pytest.mark.parametrize('mode',['soft','mixed','hard'])
++@pytest.mark.parametrize('gate',['zero','vary','reset','boundaries'])
++@pytest.mark.parametrize('packed',[False,True])
++def test_core_oracle(mode,gate,packed):
++    x,delta=sample(mode=mode,gate=gate)
++    gpu=[a.cuda() for a in x]
++    fn=forward_varlen if packed else forward_core
++    opts={'cu_seqlens':torch.tensor([0,256],device='cuda',dtype=torch.int32)} if packed else {'ctas':1}
++    out,_,state=fn(*gpu,gate_delta=delta.cuda(),save_state=True,fp32_output=True,**opts)
++    torch.manual_seed(661);do=torch.randn_like(x[4])
++    grad=(backward_varlen if packed else backward_core)(state,do.cuda(),fp32_output=True)
++    expected,reference=oracle(x,delta,do)
++    torch.testing.assert_close(out.cpu().double(),expected,atol=.003,rtol=.03)
++    for name,a in grad.items():
++        key='delta' if name=='gate_delta' else name
++        assert_gradient(a.cpu(),reference[key],name)
++    if gate=='zero':
++        old=fn(*gpu,save_state=True,fp32_output=True,**opts)[0]
++        torch.testing.assert_close(out,old,atol=0,rtol=0)
++    if gate=='reset':assert torch.count_nonzero(grad['gate_delta'])==0
++
++
++def sliced(x,start,length):
++    return [a[:,start:start+length].contiguous() if i<7 else
++            a[:,:,start:start+length].contiguous() if i in (7,8,10) else a for i,a in enumerate(x)]
++
++
++@pytest.mark.parametrize('lengths',[[256,512,0,256],[2048],[0,0]])
++@pytest.mark.parametrize('mode',['soft','mixed','hard'])
++def test_packed_boundaries_and_autograd(lengths,mode):
++    n=sum(lengths);x,delta=sample(n,mode,'boundaries')
++    indices=(0,1,2,3,4,5,6,11)
++    gpu=[a.cuda().requires_grad_(i in indices) for i,a in enumerate(x)]
++    dg=delta.cuda().requires_grad_()
++    cu=torch.tensor([0,*torch.tensor(lengths).cumsum(0).tolist()],device='cuda',dtype=torch.int32)
++    actual=dism_core_varlen(*gpu,gate_delta=dg,cu_seqlens=cu)
++    torch.manual_seed(62);do=torch.randn_like(x[4])
++    gradients=torch.autograd.grad(actual,[gpu[i] for i in indices]+[dg],do.cuda())
++    expected=[];refs={};start=0
++    for length in lengths:
++        if length:
++            out,ref=oracle(sliced(x,start,length),delta[:,:,start:start+length],do[:,start:start+length])
++            expected.append(out)
++            for key,value in ref.items():refs.setdefault(key,[]).append(value)
++        start+=length
++    names=('q_vec','k_vec','sq_vec','sk_vec','v','q_lse','k_lse','rtau','delta')
++    if n==0:
++        assert actual.numel()==0
++        for grad in gradients:assert torch.count_nonzero(grad)==0
++        return
++    expected=torch.cat(expected,1)
++    torch.testing.assert_close(actual.cpu().double(),expected,atol=.003,rtol=.03)
++    for name,a in zip(names,gradients):
++        values=refs[name]
++        ref=sum(values) if name=='rtau' else torch.cat(values,2 if name=='delta' else 1)
++        assert_gradient(a.cpu(),ref,name)
++
++
++def readout_rounding_gate_effect(delta, output_error, upstream):
++    """Exact linear effect of saved-output rounding for all-match, tau=2.
++
++    This independent CPU recurrence isolates the existing BF16 readout error
++    without weakening the tolerance on the CUDA reverse scan itself.
++    """
++    delta=delta.double().cpu();n=delta.shape[-1]
++    previous=torch.full_like(delta,-torch.inf);rows=[];alphas=[]
++    for i in range(n):
++        shifted=torch.nn.functional.pad(previous[...,:-1],(1,0),value=-torch.inf)-delta[:,:,i,None]
++        alphas.append(torch.where(shifted>20,1.,shifted.sigmoid()))
++        previous=2.+torch.nn.functional.softplus(shifted);rows.append(previous)
++    w=torch.stack(rows,-2).masked_fill(~torch.ones(n,n,dtype=torch.bool).tril(),-torch.inf)
++    maximum=w.amax(-1,keepdim=True).clamp_min(0.)
++    ew=(w-maximum).exp();p=ew/(ew.sum(-1,keepdim=True)+(-maximum).exp())
++    correction=(output_error.double()*upstream.double().cpu()).sum(-1).transpose(1,2)
++    total=-p*correction.unsqueeze(-1);effect=torch.zeros_like(delta)
++    for i in range(n-1,-1,-1):
++        propagated=total[:,:,i]*alphas[i]
++        effect[:,:,i]=-propagated.sum(-1)
++        if i:total[:,:,i-1,:-1]+=propagated[...,1:]
++    return effect,total.sum((0,2,3))
++
++
++@pytest.mark.parametrize('n',[512,2048])
++def test_persistent_tasks_and_contiguous_matches(n):
++    x,delta=sample(n,'hard','vary')
++    # Long positive recurrences amplify missing gates and row-index mistakes.
++    x[7].zero_();x[8].zero_();x[-1].fill_(2.)
++    delta[:,:,::32]=torch.inf
++    delta[:,:,1::32]=0.
++    gpu=[torch.cat([a,a],0).cuda() if i!=11 else a.cuda() for i,a in enumerate(x)]
++    dg=torch.cat([delta,delta*.25],0).cuda()
++    out,_,state=forward_core(*gpu,gate_delta=dg,save_state=True,fp32_output=True,ctas=1)
++    torch.manual_seed(951);do=torch.randn_like(out).bfloat16()
++    gradients=backward_core(state,do,fp32_output=True,ctas=1)
++    outputs=[];refs=[]
++    for b in range(2):
++        o,g=oracle(x,dg[b:b+1].cpu(),do[b:b+1].cpu());outputs.append(o);refs.append(g)
++    torch.testing.assert_close(out.cpu().double(),torch.cat(outputs,0),atol=.003,rtol=.03)
++    rounding=readout_rounding_gate_effect(dg,out.cpu().double()-torch.cat(outputs,0),do)
++    for name,a in gradients.items():
++        key='delta' if name=='gate_delta' else name
++        ref=refs[0][key]+refs[1][key] if key=='rtau' else torch.cat([z[key] for z in refs],0)
++        if key=='delta':
++            effect=rounding[0]
++            # Account explicitly for the saved-output term; require the usual
++            # strict reverse-scan accuracy and cap the independently measured
++            # rounding contribution (5% of the ideal gradient norm).
++            assert effect.norm() <= .05*ref.norm()
++            assert_gradient(a.cpu(),ref+effect,name)
++        elif key=='rtau':
++            assert_gradient(a.cpu(),ref+rounding[1],name)
++        else:
++            assert_gradient(a.cpu(),ref,name)
++
++
++def test_decode_chunks():
++    from flash_dism.reference.dism_decode_ref import dism_decode_ref
++    x,delta=sample(33,'mixed','boundaries')
++    torch.manual_seed(17);do=torch.randn_like(x[4]);expected,_=oracle(x,delta,do)
++    parts=[];cache=None;offset=0
++    for length in (1,7,25):
++        q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau=[a.double() if a.is_floating_point() else a for a in sliced(x,offset,length)]
++        out,cache=dism_decode_ref(q,k,sq,sk,lq,lk,iq,ik,direction,hard,v,tau,
++            cache=cache,gate_delta=delta[:,:,offset:offset+length].double())
++        parts.append(out);offset+=length
++    torch.testing.assert_close(torch.cat(parts,1),expected,atol=1e-12,rtol=1e-12)
++
++
++@pytest.mark.parametrize('r',[16,32])
++@pytest.mark.parametrize('d',[32,64])
++@pytest.mark.parametrize('dv',[32,64])
++@pytest.mark.parametrize('packed',[False,True])
++def test_all_dimensions(r,d,dv,packed):
++    x,delta=sample(gate='boundaries',d=d,r=r,dv=dv)
++    fn=forward_varlen if packed else forward_core
++    opts={'cu_seqlens':torch.tensor([0,256],device='cuda',dtype=torch.int32)} if packed else {'ctas':1}
++    out,_,state=fn(*[a.cuda() for a in x],gate_delta=delta.cuda(),save_state=True,fp32_output=True,**opts)
++    torch.manual_seed(831);do=torch.randn_like(x[4])
++    gradients=(backward_varlen if packed else backward_core)(state,do.cuda(),fp32_output=True)
++    expected,reference=oracle(x,delta,do)
++    torch.testing.assert_close(out.cpu().double(),expected,atol=.003,rtol=.03)
++    for name,gradient in gradients.items():assert_gradient(gradient.cpu(),reference['delta' if name=='gate_delta' else name],name)
+--- /dev/null
++++ b/dism_v3/tests/test_v4_integration.py
+@@ -0,0 +1,140 @@
++"""Vocabulary, compiler, module and checkpoint coverage for v4 attenuation."""
++import io
++import pytest
++import torch
++from flash_dism import voc_dism, DismSwaAttention
++from flash_dism.reference.dism_v4_ref import dism_ref
++from gradient_acceptance import assert_gradient
++from test_v4_cuda import sample
++
++
++def vocabulary_reference(q,k,sq,sk,v,eq,ek,tau,gate,direction,hard):
++    eq,ek=eq.bfloat16().float(),ek.bfloat16().float()
++    qs=torch.einsum('bnhd,hvd->bhnv',q.float(),eq)
++    ks=torch.einsum('bnhd,hvd->bhnv',k.float(),ek)
++    qfk=torch.einsum('bhnv,hvd->bnhd',ks.softmax(-1),eq).bfloat16()
++    kfq=torch.einsum('bhnv,hvd->bnhd',qs.softmax(-1),ek).bfloat16()
++    select=direction[:,None,:,None]
++    return dism_ref(torch.where(select,q,kfq),torch.where(select,qfk,k),sq,sk,
++        qs.logsumexp(-1).transpose(1,2),ks.logsumexp(-1).transpose(1,2),
++        qs.argmax(-1),ks.argmax(-1),direction,hard,gate,v,tau)
++
++
++@pytest.mark.parametrize('mode',['soft','mixed','hard'])
++@pytest.mark.parametrize('packed',[False,True])
++@pytest.mark.parametrize('direction_value',[False,True])
++def test_vocabulary_gradients(mode,packed,direction_value):
++    x,delta=sample(mode=mode)
++    torch.manual_seed(163)
++    args=x[:5]+[torch.randn(2,512,64)*.2,torch.randn(2,512,64)*.2,x[-1],delta]
++    gpu=[a.cuda().requires_grad_() for a in args]
++    ref=[a.clone().requires_grad_() for a in args]
++    direction=torch.full_like(x[9],direction_value);hard=x[10]
++    cu=torch.tensor([0,256],device='cuda',dtype=torch.int32) if packed else None
++    actual=voc_dism(*gpu[:8],direction=direction.cuda(),hard=hard.cuda(),gate_delta=gpu[-1],cu_seqlens=cu)
++    expected=vocabulary_reference(*ref,direction,hard)
++    do=torch.randn_like(x[4])
++    ga=torch.autograd.grad(actual,gpu,do.cuda());ge=torch.autograd.grad(expected,ref,do.float())
++    torch.testing.assert_close(actual.cpu().float(),expected,atol=.003,rtol=.03)
++    for name,a,b in zip(('q','k','sq','sk','v','eq','ek','tau','gate_delta'),ga,ge):assert_gradient(a.cpu(),b,name)
++
++
++class GatedHybrid(torch.nn.Module):
++    def __init__(self):
++        super().__init__()
++        self.attention=DismSwaAttention(64,2,head_dim=64,value_dim=64,readout_dim=32,vocab_size=512)
++        self.gate=torch.nn.Linear(64,2)
++    def forward(self,x,hard,direction,cu):
++        delta=torch.nn.functional.softplus(-self.gate(x).float()).transpose(1,2).contiguous()
++        return self.attention(x,hard=hard,direction=direction,gate_delta=delta,
++            cu_seqlens=cu,max_seqlen=512 if cu is not None else None)[0]
++
++
++@pytest.mark.parametrize('packed',[False,True])
++def test_compiled_module_optimizer_checkpoint(packed):
++    torch.manual_seed(773)
++    torch.cuda.set_per_process_memory_fraction(.08)
++    torch._inductor.config.compile_threads=1
++    torch._dynamo.config.capture_dynamic_output_shape_ops=True
++    torch.fx.experimental._config.use_duck_shape=False
++    model=GatedHybrid().cuda().train()
++    compiled=torch.compile(model,fullgraph=True,dynamic=True)
++    optimizer=torch.optim.AdamW(model.parameters(),lr=.001)
++    x=torch.randn(1,512,64,device='cuda')
++    hard=torch.rand(1,2,512,device='cuda')<.5
++    direction=torch.tensor([[True,False]],device='cuda')
++    cu=torch.tensor([0,256,512],device='cuda',dtype=torch.int32) if packed else None
++    with torch.autocast('cuda',dtype=torch.bfloat16):expected=model(x,hard,direction,cu)
++    expected.float().square().mean().backward()
++    eager=[p.grad.clone() for p in model.parameters()]
++    model.zero_grad(set_to_none=True)
++    with torch.autocast('cuda',dtype=torch.bfloat16):actual=compiled(x,hard,direction,cu)
++    actual.float().square().mean().backward()
++    torch.testing.assert_close(actual,expected,atol=.005,rtol=.03)
++    for p,g in zip(model.parameters(),eager):assert_gradient(p.grad,g,'module_parameter')
++    assert model.gate.weight.grad.abs().sum()>0
++    optimizer.step();model.zero_grad(set_to_none=True)
++    checkpoint=io.BytesIO();torch.save({'model':model.state_dict(),'optimizer':optimizer.state_dict()},checkpoint)
++    checkpoint.seek(0);saved=torch.load(checkpoint,weights_only=True)
++    restored=GatedHybrid().cuda().train();restored.load_state_dict(saved['model'])
++    restored_optimizer=torch.optim.AdamW(restored.parameters(),lr=.001);restored_optimizer.load_state_dict(saved['optimizer'])
++    restored_compiled=torch.compile(restored,fullgraph=True,dynamic=True)
++    for active,opt in ((compiled,optimizer),(restored_compiled,restored_optimizer)):
++        with torch.autocast('cuda',dtype=torch.bfloat16):out=active(x,hard,direction,cu)
++        loss=out.float().square().mean();assert torch.isfinite(loss)
++        loss.backward();opt.step();opt.zero_grad(set_to_none=True)
++    for a,b in zip(model.parameters(),restored.parameters()):torch.testing.assert_close(a,b,atol=1e-5,rtol=1e-4)
++
++
++def test_compiled_dynamic_documents():
++    from torch._dynamo.testing import CompileCounterWithBackend
++    from flash_dism.kernels.dynamo_utils import mark_cu_seqlens_dynamic
++    torch.manual_seed(774)
++    torch.cuda.set_per_process_memory_fraction(.08)
++    torch._inductor.config.compile_threads=1
++    torch._dynamo.config.capture_dynamic_output_shape_ops=True
++    torch.fx.experimental._config.use_duck_shape=False
++    model=GatedHybrid().cuda().train()
++    counter=CompileCounterWithBackend('inductor')
++    compiled=torch.compile(model,backend=counter,fullgraph=True,dynamic=True)
++    x=torch.randn(1,512,64,device='cuda')
++    hard=torch.rand(1,2,512,device='cuda')<.5
++    direction=torch.tensor([[True,False]],device='cuda')
++    for i,bounds in enumerate(([0,256,512],[0,512],[0,0,256,256,512])):
++        cu=torch.tensor(bounds,device='cuda',dtype=torch.int32)
++        mark_cu_seqlens_dynamic(cu)
++        model.zero_grad(set_to_none=True)
++        with torch.autocast('cuda',dtype=torch.bfloat16):expected=model(x,hard,direction,cu)
++        expected.float().square().mean().backward()
++        ref=[p.grad.clone() for p in model.parameters()]
++        model.zero_grad(set_to_none=True)
++        with torch._dynamo.config.patch(error_on_recompile=i>0):
++            with torch.autocast('cuda',dtype=torch.bfloat16):out=compiled(x,hard,direction,cu)
++            out.float().square().mean().backward()
++        torch.testing.assert_close(out,expected,atol=.005,rtol=.03)
++        for p,g in zip(model.parameters(),ref):assert_gradient(p.grad,g,'module_parameter')
++        if not i:frames=counter.frame_count;assert frames>0
++        assert counter.frame_count==frames
++
++
++def test_module_padding_gate_mapping():
++    from flash_dism import DismAttention
++    torch.manual_seed(776)
++    model=DismAttention(64,2,head_dim=64,value_dim=64,readout_dim=32,vocab_size=512).cuda().train()
++    x=torch.randn(2,512,64,device='cuda')
++    gate=torch.rand(2,2,512,device='cuda',requires_grad=True)
++    mask=torch.ones(2,512,device='cuda',dtype=torch.bool);mask[0,:256]=False
++    hard=torch.rand(2,2,512,device='cuda')<.5
++    direction=torch.tensor([[True,False],[True,False]],device='cuda')
++    with torch.autocast('cuda',dtype=torch.bfloat16):
++        actual=model(x,attention_mask=mask,gate_delta=gate,hard=hard,direction=direction)[0]
++        pieces=[]
++        for b,start in ((0,256),(1,0)):
++            pieces.append(model(x[b:b+1,start:],gate_delta=gate[b:b+1,:,start:],
++                hard=hard[b:b+1,:,start:],direction=direction[b:b+1])[0])
++        expected=torch.cat([torch.cat([torch.zeros_like(pieces[0]),pieces[0]],1),pieces[1]],0)
++    torch.testing.assert_close(actual,expected,atol=.003,rtol=.03)
++    ga=torch.autograd.grad(actual.float().square().sum(),gate,retain_graph=True)[0]
++    ge=torch.autograd.grad(expected.float().square().sum(),gate)[0]
++    assert_gradient(ga,ge,'gate_delta')
++    assert torch.count_nonzero(ga[0,:,:256])==0
+--- /dev/null
++++ b/dism_v3/tests/test_v4_layers.py
+@@ -0,0 +1,110 @@
++"""Learned gate parameterization, hardening, compiler and cache contracts."""
++import pytest
++import torch
++from torch.nn import functional as F
++from flash_dism import (DismAttention,DismSwaAttention,DismV4Attention,
++                        DismV4SwaAttention,DismConfig,DismForCausalLM)
++from gradient_acceptance import assert_gradient
++
++torch.set_num_threads(1)
++
++
++def layer(cls=DismV4Attention,**kwargs):
++    return cls(32,2,head_dim=32,value_dim=32,readout_dim=16,vocab_size=32,layer_idx=0,**kwargs)
++
++
++def test_gate_sign_and_gradient():
++    model=layer().train()
++    with torch.no_grad():
++        model.delta_proj.weight.zero_();model.delta_proj.bias.zero_()
++        model.delta_proj.weight[0,0]=1;model.delta_proj.weight[1,1]=1
++    x=torch.zeros(1,4,32,requires_grad=True)
++    with torch.no_grad():x[0,:,:2]=torch.tensor([[-2.,3.],[0.,-1.],[2.,0.],[-3.,4.]])
++    mask=torch.tensor([[[True,True,False,False],[False,True,True,False]]])
++    result=model.gate_delta(x,delta_hard=mask)
++    z=x[:,:,:2].transpose(1,2)
++    expected=torch.where(mask,torch.where(z>=0,0.,1e6),torch.log1p(torch.exp(-z)))
++    torch.testing.assert_close(result,expected)
++    result.sum().backward()
++    expected_dx=torch.where(mask,0.,-torch.sigmoid(-z)).transpose(1,2)
++    torch.testing.assert_close(x.grad[:,:,:2],expected_dx)
++    assert result.dtype==torch.float32 and result.is_contiguous()
++
++
++@pytest.mark.parametrize('prob',[0.,.35,1.])
++def test_probability_and_seed(prob):
++    model=layer().train();x=torch.randn(2,1024,32)
++    a=model.gate_delta(x,prob,hard_seed=144)
++    b=model.gate_delta(x,prob,hard_seed=144)
++    torch.testing.assert_close(a,b,atol=0,rtol=0)
++    mask=(a==0)|(a==1e6)
++    assert abs(mask.float().mean().item()-prob)<.04
++    if 0<prob<1:
++        assert not torch.equal(a,model.gate_delta(x,prob,hard_seed=145))
++    model.eval();actual=model.gate_delta(x)
++    assert ((actual==0)|(actual==1e6)).all()
++    model.train();torch.testing.assert_close(model.gate_delta(x),-F.logsigmoid(model.delta_proj(x).float()).transpose(1,2))
++
++
++@pytest.mark.parametrize('cls',[DismV4Attention,DismV4SwaAttention])
++@pytest.mark.parametrize('packed',[False,True])
++@pytest.mark.parametrize('prob',[0.,.5,1.])
++def test_cuda_layers(cls,packed,prob):
++    torch.manual_seed(921)
++    model=layer(cls).cuda().train()
++    base=layer(DismSwaAttention if cls is DismV4SwaAttention else DismAttention).cuda().train()
++    base.load_state_dict({k:v for k,v in model.state_dict().items() if not k.startswith('delta_proj.')})
++    x=torch.randn(1,512,32,device='cuda')
++    mask=torch.rand(1,2,512,device='cuda')<prob
++    opts=dict(hard_prob=prob,hard_seed=712,direction=torch.tensor([[True,False]],device='cuda'))
++    if packed:opts.update(cu_seqlens=torch.tensor([0,256,512],device='cuda',dtype=torch.int32),max_seqlen=256)
++    with torch.autocast('cuda',dtype=torch.bfloat16):
++        actual=model(x,delta_hard=mask,**opts)[0]
++        z=F.linear(x,model.delta_proj.weight,model.delta_proj.bias).float().transpose(1,2)
++        delta=torch.where(mask,torch.where(z>=0,0.,1e6),-F.logsigmoid(z)).contiguous()
++        expected=base(x,gate_delta=delta,**opts)[0]
++    torch.testing.assert_close(actual,expected,atol=0,rtol=0)
++    actual.float().square().mean().backward()
++    assert torch.isfinite(model.delta_proj.weight.grad).all()
++    assert (model.delta_proj.weight.grad.abs().sum()>0).item()==(prob<1)
++
++
++@pytest.mark.parametrize('cls',[DismV4Attention,DismV4SwaAttention])
++@pytest.mark.parametrize('packed',[False,True])
++def test_compile_and_optimizer(cls,packed):
++    torch.cuda.set_per_process_memory_fraction(.08)
++    torch._inductor.config.compile_threads=1
++    torch._dynamo.config.capture_dynamic_output_shape_ops=True
++    torch.fx.experimental._config.use_duck_shape=False
++    torch.manual_seed(922);model=layer(cls).cuda().train()
++    compiled=torch.compile(model,fullgraph=True,dynamic=True)
++    x=torch.randn(1,512,32,device='cuda')
++    opts=dict(hard_prob=.5,hard_seed=714,direction=torch.tensor([[True,False]],device='cuda'))
++    if packed:opts.update(cu_seqlens=torch.tensor([0,256,512],device='cuda',dtype=torch.int32),max_seqlen=256)
++    with torch.autocast('cuda',dtype=torch.bfloat16):expected=model(x,**opts)[0]
++    expected.float().square().mean().backward();grad=[p.grad.clone() for p in model.parameters()]
++    model.zero_grad(set_to_none=True)
++    with torch.autocast('cuda',dtype=torch.bfloat16):actual=compiled(x,**opts)[0]
++    actual.float().square().mean().backward()
++    torch.testing.assert_close(actual,expected,atol=.005,rtol=.03)
++    for p,g in zip(model.parameters(),grad):assert_gradient(p.grad,g,'parameter')
++    previous=model.delta_proj.weight.detach().clone()
++    torch.optim.AdamW(model.parameters(),lr=.001).step()
++    assert not torch.equal(previous,model.delta_proj.weight)
++
++
++@pytest.mark.parametrize('kind',['dism_v4','hybrid_v4'])
++def test_model_cache_and_serialization(kind,tmp_path):
++    torch.manual_seed(923)
++    config=DismConfig(vocab_size=32,hidden_size=32,num_hidden_layers=1,num_heads=2,
++        head_dim=32,value_dim=32,readout_dim=16,qk_vocab_size=32,intermediate_size=64,
++        attention_type=kind,bos_token_id=1,eos_token_id=2)
++    model=DismForCausalLM(config).eval()
++    x=torch.randint(0,32,(1,9));opts=dict(direction=torch.tensor([[True,False]]))
++    with torch.no_grad():
++        whole=model(x,use_cache=False,**opts).logits
++        first=model(x[:,:4],**opts)
++        last=model(x[:,4:],past_key_values=first.past_key_values,**opts)
++        torch.testing.assert_close(torch.cat([first.logits,last.logits],1),whole,atol=2e-5,rtol=2e-4)
++    model.save_pretrained(tmp_path);restored=DismForCausalLM.from_pretrained(tmp_path).eval()
++    with torch.no_grad():torch.testing.assert_close(restored(x,use_cache=False,**opts).logits,whole,atol=0,rtol=0)
+--- /dev/null
++++ b/dism_v3/tools/diagnose_v4_gate.py
+@@ -0,0 +1,21 @@
++import torch, importlib
++from test_v4_cuda import sample,oracle
++from flash_dism.forward import forward_core
++from flash_dism.backward import backward_core
++refmod=importlib.import_module('flash_dism.reference.dism_v4_ref')
++for n in (512,2048):
++ x,delta=sample(n,'hard','vary');x[7].zero_();x[8].zero_();x[-1].fill_(2.)
++ delta[:,:,::32]=torch.inf;delta[:,:,1::32]=0.
++ gpu=[torch.cat([a,a],0).cuda() if i!=11 else a.cuda() for i,a in enumerate(x)]
++ dg=torch.cat([delta,delta*.25],0).cuda()
++ out,_,state=forward_core(*gpu,gate_delta=dg,save_state=True,fp32_output=True,ctas=1)
++ torch.manual_seed(951);do=torch.randn_like(out).bfloat16();actual=backward_core(state,do,fp32_output=True,ctas=1)['gate_delta'].cpu().double()
++ exact=[];same=[]
++ for b in range(2):
++  _,g=oracle(x,dg[b:b+1].cpu(),do[b:b+1].cpu());exact.append(g['delta'])
++  fn=refmod.dism_ref
++  refmod.dism_ref=lambda *args:out[b:b+1].cpu().double()
++  _,g=oracle(x,dg[b:b+1].cpu(),do[b:b+1].cpu());same.append(g['delta'])
++  refmod.dism_ref=fn
++ exact=torch.cat(exact);same=torch.cat(same)
++ print(n,'reference norm',exact.norm().item(),'ideal error',(actual-exact).norm().item(),'same output error',(actual-same).norm().item(),'output correction effect',(same-exact).norm().item(),flush=True)
+--- /dev/null
++++ b/dism_v3/tools/sanitize_v4_smoke.py
+@@ -0,0 +1,12 @@
++import sys,torch
++from flash_dism.forward import forward_core
++from flash_dism.backward import backward_core
++from test_v4_cuda import sample
++x,delta=sample(gate='boundaries')
++kwargs={} if '--legacy' in sys.argv else {'gate_delta':delta.cuda()}
++out,_,state=forward_core(*[a.cuda() for a in x],save_state=True,ctas=1,**kwargs)
++grad=backward_core(state,torch.ones_like(out),ctas=1)
++assert torch.isfinite(out).all()
++assert all(torch.isfinite(g).all() for g in grad.values())
++torch.cuda.synchronize()
++print('fixed forward/backward passed')
+--- a/nanochat/nanochat/models/dism/__init__.py
++++ b/nanochat/nanochat/models/dism/__init__.py
+@@ -41,3 +41,13 @@
+ register_model('swa_control', 1, DismConfig, _build_swa,
+                ModelCapabilities(varlen=True, generation=False, sliding_window=True, compile=True),
+                scaling_reference_spec=lambda spec: spec)
++
++
++def _build_v4(config):
++    from .model import DismLM
++    return DismLM(config, attention_type='hybrid_v4')
++
++
++register_model('dism_v4_hybrid', 1, DismConfig, _build_v4,
++               ModelCapabilities(varlen=True, generation=False, sliding_window=True, compile=True),
++               scaling_reference_spec=lambda spec: spec)
+--- a/nanochat/nanochat/models/dism/model.py
++++ b/nanochat/nanochat/models/dism/model.py
+@@ -43,9 +43,10 @@
+     exact_optimizer_hyperparameters = True
+     dynamic_compile = True
+ 
+-    def __init__(self, config):
++    def __init__(self, config, *, attention_type='hybrid'):
+         super().__init__()
+         self.config = config
++        self.v4 = attention_type == 'hybrid_v4'
+         if not 0.0 <= config.hard_prob_max <= 1.0:
+             raise ValueError('hard_prob_max must be in [0,1]')
+         if config.sequence_len % 256:
+@@ -54,7 +55,7 @@
+                         num_heads=config.n_head, head_dim=config.head_dim,
+                         value_dim=config.value_dim, readout_dim=config.readout_dim,
+                         qk_vocab_size=config.qk_vocab_size, intermediate_size=config.intermediate_size,
+-                        attention_type='hybrid', window_size=config.window_size,
++                        attention_type=attention_type, window_size=config.window_size,
+                         vocab_size=config.vocab_size, bos_token_id=1, eos_token_id=2,
+                         soft_k_l2_norm=config.soft_k_l2_norm)
+         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
+@@ -141,8 +142,19 @@
+                 else:
+                     hard = torch.ones((1, self.config.n_head, batch*length), device=x.device, dtype=torch.bool)
+                     direction = torch.ones((1, self.config.n_head), device=x.device, dtype=torch.bool)
++                gate_options = {}
++                if self.v4:
++                    if self.training:
++                        # Same device-resident annealing probability, independent
++                        # reproducible stream; no CPU scalar extraction or recompile.
++                        delta_hard, _ = sample_flags(counter, self.hard_probability,
++                            batch*length, self.config.n_head,
++                            (self.config.rng_seed + i*104729) ^ 0x36A9F12B)
++                    else:
++                        delta_hard = hard
++                    gate_options['delta_hard'] = delta_hard
+                 x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
+-                          hard=hard, direction=direction, use_cache=False)
++                          hard=hard, direction=direction, use_cache=False, **gate_options)
+             x = self.norm(x).to(torch.bfloat16)
+             if targets is not None and loss_reduction == 'mean':
+                 # nanochat targets are ALREADY shifted, unlike HF labels.
+--- a/nanochat/tests/test_dism_integration.py
++++ b/nanochat/tests/test_dism_integration.py
+@@ -31,7 +31,7 @@
+ 
+ 
+ @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA')
+-@pytest.mark.parametrize('architecture', ['dism_hybrid', 'swa_control'])
++@pytest.mark.parametrize('architecture', ['dism_hybrid', 'swa_control', 'dism_v4_hybrid'])
+ def test_dism_compiled_resume(tmp_path, architecture):
+     pytest.importorskip('flash_dism')
+     from nanochat.checkpoint_manager import save_checkpoint, load_checkpoint
+@@ -74,7 +74,7 @@
+         restored_optim = restored.setup_pretraining_optimizer(optconf)
+         restored_optim.load_state_dict(optimizer_state)
+         assert optimizer_schema(restored, restored_optim) == schema
+-        if architecture == 'dism_hybrid':
++        if architecture in ('dism_hybrid', 'dism_v4_hybrid'):
+             assert restored.rng_counter.item() == 1
+         restored.set_training_step(124)
+         restored_compiled = torch.compile(restored, dynamic=True, fullgraph=True)
+@@ -86,5 +86,5 @@
+         restored_optim.step()
+         for p, r in zip(model.parameters(), restored.parameters()):
+             torch.testing.assert_close(p, r, atol=2e-5, rtol=.001)
+-        if architecture == 'dism_hybrid':
++        if architecture in ('dism_hybrid', 'dism_v4_hybrid'):
+             assert model.rng_counter.item() == restored.rng_counter.item() == 2
+--- /dev/null
++++ b/nanochat/tests/test_dism_v4.py
+@@ -0,0 +1,57 @@
++import pytest
++import torch
++from nanochat.models import build_model, ModelSpec
++
++
++def tiny():
++    return build_model(ModelSpec('dism_v4_hybrid',1,dict(sequence_len=512,vocab_size=128,
++        n_layer=1,n_head=2,n_embd=32,intermediate_size=64,head_dim=32,value_dim=32,
++        readout_dim=16,qk_vocab_size=32,anneal_steps=101,hard_prob_max=.95))).cuda().train()
++
++
++def test_annealed_gate_masks():
++    model=tiny();model.init_weights()
++    x=torch.randint(128,(2,512),device='cuda')
++    cu=torch.tensor([0,512,1024],device='cuda',dtype=torch.int32)
++    captured=[]
++    handle=model.layers[0].attn.register_forward_pre_hook(
++        lambda mod,args,kw:captured.append((kw['hard'].clone(),kw['delta_hard'].clone())),with_kwargs=True)
++    for step,p in ((0,0.),(50,.475),(100,.95)):
++        model.set_training_step(step)
++        with torch.no_grad():model(x,cu_seqlens=cu)
++        hard,gate=captured[-1]
++        for mask in (hard,gate):assert abs(mask.float().mean().item()-p)<.06
++        if step:assert not torch.equal(hard,gate)
++    model.eval()
++    with torch.no_grad():model(x,cu_seqlens=cu)
++    assert all(mask.all() for mask in captured[-1])
++    handle.remove()
++
++
++def test_annealing_without_recompile():
++    from torch._dynamo.testing import CompileCounterWithBackend
++    torch.cuda.set_per_process_memory_fraction(.08)
++    torch._inductor.config.compile_threads=1
++    torch._dynamo.config.capture_dynamic_output_shape_ops=True
++    torch.fx.experimental._config.use_duck_shape=False
++    model=tiny();model.init_weights()
++    counter=CompileCounterWithBackend('inductor')
++    compiled=torch.compile(model,backend=counter,fullgraph=True,dynamic=True)
++    x=torch.randint(128,(1,512),device='cuda');y=torch.randint(128,(1,512),device='cuda')
++    cu=torch.tensor([0,256,512],device='cuda',dtype=torch.int32)
++    for index,step in enumerate((0,50,100)):
++        model.set_training_step(step);model.zero_grad(set_to_none=True)
++        with torch._dynamo.config.patch(error_on_recompile=index>0):
++            loss=compiled(x,y,cu_seqlens=cu);loss.backward()
++        g=model.layers[0].attn.delta_proj.weight.grad
++        assert torch.isfinite(loss) and torch.isfinite(g).all() and g.abs().sum()>0
++        if not index:frames=counter.frame_count;assert frames>0
++        assert counter.frame_count==frames
++    # Diagnostic full-hard endpoint: prove the compiled graph reads the updated
++    # probability tensor instead of specializing it to the first soft step.
++    model.hard_probability.fill_(1.)
++    model.zero_grad(set_to_none=True)
++    with torch._dynamo.config.patch(error_on_recompile=True):
++        loss=compiled(x,y,cu_seqlens=cu);loss.backward()
++    assert torch.count_nonzero(model.layers[0].attn.delta_proj.weight.grad)==0
++    assert counter.frame_count==frames

@@ -1,0 +1,90 @@
+diff --git a/src/wmma_tma_preprocess.cu b/src/wmma_tma_preprocess.cu
+index afd190a..3e9bead 100644
+--- a/src/wmma_tma_preprocess.cu
++++ b/src/wmma_tma_preprocess.cu
+@@ -71,32 +71,61 @@ __global__ __launch_bounds__(384, 1) void wmma_tma_wasp_persistent_summarization
+             prefetch.submitToNextAndTrigger();
+ 
+             load_pipe.setup();
++            // Direction is uniform for this workload. Keep separate complete
++            // loops so metadata loading and bias seeding specialize together.
++            if (query_lse) {
+ #pragma unroll 1
+-            for (int tile = 0; tile < task.KBlocks; ++tile) {
+-                auto packet =
+-                    load_pipe.waitBuffer(PRODUCER, shared.Tiles.Default, shared.Vectors.Default);
+-                kt::rt_bf<CONFIG.WarpKSize, CONFIG.KcKeyDim> key;
+-                kt::rv<int, CONFIG.WarpKSize, kt::ducks::rv_layout::align> key_labels;
+-                kt::rv_fl<CONFIG.WarpKSize, kt::ducks::rv_layout::align> key_bias;
+-                kt::rt_fl<CONFIG.WarpQSize, CONFIG.WarpKSize> score;
+-                kt::warp::rv_maps::zero(key_bias);
+-                load_key_metadata(key_labels, key_bias, packet.template get<1>(), query_lse);
+-                // swap_axis=true: direct RHS LDSM -> HMMA layout.
+-                kt::warp::load<true>(key, packet.template get<0>().kbuffer.payload);
+-                initialize_score(score, query_bias, key_bias, query_lse);
+-                kt::warp::wmma::mma_ABt(score, query, key, score);
+-                // Every reader publishes its own release arrival. The producer
+-                // waits for all256; no additional WG rendezvous is required.
+-                packet.submitToNextAndTrigger();
++                for (int tile = 0; tile < task.KBlocks; ++tile) {
++                    auto packet = load_pipe.waitBuffer(PRODUCER, shared.Tiles.Default,
++                                                       shared.Vectors.Default);
++                    kt::rt_bf<CONFIG.WarpKSize, CONFIG.KcKeyDim> key;
++                    kt::rv<int, CONFIG.WarpKSize, kt::ducks::rv_layout::align> key_labels;
++                    kt::rv_fl<CONFIG.WarpKSize, kt::ducks::rv_layout::align> key_bias;
++                    kt::rt_fl<CONFIG.WarpQSize, CONFIG.WarpKSize> score;
++                    kt::warp::rv_maps::zero(key_bias);
++                    load_key_metadata(key_labels, key_bias, packet.template get<1>(), true);
++                    // swap_axis=true: direct RHS LDSM -> HMMA layout.
++                    kt::warp::load<true>(key, packet.template get<0>().kbuffer.payload);
++                    initialize_score(score, query_bias, key_bias, true);
++                    kt::warp::wmma::mma_ABt(score, query, key, score);
++                    // Every reader publishes its own release arrival. The producer
++                    // waits for all256; no additional WG rendezvous is required.
++                    packet.submitToNextAndTrigger();
+ 
+-                finish_score(score, query_labels, key_labels, hard_rows, tau2, q_start,
+-                             tile * CONFIG.WarpKSize);
+-                auto scan = make_scan(score);
+-                auto result = scan.reduce_forward(left, {});
+-                left = result.first;
+-                auto bottom = result.second;
+-                store_summary(args, bottom, task.Batch, task.Head, checkpoint,
+-                              tile * CONFIG.WarpKSize);
++                    finish_score(score, query_labels, key_labels, hard_rows, tau2, q_start,
++                                 tile * CONFIG.WarpKSize);
++                    auto scan = make_scan(score);
++                    auto result = scan.reduce_forward(left, {});
++                    left = result.first;
++                    auto bottom = result.second;
++                    store_summary(args, bottom, task.Batch, task.Head, checkpoint,
++                                  tile * CONFIG.WarpKSize);
++                }
++            } else {
++#pragma unroll 1
++                for (int tile = 0; tile < task.KBlocks; ++tile) {
++                    auto packet = load_pipe.waitBuffer(PRODUCER, shared.Tiles.Default,
++                                                       shared.Vectors.Default);
++                    kt::rt_bf<CONFIG.WarpKSize, CONFIG.KcKeyDim> key;
++                    kt::rv<int, CONFIG.WarpKSize, kt::ducks::rv_layout::align> key_labels;
++                    kt::rv_fl<CONFIG.WarpKSize, kt::ducks::rv_layout::align> key_bias;
++                    kt::rt_fl<CONFIG.WarpQSize, CONFIG.WarpKSize> score;
++                    kt::warp::rv_maps::zero(key_bias);
++                    load_key_metadata(key_labels, key_bias, packet.template get<1>(), false);
++                    kt::warp::load<true>(key, packet.template get<0>().kbuffer.payload);
++                    initialize_score(score, query_bias, key_bias, false);
++                    kt::warp::wmma::mma_ABt(score, query, key, score);
++                    packet.submitToNextAndTrigger();
++
++                    finish_score(score, query_labels, key_labels, hard_rows, tau2, q_start,
++                                 tile * CONFIG.WarpKSize);
++                    auto scan = make_scan(score);
++                    auto result = scan.reduce_forward(left, {});
++                    left = result.first;
++                    auto bottom = result.second;
++                    store_summary(args, bottom, task.Batch, task.Head, checkpoint,
++                                  tile * CONFIG.WarpKSize);
++                }
+             }
+             // The scheduler omits key tiles strictly above this CTA's diagonal.
+             if (checkpoint < args.Checkpoints) {

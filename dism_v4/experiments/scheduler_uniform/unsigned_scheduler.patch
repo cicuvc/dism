@@ -1,0 +1,30 @@
+diff --git a/include/summary/primitives.cuh b/include/summary/primitives.cuh
+index 721f5fa..42ffbb4 100644
+--- a/include/summary/primitives.cuh
++++ b/include/summary/primitives.cuh
+@@ -341,12 +341,12 @@ struct FixedLengthScheduler {
+         int KBlocks;
+     };
+ 
+-    int CurrentTaskIdx;
+-    const int Batch, Seqlen, SeqlenQBlocks, Head;
++    uint32_t CurrentTaskIdx;
++    const uint32_t Batch, Seqlen, SeqlenQBlocks, Head;
+ 
+     __device__ FixedLengthScheduler(int batch, int seqlen, int head)
+         : Batch(batch), Head(head), Seqlen(seqlen),
+-          SeqlenQBlocks((seqlen - 1) / CONFIG.getQBlockSize()) {
++          SeqlenQBlocks(uint32_t(seqlen - 1) / CONFIG.getQBlockSize()) {
+         CurrentTaskIdx = blockIdx.x;
+     }
+ 
+@@ -362,8 +362,7 @@ struct FixedLengthScheduler {
+ 
+         out.QStart = CONFIG.getQBlockSize() * Idx;
+         out.KStart = 0;
+-        out.KBlocks =
+-            (out.QStart + CONFIG.getQBlockSize() + CONFIG.WarpKSize - 1) / CONFIG.WarpKSize;
++        out.KBlocks = (Idx + 1) * (CONFIG.getQBlockSize() / CONFIG.WarpKSize);
+ 
+         CurrentTaskIdx += gridDim.x;
+         return true;

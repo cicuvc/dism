@@ -1,0 +1,55 @@
+========= COMPUTE-SANITIZER
+========= Error: Race reported between Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3190
+=========     and Write access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x10a0 [1024 hazards]
+=========     and Write access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x10b0 [1024 hazards]
+========= 
+========= Error: Race reported between Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3210
+=========     and Write access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1380 [512 hazards]
+=========     and Write access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1390 [512 hazards]
+========= 
+========= Error: Race reported between Write access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0xf40
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x32e0 [128 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3310 [128 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3340 [128 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3370 [128 hazards]
+========= 
+========= Error: Race reported between Write access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x14e0
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3880 [16 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x38c0 [16 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3900 [16 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3940 [16 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3980 [16 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x39c0 [16 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3a00 [16 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3a40 [16 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3a80 [16 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3ac0 [16 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3b00 [16 hazards]
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x3b40 [16 hazards]
+========= 
+========= Error: Race reported between Write access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x11f0
+=========     and Read access at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x4290 [64 hazards]
+========= 
+========= Error: Race reported between Write access at void dism_r32_d64_v64::dism_forward_kernel<(bool)1, KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::dism_forward::ArgsT<T1>)+0x1560
+=========     and Read access at void dism_r32_d64_v64::dism_forward_kernel<(bool)1, KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::dism_forward::ArgsT<T1>)+0x4640 [2048 hazards]
+========= 
+========= Error: Race reported between Write access at void dism_r32_d64_v64::dism_forward_kernel<(bool)1, KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::dism_forward::ArgsT<T1>)+0x1590
+=========     and Read access at void dism_r32_d64_v64::dism_forward_kernel<(bool)1, KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::dism_forward::ArgsT<T1>)+0x46b0 [1024 hazards]
+========= 
+========= Error: Race reported between Write access at void dism_r32_d64_v64::dism_forward_kernel<(bool)1, KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::dism_forward::ArgsT<T1>)+0x15a0
+=========     and Read access at void dism_r32_d64_v64::dism_forward_kernel<(bool)1, KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::dism_forward::ArgsT<T1>)+0x4700 [256 hazards]
+=========     and Read access at void dism_r32_d64_v64::dism_forward_kernel<(bool)1, KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::dism_forward::ArgsT<T1>)+0x4720 [256 hazards]
+========= 
+..                                                                                                                          [100%]
+======================================================== warnings summary =========================================================
+../../miniconda3/lib/python3.12/site-packages/requests/__init__.py:109
+  /root/miniconda3/lib/python3.12/site-packages/requests/__init__.py:109: RequestsDependencyWarning: urllib3 (2.1.0) or chardet (7.6.0)/charset_normalizer (2.0.4) doesn't match a supported version!
+    warnings.warn(
+
+../../miniconda3/lib/python3.12/site-packages/torch/jit/_script.py:365: 14 warnings
+  /root/miniconda3/lib/python3.12/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2 passed, 50 deselected, 15 warnings in 5.77s
+========= RACECHECK SUMMARY: 8 hazards displayed (8 errors, 0 warnings)

@@ -1,0 +1,1010 @@
+========= COMPUTE-SANITIZER
+/root/miniconda3/lib/python3.12/site-packages/requests/__init__.py:109: RequestsDependencyWarning: urllib3 (2.1.0) or chardet (7.6.0)/charset_normalizer (2.0.4) doesn't match a supported version!
+  warnings.warn(
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (256,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (257,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (258,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (259,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (260,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (261,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (262,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (263,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (264,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (265,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (266,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (267,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (268,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (269,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (270,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (271,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (272,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (273,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (274,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (275,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (276,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (277,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (278,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (279,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (280,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (281,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (282,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (283,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (284,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (285,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (286,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+========= Barrier error detected. Barrier overflow.
+=========     at void dism_r32_d64_v64::wmma_tma_wasp_persistent_summarization_kernel<KernelConfig<(int)32, (int)64, (int)64>>(dism_r32_d64_v64::TmaSummarizationKernelArgs)+0x1520
+=========     by thread (287,0,0) in block (0,0,0)
+=========     Barrier is located at shared address 0x808
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame:  [0x1376c] in libcudart.so.13
+=========         Host Frame: cudaLaunchKernel [0x745b7] in libcudart.so.13
+=========         Host Frame: std::tuple<at::Tensor, at::Tensor> dism_r32_d64_v64::launch_summary<void const*>(void const*, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6bfd8] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: dism_r32_d64_v64::summarization_cuda(at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, long, long) [0x6a208] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: core_forward(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool) [0x2fcaa] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::tuple pybind11::detail::argument_loader<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool>::call_impl<pybind11::tuple, pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, pybind11::detail::void_type>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul>, pybind11::detail::void_type&&) && [0x41808] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::operator()(pybind11::detail::function_call&) const [0x40783] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::initialize<pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple, std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool, pybind11::name, pybind11::scope, pybind11::sibling>(pybind11::tuple (*&)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::tuple (*)(std::vector<at::Tensor, std::allocator<at::Tensor> >, std::optional<at::Tensor>, long, bool, bool, bool), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&)::{lambda(pybind11::detail::function_call&)#1}::__invoke(pybind11::detail::function_call&) [0x4071d] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: pybind11::cpp_function::dispatcher(_object*, _object*, _object*) [0x24125] in cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+=========         Host Frame: cfunction_call in methodobject.c:537 [0x149fe3] in python
+=========         Host Frame: _PyObject_MakeTpCall in call.c:240 [0x11aada] in python
+=========         Host Frame: _PyEval_EvalFrameDefault in bytecodes.c:2706 [0x1256d1] in python
+=========         Host Frame: PyEval_EvalCode in ceval.c:578 [0x1e3c6d] in python
+=========         Host Frame: run_eval_code_obj in pythonrun.c:1722 [0x208dd6] in python
+=========         Host Frame: run_mod in pythonrun.c:1743 [0x204576] in python
+=========         Host Frame: pyrun_file in pythonrun.c:1643 [0x21c1c1] in python
+=========         Host Frame: _PyRun_SimpleFileObject in pythonrun.c:433 [0x21ba5f] in python
+=========         Host Frame: _PyRun_AnyFileObject in pythonrun.c:78 [0x21b7d2] in python
+=========         Host Frame: Py_RunMain in main.c:709 [0x214252] in python
+=========         Host Frame: Py_BytesMain in main.c:763 [0x1cad68] in python
+=========         Host Frame:  [0x29d8f] in libc.so.6
+=========         Host Frame: __libc_start_main [0x29e3f] in libc.so.6
+=========         Host Frame:  [0x1cab98] in python
+=========         Host Frame: forward_core in forward.py:12
+=========         Host Frame: <module> in sanitize_smoke.py:7
+========= 
+Traceback (most recent call last):
+  File "/root/dism125m-v4/sanitize_smoke.py", line 7, in <module>
+    out,_,state=forward_core(*[a.cuda() for a in x],save_state=True,ctas=1,**kwargs)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/dism125m-hard095-shuffle/dism_v3/python/flash_dism/forward.py", line 12, in forward_core
+    out,norm,state=cu.core_forward(
+                   ^^^^^^^^^^^^^^^^
+torch.AcceleratorError: CUDA error: unspecified launch failure
+Search for `cudaErrorLaunchFailure' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+========= Target application returned an error
+========= ERROR SUMMARY: 32 errors

@@ -1,0 +1,78 @@
+.................................F
+============================================================ FAILURES =============================================================
+________________________________________ test_persistent_tasks_and_contiguous_matches[512] ________________________________________
+
+n = 512
+
+    @pytest.mark.parametrize('n',[512,2048])
+    def test_persistent_tasks_and_contiguous_matches(n):
+        x,delta=sample(n,'hard','vary')
+        # Long positive recurrences amplify missing gates and row-index mistakes.
+        x[7].zero_();x[8].zero_();x[-1].fill_(2.)
+        delta[:,:,::32]=torch.inf
+        delta[:,:,1::32]=0.
+        gpu=[torch.cat([a,a],0).cuda() if i!=11 else a.cuda() for i,a in enumerate(x)]
+        dg=torch.cat([delta,delta*.25],0).cuda()
+        out,_,state=forward_core(*gpu,gate_delta=dg,save_state=True,fp32_output=True,ctas=1)
+        torch.manual_seed(951);do=torch.randn_like(out).bfloat16()
+        gradients=backward_core(state,do,fp32_output=True,ctas=1)
+        outputs=[];refs=[]
+        for b in range(2):
+            o,g=oracle(x,dg[b:b+1].cpu(),do[b:b+1].cpu());outputs.append(o);refs.append(g)
+        torch.testing.assert_close(out.cpu().double(),torch.cat(outputs,0),atol=.003,rtol=.03)
+        for name,a in gradients.items():
+            key='delta' if name=='gate_delta' else name
+            ref=refs[0][key]+refs[1][key] if key=='rtau' else torch.cat([z[key] for z in refs],0)
+>           assert_gradient(a.cpu(),ref,name)
+
+tests/test_v4_cuda.py:113: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+actual = tensor([[[ 0.0000e+00,  4.7628e-02, -5.7760e-02,  ..., -4.1146e-05,
+          -3.5631e-05,  5.2399e-06],
+         [ 0....1.0133e-05],
+         [ 0.0000e+00,  4.4242e-01,  9.7847e-02,  ...,  3.3422e-05,
+           1.5644e-05, -4.7660e-06]]])
+reference = tensor([[[-0.0000e+00,  4.7411e-02, -5.8217e-02,  ...,  2.5153e-17,
+          -1.3878e-17, -2.7539e-17],
+         [-0.... [-0.0000e+00,  4.4162e-01,  9.6980e-02,  ..., -5.2042e-18,
+          -3.4694e-18, -5.2042e-18]]], dtype=torch.float64)
+name = 'gate_delta', tolerance = GradientTolerance(cosine=0.999, relative_l2=0.03, absolute_l2=0.0001)
+
+    def assert_gradient(actual, reference, name, tolerance=None):
+        """Check direction, error and norm bias; do not fabricate near-zero cosine.
+    
+        The absolute allowance handles small reference norms; cosine is enforced
+        above that noise floor. Exact-zero structural gradients keep their own
+        tight gate, including in hard mode.
+        """
+        assert actual.shape == reference.shape, name
+        x, y = actual.double().flatten(), reference.double().flatten()
+        assert torch.isfinite(x).all() and torch.isfinite(y).all(), name
+        yn, xn = y.norm().item(), x.norm().item()
+        if yn < 1e-10:
+            assert xn < 1e-6, (name, 'zero-reference gradient', xn)
+            return
+        tolerance = tolerance or (TAU if name in ('tau', 'rtau') else
+                                  LSE if name in ('q_lse', 'k_lse') else VECTOR)
+        error = (x-y).norm().item()
+        bound = tolerance.absolute_l2 + tolerance.relative_l2*yn
+>       assert error <= bound, (name, 'L2 error', error, 'bound', bound)
+               ^^^^^^^^^^^^^^
+E       AssertionError: ('gate_delta', 'L2 error', 0.02224071034321212, 'bound', 0.01881028257595626)
+
+tests/gradient_acceptance.py:37: AssertionError
+======================================================== warnings summary =========================================================
+../../miniconda3/lib/python3.12/site-packages/requests/__init__.py:109
+  /root/miniconda3/lib/python3.12/site-packages/requests/__init__.py:109: RequestsDependencyWarning: urllib3 (2.1.0) or chardet (7.6.0)/charset_normalizer (2.0.4) doesn't match a supported version!
+    warnings.warn(
+
+../../miniconda3/lib/python3.12/site-packages/torch/jit/_script.py:365: 14 warnings
+  /root/miniconda3/lib/python3.12/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+===================================================== short test summary info =====================================================
+FAILED tests/test_v4_cuda.py::test_persistent_tasks_and_contiguous_matches[512] - AssertionError: ('gate_delta', 'L2 error', 0.0...
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 33 passed, 15 warnings in 12.26s

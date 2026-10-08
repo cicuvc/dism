@@ -1,0 +1,338 @@
+File src/module.cpp exists
+Build file build/deps/module.cpp.d.opt
+Build file build/deps/module.cpp.d
+File src/frontend.cpp exists
+Build file build/deps/frontend.cpp.d.opt
+Build file build/deps/frontend.cpp.d
+File src/interface.cpp exists
+Build file build/deps/r32_d64_v64/interface.cpp.d.opt
+Build file build/deps/r32_d64_v64/interface.cpp.d
+File src/varlen_interface.cpp exists
+Build file build/deps/r32_d64_v64/varlen_interface.cpp.d.opt
+Build file build/deps/r32_d64_v64/varlen_interface.cpp.d
+File src/host/backward_chunk.cpp exists
+Build file build/deps/r32_d64_v64/backward_chunk.cpp.d.opt
+Build file build/deps/r32_d64_v64/backward_chunk.cpp.d
+File src/host/backward_delta.cpp exists
+Build file build/deps/r32_d64_v64/backward_delta.cpp.d.opt
+Build file build/deps/r32_d64_v64/backward_delta.cpp.d
+File src/host/backward_qk.cpp exists
+Build file build/deps/r32_d64_v64/backward_qk.cpp.d.opt
+Build file build/deps/r32_d64_v64/backward_qk.cpp.d
+File src/host/backward_summary.cpp exists
+Build file build/deps/r32_d64_v64/backward_summary.cpp.d.opt
+Build file build/deps/r32_d64_v64/backward_summary.cpp.d
+File src/host/chunk_scan.cpp exists
+Build file build/deps/r32_d64_v64/chunk_scan.cpp.d.opt
+Build file build/deps/r32_d64_v64/chunk_scan.cpp.d
+File src/host/forward.cpp exists
+Build file build/deps/r32_d64_v64/forward.cpp.d.opt
+Build file build/deps/r32_d64_v64/forward.cpp.d
+File src/host/varlen_backward_qk.cpp exists
+Build file build/deps/r32_d64_v64/varlen_backward_qk.cpp.d.opt
+Build file build/deps/r32_d64_v64/varlen_backward_qk.cpp.d
+File src/host/varlen_backward_summary.cpp exists
+Build file build/deps/r32_d64_v64/varlen_backward_summary.cpp.d.opt
+Build file build/deps/r32_d64_v64/varlen_backward_summary.cpp.d
+File src/host/varlen_chunk.cpp exists
+Build file build/deps/r32_d64_v64/varlen_chunk.cpp.d.opt
+Build file build/deps/r32_d64_v64/varlen_chunk.cpp.d
+File src/host/varlen_delta.cpp exists
+Build file build/deps/r32_d64_v64/varlen_delta.cpp.d.opt
+Build file build/deps/r32_d64_v64/varlen_delta.cpp.d
+File src/host/varlen_forward.cpp exists
+Build file build/deps/r32_d64_v64/varlen_forward.cpp.d.opt
+Build file build/deps/r32_d64_v64/varlen_forward.cpp.d
+File src/host/varlen_summary.cpp exists
+Build file build/deps/r32_d64_v64/varlen_summary.cpp.d.opt
+Build file build/deps/r32_d64_v64/varlen_summary.cpp.d
+File src/host/wmma_tma_preprocess.cpp exists
+Build file build/deps/r32_d64_v64/wmma_tma_preprocess.cpp.d.opt
+Build file build/deps/r32_d64_v64/wmma_tma_preprocess.cpp.d
+File src/host/metadata_cache.cpp exists
+Build file build/deps/r32_d64_v64/metadata_cache.cpp.d.opt
+Build file build/deps/r32_d64_v64/metadata_cache.cpp.d
+File src/backward_chunk.cu exists
+Build file build/deps/r32_d64_v64/backward_chunk.cu.d.opt
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/deps/r32_d64_v64/backward_chunk.cu.d
+File src/backward_delta.cu exists
+Build file build/deps/r32_d64_v64/backward_delta.cu.d.opt
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/deps/r32_d64_v64/backward_delta.cu.d
+File src/backward_qk.cu exists
+Build file build/deps/r32_d64_v64/backward_qk.cu.d.opt
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/deps/r32_d64_v64/backward_qk.cu.d
+File src/backward_summary.cu exists
+Build file build/deps/r32_d64_v64/backward_summary.cu.d.opt
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/deps/r32_d64_v64/backward_summary.cu.d
+File src/chunk_scan.cu exists
+Build file build/deps/r32_d64_v64/chunk_scan.cu.d.opt
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/deps/r32_d64_v64/chunk_scan.cu.d
+File src/forward.cu exists
+Build file build/deps/r32_d64_v64/forward.cu.d.opt
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/deps/r32_d64_v64/forward.cu.d
+File src/varlen_backward_qk.cu exists
+Build file build/deps/r32_d64_v64/varlen_backward_qk.cu.d.opt
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/deps/r32_d64_v64/varlen_backward_qk.cu.d
+File src/varlen_backward_summary.cu exists
+Build file build/deps/r32_d64_v64/varlen_backward_summary.cu.d.opt
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/deps/r32_d64_v64/varlen_backward_summary.cu.d
+File src/varlen_chunk.cu exists
+Build file build/deps/r32_d64_v64/varlen_chunk.cu.d.opt
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/deps/r32_d64_v64/varlen_chunk.cu.d
+File src/varlen_delta.cu exists
+Build file build/deps/r32_d64_v64/varlen_delta.cu.d.opt
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/deps/r32_d64_v64/varlen_delta.cu.d
+File src/varlen_forward.cu exists
+Build file build/deps/r32_d64_v64/varlen_forward.cu.d.opt
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/deps/r32_d64_v64/varlen_forward.cu.d
+File src/varlen_summary.cu exists
+Build file build/deps/r32_d64_v64/varlen_summary.cu.d.opt
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/deps/r32_d64_v64/varlen_summary.cu.d
+File src/wmma_tma_preprocess.cu exists
+Build file build/deps/r32_d64_v64/wmma_tma_preprocess.cu.d.opt
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/deps/r32_d64_v64/wmma_tma_preprocess.cu.d
+Build file build/deps/cu_flash_dism.cpython-312-x86_64-linux-gnu.so.opt
+Build file build/deps/module.cpp.o.opt
+Build file build/deps/frontend.cpp.o.opt
+Build file build/deps/r32_d64_v64/interface.cpp.o.opt
+Build file build/deps/r32_d64_v64/varlen_interface.cpp.o.opt
+Build file build/deps/r32_d64_v64/backward_chunk.cpp.o.opt
+Build file build/deps/r32_d64_v64/backward_delta.cpp.o.opt
+Build file build/deps/r32_d64_v64/backward_qk.cpp.o.opt
+Build file build/deps/r32_d64_v64/backward_summary.cpp.o.opt
+Build file build/deps/r32_d64_v64/chunk_scan.cpp.o.opt
+Build file build/deps/r32_d64_v64/forward.cpp.o.opt
+Build file build/deps/r32_d64_v64/varlen_backward_qk.cpp.o.opt
+Build file build/deps/r32_d64_v64/varlen_backward_summary.cpp.o.opt
+Build file build/deps/r32_d64_v64/varlen_chunk.cpp.o.opt
+Build file build/deps/r32_d64_v64/varlen_delta.cpp.o.opt
+Build file build/deps/r32_d64_v64/varlen_forward.cpp.o.opt
+Build file build/deps/r32_d64_v64/varlen_summary.cpp.o.opt
+Build file build/deps/r32_d64_v64/wmma_tma_preprocess.cpp.o.opt
+Build file build/deps/r32_d64_v64/metadata_cache.cpp.o.opt
+Build file build/deps/r32_d64_v64/backward_chunk.cu.o.opt
+Build file build/deps/r32_d64_v64/backward_delta.cu.o.opt
+Build file build/deps/r32_d64_v64/backward_qk.cu.o.opt
+Build file build/deps/r32_d64_v64/backward_summary.cu.o.opt
+Build file build/deps/r32_d64_v64/chunk_scan.cu.o.opt
+Build file build/deps/r32_d64_v64/forward.cu.o.opt
+Build file build/deps/r32_d64_v64/varlen_backward_qk.cu.o.opt
+Build file build/deps/r32_d64_v64/varlen_backward_summary.cu.o.opt
+Build file build/deps/r32_d64_v64/varlen_chunk.cu.o.opt
+Build file build/deps/r32_d64_v64/varlen_delta.cu.o.opt
+Build file build/deps/r32_d64_v64/varlen_forward.cu.o.opt
+Build file build/deps/r32_d64_v64/varlen_summary.cu.o.opt
+Build file build/deps/r32_d64_v64/wmma_tma_preprocess.cu.o.opt
+Build file build/deps/r32_d64_v64/backward_chunk.cu.dev.sm120a.o.opt
+Build file build/deps/r32_d64_v64/backward_delta.cu.dev.sm120a.o.opt
+Build file build/deps/r32_d64_v64/backward_qk.cu.dev.sm120a.o.opt
+Build file build/deps/r32_d64_v64/backward_summary.cu.dev.sm120a.o.opt
+Build file build/deps/r32_d64_v64/chunk_scan.cu.dev.sm120a.o.opt
+Build file build/deps/r32_d64_v64/forward.cu.dev.sm120a.o.opt
+Build file build/deps/r32_d64_v64/varlen_backward_qk.cu.dev.sm120a.o.opt
+Build file build/deps/r32_d64_v64/varlen_backward_summary.cu.dev.sm120a.o.opt
+Build file build/deps/r32_d64_v64/varlen_chunk.cu.dev.sm120a.o.opt
+Build file build/deps/r32_d64_v64/varlen_delta.cu.dev.sm120a.o.opt
+Build file build/deps/r32_d64_v64/varlen_forward.cu.dev.sm120a.o.opt
+Build file build/deps/r32_d64_v64/varlen_summary.cu.dev.sm120a.o.opt
+Build file build/deps/r32_d64_v64/wmma_tma_preprocess.cu.dev.sm120a.o.opt
+Build file build/object/module.cpp.o
+Build file build/object/frontend.cpp.o
+Build file build/object/r32_d64_v64/interface.cpp.o
+Build file build/object/r32_d64_v64/varlen_interface.cpp.o
+Build file build/object/r32_d64_v64/backward_chunk.cpp.o
+Build file build/object/r32_d64_v64/backward_delta.cpp.o
+Build file build/object/r32_d64_v64/backward_qk.cpp.o
+Build file build/object/r32_d64_v64/backward_summary.cpp.o
+Build file build/object/r32_d64_v64/chunk_scan.cpp.o
+Build file build/object/r32_d64_v64/forward.cpp.o
+Build file build/object/r32_d64_v64/varlen_backward_qk.cpp.o
+Build file build/object/r32_d64_v64/varlen_backward_summary.cpp.o
+Build file build/object/r32_d64_v64/varlen_chunk.cpp.o
+Build file build/object/r32_d64_v64/varlen_delta.cpp.o
+Build file build/object/r32_d64_v64/varlen_forward.cpp.o
+Build file build/object/r32_d64_v64/varlen_summary.cpp.o
+Build file build/object/r32_d64_v64/wmma_tma_preprocess.cpp.o
+Build file build/object/r32_d64_v64/metadata_cache.cpp.o
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6412_GLOBAL__N_119reverse_chunk_asyncILi4E12KernelConfigILi32ELi64ELi64EEEEvN7kittens2glIfLin1ELin1ELin1ELin1EJEEES6_Pfii' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6412_GLOBAL__N_119reverse_chunk_asyncILi4E12KernelConfigILi32ELi64ELi64EEEEvN7kittens2glIfLin1ELin1ELin1ELin1EJEEES6_Pfii
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 36 registers, used 0 barriers, 8192 bytes smem
+ptxas info    : Compile time = 17.100 ms
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6412_GLOBAL__N_113reverse_chunkEPKfS2_Pfii' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6412_GLOBAL__N_113reverse_chunkEPKfS2_Pfii
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 3.417 ms
+Build file build/object/r32_d64_v64/backward_chunk.cu.dev.sm120a.o
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6412_GLOBAL__N_19row_deltaI13__nv_bfloat16EEvPKT_PKS2_Pfiii' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6412_GLOBAL__N_19row_deltaI13__nv_bfloat16EEvPKT_PKS2_Pfiii
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 20 registers, used 0 barriers
+ptxas info    : Compile time = 5.904 ms
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6412_GLOBAL__N_19row_deltaIfEEvPKT_PK13__nv_bfloat16Pfiii' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6412_GLOBAL__N_19row_deltaIfEEvPKT_PK13__nv_bfloat16Pfiii
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 20 registers, used 0 barriers
+ptxas info    : Compile time = 4.395 ms
+Build file build/object/r32_d64_v64/backward_delta.cu.dev.sm120a.o
+ptxas info    : 8 bytes gmem
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6423dism_backward_qk_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS_13dism_backward4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6423dism_backward_qk_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS_13dism_backward4ArgsE
+    440 bytes stack frame, 456 bytes spill stores, 472 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 440 bytes cumulative stack size
+ptxas info    : Compile time = 303.493 ms
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6423dism_backward_qk_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS_13dism_backward4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6423dism_backward_qk_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS_13dism_backward4ArgsE
+    464 bytes stack frame, 500 bytes spill stores, 516 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 464 bytes cumulative stack size
+ptxas info    : Compile time = 264.615 ms
+Build file build/object/r32_d64_v64/backward_qk.cu.dev.sm120a.o
+ptxas info    : 8 bytes gmem
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6428dism_backward_summary_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS_13dism_backward4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6428dism_backward_summary_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS_13dism_backward4ArgsE
+    400 bytes stack frame, 420 bytes spill stores, 436 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 400 bytes cumulative stack size
+ptxas info    : Compile time = 267.498 ms
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6428dism_backward_summary_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS_13dism_backward4ArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6428dism_backward_summary_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS_13dism_backward4ArgsE
+    432 bytes stack frame, 452 bytes spill stores, 512 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 432 bytes cumulative stack size
+ptxas info    : Compile time = 235.768 ms
+Build file build/object/r32_d64_v64/backward_summary.cu.dev.sm120a.o
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6412_GLOBAL__N_123chunk_scan_async_kernelILi4E12KernelConfigILi32ELi64ELi64EEEEvN7kittens2glIfLin1ELin1ELin1ELin1EJEEES6_Pfii' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6412_GLOBAL__N_123chunk_scan_async_kernelILi4E12KernelConfigILi32ELi64ELi64EEEEvN7kittens2glIfLin1ELin1ELin1ELin1EJEEES6_Pfii
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 33 registers, used 0 barriers, 4096 bytes smem
+ptxas info    : Compile time = 12.405 ms
+Build file build/object/r32_d64_v64/chunk_scan.cu.dev.sm120a.o
+ptxas info    : 8 bytes gmem
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6419dism_forward_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS_12dism_forward5ArgsTIXT_EEE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6419dism_forward_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS_12dism_forward5ArgsTIXT_EEE
+    88 bytes stack frame, 92 bytes spill stores, 100 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 88 bytes cumulative stack size
+ptxas info    : Compile time = 163.736 ms
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6419dism_forward_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS_12dism_forward5ArgsTIXT_EEE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6419dism_forward_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS_12dism_forward5ArgsTIXT_EEE
+    8 bytes stack frame, 16 bytes spill stores, 24 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 8 bytes cumulative stack size
+ptxas info    : Compile time = 149.601 ms
+Build file build/object/r32_d64_v64/forward.cu.dev.sm120a.o
+ptxas info    : 8 bytes gmem
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6425varlen_backward_qk_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen12BackwardArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6425varlen_backward_qk_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen12BackwardArgsE
+    336 bytes stack frame, 336 bytes spill stores, 380 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 336 bytes cumulative stack size
+ptxas info    : Compile time = 275.241 ms
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6425varlen_backward_qk_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen12BackwardArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6425varlen_backward_qk_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen12BackwardArgsE
+    344 bytes stack frame, 344 bytes spill stores, 396 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 344 bytes cumulative stack size
+ptxas info    : Compile time = 242.137 ms
+Build file build/object/r32_d64_v64/varlen_backward_qk.cu.dev.sm120a.o
+ptxas info    : 8 bytes gmem
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6430varlen_backward_summary_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen12BackwardArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6430varlen_backward_summary_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen12BackwardArgsE
+    344 bytes stack frame, 356 bytes spill stores, 372 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 344 bytes cumulative stack size
+ptxas info    : Compile time = 256.278 ms
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6430varlen_backward_summary_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen12BackwardArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6430varlen_backward_summary_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen12BackwardArgsE
+    344 bytes stack frame, 360 bytes spill stores, 392 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 344 bytes cumulative stack size
+ptxas info    : Compile time = 207.575 ms
+Build file build/object/r32_d64_v64/varlen_backward_summary.cu.dev.sm120a.o
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6411dism_varlen19varlen_chunk_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS0_10PackedArgsINS0_9ChunkArgsEEE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6411dism_varlen19varlen_chunk_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS0_10PackedArgsINS0_9ChunkArgsEEE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, used 0 barriers, 4096 bytes smem
+ptxas info    : Compile time = 14.139 ms
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6411dism_varlen19varlen_chunk_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS0_10PackedArgsINS0_9ChunkArgsEEE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6411dism_varlen19varlen_chunk_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS0_10PackedArgsINS0_9ChunkArgsEEE
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 44 registers, used 0 barriers, 4096 bytes smem
+ptxas info    : Compile time = 18.722 ms
+Build file build/object/r32_d64_v64/varlen_chunk.cu.dev.sm120a.o
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6411dism_varlen19varlen_delta_kernelI13__nv_bfloat16EEvPKT_PKS2_PfPKliii' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6411dism_varlen19varlen_delta_kernelI13__nv_bfloat16EEvPKT_PKS2_PfPKliii
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 26 registers, used 0 barriers
+ptxas info    : Compile time = 6.430 ms
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6411dism_varlen19varlen_delta_kernelIfEEvPKT_PK13__nv_bfloat16PfPKliii' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6411dism_varlen19varlen_delta_kernelIfEEvPKT_PK13__nv_bfloat16PfPKliii
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers, used 0 barriers
+ptxas info    : Compile time = 5.033 ms
+Build file build/object/r32_d64_v64/varlen_delta.cu.dev.sm120a.o
+ptxas info    : 8 bytes gmem
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6421varlen_forward_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen10PackedArgsINS_12dism_forward5ArgsTIXT_EEEEE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6421varlen_forward_kernelILb1E12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen10PackedArgsINS_12dism_forward5ArgsTIXT_EEEEE
+    16 bytes stack frame, 16 bytes spill stores, 48 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 160.865 ms
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6421varlen_forward_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen10PackedArgsINS_12dism_forward5ArgsTIXT_EEEEE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6421varlen_forward_kernelILb0E12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen10PackedArgsINS_12dism_forward5ArgsTIXT_EEEEE
+    16 bytes stack frame, 16 bytes spill stores, 48 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 147.985 ms
+Build file build/object/r32_d64_v64/varlen_forward.cu.dev.sm120a.o
+ptxas info    : 8 bytes gmem
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6421varlen_summary_kernelI12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen10PackedArgsINS_26TmaSummarizationKernelArgsEEE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6421varlen_summary_kernelI12KernelConfigILi32ELi64ELi64EEEEvNS_11dism_varlen10PackedArgsINS_26TmaSummarizationKernelArgsEEE
+    8 bytes stack frame, 8 bytes spill stores, 24 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 8 bytes cumulative stack size
+ptxas info    : Compile time = 122.813 ms
+Build file build/object/r32_d64_v64/varlen_summary.cu.dev.sm120a.o
+ptxas info    : 8 bytes gmem
+ptxas info    : Compiling entry function '_ZN16dism_r32_d64_v6445wmma_tma_wasp_persistent_summarization_kernelI12KernelConfigILi32ELi64ELi64EEEEvNS_26TmaSummarizationKernelArgsE' for 'sm_120a'
+ptxas info    : Function properties for _ZN16dism_r32_d64_v6445wmma_tma_wasp_persistent_summarization_kernelI12KernelConfigILi32ELi64ELi64EEEEvNS_26TmaSummarizationKernelArgsE
+    16 bytes stack frame, 20 bytes spill stores, 40 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 119.098 ms
+Build file build/object/r32_d64_v64/wmma_tma_preprocess.cu.dev.sm120a.o
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/object/r32_d64_v64/backward_chunk.cu.o
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/object/r32_d64_v64/backward_delta.cu.o
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/object/r32_d64_v64/backward_qk.cu.o
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/object/r32_d64_v64/backward_summary.cu.o
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/object/r32_d64_v64/chunk_scan.cu.o
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/object/r32_d64_v64/forward.cu.o
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/object/r32_d64_v64/varlen_backward_qk.cu.o
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/object/r32_d64_v64/varlen_backward_summary.cu.o
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/object/r32_d64_v64/varlen_chunk.cu.o
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/object/r32_d64_v64/varlen_delta.cu.o
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/object/r32_d64_v64/varlen_forward.cu.o
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/object/r32_d64_v64/varlen_summary.cu.o
+clang-23: warning: argument unused during compilation: '-Xcuda-ptxas -v' [-Wunused-command-line-argument]
+Build file build/object/r32_d64_v64/wmma_tma_preprocess.cu.o
+Build file python/cu_flash_dism.cpython-312-x86_64-linux-gnu.so
+Target python/cu_flash_dism.cpython-312-x86_64-linux-gnu.so successfully built
