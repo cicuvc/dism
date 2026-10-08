@@ -212,12 +212,17 @@ number of slots after padding each stream to chunk size C (default 16):
 
 | Part | Time/work | Space |
 |---|---|---|
-| CPU planning, including current binary-lifting LCA | `O(N log² N)` upper bound | `O(N log N)` |
+| CPU planning, in-component LCA (no binary lifting) | `O(N log N)` | `O(N)` |
 | Scalar event program | `E = O(N log N)` | `O(E_C)` |
 | Triton vector execution | `O(E_C [R DV + C(R+DV)])` | `O(E_C + N(R+DV))` global storage |
 
-For fixed C, R and DV, vector work is `O(N log N)`; the current CPU planner
-has the additional logarithmic factor. Each resident stream CTA also needs
+For fixed C, R and DV, vector work is `O(N log N)`. Each `decompose` call
+answers every `lca(v, centroid)` in `O(component)` by walking the component's
+link chain and sweeping down from its topmost node, so the CPU planner no
+longer carries the extra binary-lifting logarithmic factor. The original
+binary-lifting path is retained only as `plan_reference`, the unit-test oracle
+for `plan` (`test_sam_inference.py` asserts bit-identical `Program` arrays).
+Each resident stream CTA also needs
 an `R×DV` accumulator and chunk scratch, but there is **no persistent
 N×R×DV matrix cache**. Multiply work and storage by B×H for equal-length
 batches. Parallel workers reduce latency, not total work or memory.

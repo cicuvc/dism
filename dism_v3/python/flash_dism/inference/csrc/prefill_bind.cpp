@@ -60,4 +60,10 @@ PYBIND11_MODULE(_dism_prefill,m) {
         py::gil_scoped_release release;
         return Builder(q,k,reset,tau).finish();
     });
+    // Test oracle: the original binary-lifting LCA path, kept for regression
+    // comparison against the O(component) in-component LCA used by plan().
+    m.def("plan_reference",[](const Ids &q,const Ids &k,const Ids &reset,double tau) {
+        py::gil_scoped_release release;
+        return Builder(q,k,reset,tau,true).finish();
+    });
 }

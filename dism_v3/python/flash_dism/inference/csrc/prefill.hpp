@@ -70,8 +70,10 @@ class Builder {
     dism_decode::Planner sam;
     int n;
     double tau;
-    Ids endpoint, qnode, matched, depth, owner, parent, size;
+    bool reference_lca;
+    Ids endpoint, qnode, matched, depth, owner, parent, size, lca_node, lca_chain, lca_stack;
     std::vector<Ids> adj, up;
+    std::vector<char> on_path;
     std::vector<bool> removed;
     std::vector<Stream> streams;
 
@@ -94,6 +96,40 @@ class Builder {
         return sam.nodes[a].link;
     }
 
+    // Production path reads lca_node[]; reference_lca keeps the original
+    // binary-lifting lookup as the unit-test oracle.
+    int lca_len(int v, int c) const {
+        return reference_lca ? sam.nodes[lca(v,c)].length : sam.nodes[lca_node[v]].length;
+    }
+
+    // Only the parent-side component ever asks for lca(v,c). Walk the real link
+    // chain from c up to the component's topmost node p, then sweep downward
+    // from p; removed[c] stops the sweep before the child components, so this
+    // touches exactly the parent-side nodes. O(parent component).
+    void fill_lca(int c) {
+        lca_chain.clear();
+        for (int v=c; ; ) {
+            lca_chain.push_back(v);
+            int up=sam.nodes[v].link;
+            if (up<0 || removed[up]) break;
+            v=up;
+        }
+        for (int v: lca_chain) on_path[v]=1;
+        int p=lca_chain.back();
+        lca_node[p]=p;
+        lca_stack.clear();
+        lca_stack.push_back(p);
+        while (!lca_stack.empty()) {
+            int v=lca_stack.back(); lca_stack.pop_back();
+            for (int w: adj[v]) {
+                if (w==sam.nodes[v].link || removed[w]) continue;
+                lca_node[w] = on_path[w] ? w : lca_node[v];
+                lca_stack.push_back(w);
+            }
+        }
+        for (int v: lca_chain) on_path[v]=0;
+    }
+
     static Ids merge(const Ids &a, const Ids &b) {
         Ids out; out.reserve(a.size()+b.size());
         std::merge(a.begin(),a.end(),b.begin(),b.end(),std::back_inserter(out));
@@ -106,14 +142,14 @@ class Builder {
         Stream s;
         for (int i: queries) {
             int length = mode==3 ? matched[i] : std::min(matched[i],sam.nodes[c].length);
-            if (mode==1) length=std::min(matched[i],sam.nodes[lca(qnode[i],c)].length);
+            if (mode==1) length=std::min(matched[i],lca_len(qnode[i],c));
             double a = mode==2 ? 0. : logweight(length);
             if (a!=neg_inf) { s.q.push_back(i); s.a.push_back(a); }
         }
         if (s.q.empty()) return;
         for (int j: keys) {
             if (j>s.q.back()) break;
-            double b = mode==2 ? logweight(sam.nodes[lca(c,endpoint[j])].length) : 0.;
+            double b = mode==2 ? logweight(lca_len(endpoint[j],c)) : 0.;
             if (b!=neg_inf) { s.k.push_back(j); s.b.push_back(b); }
         }
         if (!s.k.empty()) streams.push_back(std::move(s));
@@ -161,6 +197,8 @@ class Builder {
         std::vector<Group> groups(components.size());
         for (int i:queries) groups[owner[qnode[i]]].q.push_back(i);
         for (int j:keys) groups[owner[endpoint[j]]].k.push_back(j);
+        if (!reference_lca && pg>=0 && (!groups[pg].q.empty() || !groups[pg].k.empty()))
+            fill_lca(c);
         // Keep original component lists for recursion; merged lists die here.
         {
             std::vector<Group> work=groups;
@@ -182,8 +220,8 @@ class Builder {
     }
 
   public:
-    Builder(const Ids &q, const Ids &k, const Ids &reset, double tau_)
-        : sam(1,1,1,2,0.), n(int(k.size())), tau(tau_) {
+    Builder(const Ids &q, const Ids &k, const Ids &reset, double tau_, bool reference_lca_=false)
+        : sam(1,1,1,2,0.), n(int(k.size())), tau(tau_), reference_lca(reference_lca_) {
         if (!n || q.size()!=k.size() || reset.size()!=k.size() || !std::isfinite(tau))
             throw std::invalid_argument("nonempty equal label/reset lengths and finite tau required");
         if (std::abs(tau)>std::numeric_limits<double>::max()/n)
@@ -195,20 +233,25 @@ class Builder {
             sam.extend(k[j],j,last); endpoint.push_back(last);
         }
         int count=int(sam.nodes.size());
-        adj.resize(count); depth.resize(count); owner.resize(count);
+        adj.resize(count); owner.resize(count);
         parent.resize(count); size.resize(count); removed.resize(count,false);
+        lca_node.resize(count);
+        on_path.assign(count,0);
         for (int v=1;v<count;++v) {
             int p=sam.nodes[v].link; adj[v].push_back(p); adj[p].push_back(v);
         }
-        Ids order{0};
-        for (size_t i=0;i<order.size();++i) for (int w:adj[order[i]])
-            if (w!=sam.nodes[order[i]].link) { depth[w]=depth[order[i]]+1; order.push_back(w); }
-        up.emplace_back(count);
-        for (int v=0;v<count;++v) up[0][v]=std::max(0,sam.nodes[v].link);
-        for (int64_t span=2;span<=count;span*=2) {
-            Ids table(count);
-            for (int v=0;v<count;++v) table[v]=up.back()[up.back()[v]];
-            up.push_back(std::move(table));
+        if (reference_lca) {
+            depth.resize(count);
+            Ids order{0};
+            for (size_t i=0;i<order.size();++i) for (int w:adj[order[i]])
+                if (w!=sam.nodes[order[i]].link) { depth[w]=depth[order[i]]+1; order.push_back(w); }
+            up.emplace_back(count);
+            for (int v=0;v<count;++v) up[0][v]=std::max(0,sam.nodes[v].link);
+            for (int64_t span=2;span<=count;span*=2) {
+                Ids table(count);
+                for (int v=0;v<count;++v) table[v]=up.back()[up.back()[v]];
+                up.push_back(std::move(table));
+            }
         }
         int state=0, length=0;
         for (int i=0;i<n;++i) {

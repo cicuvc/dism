@@ -140,3 +140,36 @@ def test_gpu_horizon_guard(invalid_reset):
     assert cache.step(labels, sk, sk, v).isnan().all()
     with pytest.raises(RuntimeError, match='capacity/rebuild horizon/reset'):
         cache.check_status()
+
+
+@pytest.mark.parametrize('pattern', ['random', 'repeat', 'mismatch', 'alternating'])
+@pytest.mark.parametrize('reset', [False, True])
+@pytest.mark.parametrize('tau', [0.0, 0.35, -0.2, 1.5])
+def test_prefill_lca_matches_binary_lifting(pattern, reset, tau):
+    """The O(component) in-component LCA must equal the original oracle.
+
+    `plan_reference` keeps the pre-optimization binary-lifting path; both
+    planners share every other stage, so identical Program arrays prove the
+    replacement is exact (not just numerically close).
+    """
+    from flash_dism.inference.build import load_prefill
+    n = 257
+    rng = np.random.default_rng(20240)
+    iq = rng.integers(0, 4, n).astype(np.int32)
+    ik = rng.integers(0, 4, n).astype(np.int32)
+    if pattern == 'repeat':
+        iq = np.zeros(n, np.int32)
+        ik = np.zeros(n, np.int32)
+    elif pattern == 'mismatch':
+        iq = np.zeros(n, np.int32)
+        ik = np.ones(n, np.int32)
+    elif pattern == 'alternating':
+        iq = (np.arange(n) % 2).astype(np.int32)
+        ik = iq.copy()
+    resets = (np.arange(n) % 13 == 0).astype(np.int32) if reset else np.zeros(n, np.int32)
+    module = load_prefill()
+    fast = module.plan(iq.tolist(), ik.tolist(), resets.tolist(), float(tau)).arrays()
+    slow = module.plan_reference(iq.tolist(), ik.tolist(), resets.tolist(), float(tau)).arrays()
+    for name in ('offsets', 'rows', 'decay', 'weight', 'logden'):
+        np.testing.assert_array_equal(fast[name], slow[name],
+                                      err_msg=f'{pattern} reset={reset} tau={tau} {name}')
