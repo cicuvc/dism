@@ -7,6 +7,16 @@ from .kernels.conv1d import CausalShortConv1d
 from .kernels.random_bool import triton_rand_bool
 
 
+def value_residual_mix(v, v_first, gate):
+    """v_first + (v - v_first) * sigmoid(gate), per head.
+
+    v, v_first: [B, N, H, DV]; gate: [B, N, H].
+    """
+    g = torch.sigmoid(gate.float()).unsqueeze(-1)
+    mixed = v_first.float() + (v.float() - v_first.float()) * g
+    return mixed.to(v.dtype)
+
+
 def _salt_hard_seed(seed, layer_idx):
     """XOR with a SplitMix64 layer salt; tensor seeds stay on their device."""
     if layer_idx is None:
@@ -40,7 +50,8 @@ class DismAttention(nn.Module):
 
     def __init__(self, width, heads, *, head_dim=64, value_dim=64,
                  readout_dim=32, vocab_size=512, conv_size=4, layer_idx=None,
-                 rope_theta=10000.0, qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False):
+                 rope_theta=10000.0, qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
+                 value_residual=False):
         super().__init__()
         if min(width, heads, vocab_size, conv_size) <= 0:
             raise ValueError("width, heads, vocab_size and conv_size must be positive")
@@ -78,6 +89,11 @@ class DismAttention(nn.Module):
         self.g_proj_up = nn.Linear(max(1, width // 8), heads * value_dim)
         self.norm = FusedRMSNormGated(value_dim, eps=1e-5)
         self.o_proj = nn.Linear(heads * value_dim, width)
+        self.value_residual = bool(value_residual)
+        if self.value_residual:
+            # Per-head, data-dependent gate: v_first + (v - v_first) * sigmoid(g).
+            self.v_residual_gate = nn.Linear(width, heads)
+            self.v_residual_gate._value_residual_gate = True
 
     def _rotary_tables(self, length, device, *, offset=0, dtype=torch.float32, dimension=None):
         """Split-half RoPE tables for the hybrid SWA branch."""
@@ -88,7 +104,7 @@ class DismAttention(nn.Module):
         phase = positions[:, None] * frequencies[None, :]
         return phase.cos(), phase.sin()
 
-    def _combine_cuda(self, output, x, v, cu_seqlens, max_seqlen):
+    def _combine_cuda(self, output, x, v, cu_seqlens, max_seqlen, v_first=None):
         return output
 
     def _activate_readout(self, projected, *, is_key=False):
@@ -119,6 +135,7 @@ class DismAttention(nn.Module):
         last_state = get_layer_cache(self, past_key_values)
         options = {name: kwargs.get(name) for name in
                    ('hard_prob', 'direction', 'hard', 'hard_seed', 'generator')}
+        v_first = kwargs.get('v_first')
         probability = options['hard_prob']
         probability = (0.0 if self.training else 1.0) if probability is None else float(probability)
         if options['hard'] is None and options['hard_seed'] is not None and probability not in (0.0, 1.0):
@@ -140,6 +157,8 @@ class DismAttention(nn.Module):
         else:
             mask = None
         if torch_path:
+            if v_first is not None:
+                raise NotImplementedError("value residual is only implemented for packed CUDA training/eval")
             if cu_seqlens is not None or (mask is not None and not bool(mask.all())):
                 raise NotImplementedError("Torch cached decoding currently requires equal-length unpadded batches")
             from .decoding import forward_torch
@@ -163,14 +182,15 @@ class DismAttention(nn.Module):
                 if direction.shape != (batch, self.heads) or not torch.equal(direction, direction[:1].expand_as(direction)):
                     raise ValueError("packed attention_mask path requires the same direction across batch")
                 options['direction'] = direction[:1].contiguous()
-        output = self._forward_cuda(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, **options)
+        output = self._forward_cuda(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, v_first=v_first, **options)
         if indices is not None:
             from fla.layers.utils import pad_input
             output = pad_input(output.squeeze(0), indices, batch, length)
         return output, None, past_key_values
 
     def _forward_cuda(self, x, hard_prob=None, *, direction=None, hard=None,
-                hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None):
+                hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None,
+                v_first=None):
         """Default: soft training, hard evaluation; explicit flags override sampling.
 
         direction: bool [B,H] (True selects k-to-qemb, the query-LSE path).
@@ -241,6 +261,8 @@ class DismAttention(nn.Module):
         q = project(self.q_conv, self.head_dim)
         k = project(self.k_conv, self.head_dim)
         v = project(self.v_conv, self.value_dim)
+        if self.value_residual and v_first is not None:
+            v = value_residual_mix(v, v_first, self.v_residual_gate(x))
         if q.dtype != torch.bfloat16:
             raise ValueError("use CUDA BF16 autocast; the production kernels require BF16")
         sq = self._activate_readout(self.sq_proj(x))
@@ -255,7 +277,7 @@ class DismAttention(nn.Module):
         else:
             output = voc_dism(q, k, sq, sk, v, eq, ek, tau,
                               direction=direction, hard=hard, layout=layout)
-        output = self._combine_cuda(output, x, v, cu_seqlens, max_seqlen)
+        output = self._combine_cuda(output, x, v, cu_seqlens, max_seqlen, v_first=v_first)
         gate = self.g_proj_up(self.g_proj_down(x)).reshape(batch, length, self.heads, self.value_dim)
         if compiling:
             # Let Inductor fuse this expression. FLA's current custom backward

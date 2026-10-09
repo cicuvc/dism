@@ -13,6 +13,13 @@ from flash_dism.kernels.linear_rmsnorm_rope import FusedLinearRMSNormRoPE
 from flash_dism.kernels.fused_cross_entropy import fused_cross_entropy, fused_cross_entropy_unreduced
 
 
+@torch.compiler.disable
+def _gdn_value_first(attn, x, cu_seqlens, max_seqlen):
+    """Value vector of the first GDN mixer, reused by later layers (value residual)."""
+    return attn.gdn_v_conv(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen).unflatten(
+        -1, (attn.heads, attn.value_dim))
+
+
 @triton.jit
 def _flags(hard, direction, counter, probability, N: tl.constexpr, H: tl.constexpr,
            SEED: tl.constexpr, BLOCK: tl.constexpr):
@@ -65,6 +72,7 @@ class DismLM(nn.Module):
                         attention_type=attention_type, window_size=config.window_size,
                         vocab_size=config.vocab_size, bos_token_id=1, eos_token_id=2,
                         soft_k_l2_norm=config.soft_k_l2_norm,
+                        value_residual=config.value_residual,
                         post_norm=config.post_norm)
         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
         if config.alternating_gdn or config.rear_half_dism:
@@ -81,6 +89,8 @@ class DismLM(nn.Module):
             self.layers=nn.ModuleList(blocks)
         else:
             self.layers = nn.ModuleList(DismBlock(c, i) for i in range(config.n_layer))
+        if config.value_residual and not getattr(self.layers[0].attn, "is_pure_gdn", False):
+            raise ValueError('value_residual requires a GDN-only first mixer layer')
         self._tie_vocabularies()
         self.norm = nn.RMSNorm(config.n_embd, eps=1e-6)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -156,6 +166,11 @@ class DismLM(nn.Module):
         self.training_step.zero_()
         self.rng_counter.zero_()
         self.hard_probability.zero_()
+        if getattr(self.config, 'value_residual', False):
+            gate_bias = float(getattr(self.config, 'value_residual_gate_bias', 2.0))
+            for module in self.modules():
+                if getattr(module, '_value_residual_gate', False):
+                    nn.init.constant_(module.bias, gate_bias)
 
     @torch.no_grad()
     def set_training_step(self, step):
@@ -208,9 +223,16 @@ class DismLM(nn.Module):
                     self.rng_counter.add_(1)
                 else:
                     counter = paired_counter
+            v_first = None
             for i, layer in enumerate(self.layers):
                 if getattr(layer.attn,"is_pure_gdn",False):
-                    x=layer(x,cu_seqlens=cu_seqlens,max_seqlen=self.config.sequence_len,use_cache=False)
+                    if self.config.value_residual and v_first is None:
+                        v_first = _gdn_value_first(layer.attn, x, cu_seqlens, self.config.sequence_len)
+                        x=layer(x,cu_seqlens=cu_seqlens,max_seqlen=self.config.sequence_len,use_cache=False)
+                    elif self.config.value_residual:
+                        x=layer(x,cu_seqlens=cu_seqlens,max_seqlen=self.config.sequence_len,use_cache=False,v_first=v_first)
+                    else:
+                        x=layer(x,cu_seqlens=cu_seqlens,max_seqlen=self.config.sequence_len,use_cache=False)
                     continue
                 if self.training:
                     hard, direction = sample_flags(counter, self.hard_probability,
@@ -230,8 +252,12 @@ class DismLM(nn.Module):
                         hard = row_hard.unsqueeze(-1).expand(1,self.config.n_head,batch,length).reshape(1,self.config.n_head,batch*length).contiguous()
                 if self.training and hard_mode is not None:
                     hard = torch.full_like(hard, hard_mode)
-                x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
-                          hard=hard, direction=direction, use_cache=False)
+                if self.config.value_residual:
+                    x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
+                              hard=hard, direction=direction, use_cache=False, v_first=v_first)
+                else:
+                    x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
+                              hard=hard, direction=direction, use_cache=False)
             x = self.norm(x).to(torch.bfloat16)
             if targets is not None and loss_reduction == 'mean':
                 # nanochat targets are ALREADY shifted, unlike HF labels.

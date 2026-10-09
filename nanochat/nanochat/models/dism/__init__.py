@@ -37,6 +37,8 @@ class DismConfig:
     soft_k_l2_norm: bool = False
     split_branch_output: bool = False
     hard_prob_max: float = 1.0  # Preserve old checkpoint semantics; new runs explicitly set .95.
+    value_residual: bool = False
+    value_residual_gate_bias: float = 2.0
 
 
 def _build(config):
