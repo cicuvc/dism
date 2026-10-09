@@ -45,6 +45,7 @@ class DismConfig:
     vocab_transvq_lite: bool = False
     vocab_transvq_map: str = "linear_attn"
     vocab_transvq_rank: int = 4
+    vocab_transvq_separate_qk: bool = False
 
 
 def _build(config):

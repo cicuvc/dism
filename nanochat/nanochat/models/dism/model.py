@@ -138,7 +138,10 @@ class DismLM(nn.Module):
                 attn.k_vocab = first_hybrid.k_vocab
             if self.config.vocab_share_qk:
                 attn.k_vocab = attn.q_vocab
-                if getattr(attn, "q_vocab_map", None) is not None:
+                # Share the base table but keep separate q/k maps if requested
+                # (C_q = H_q C, C_k = H_k C for different drift directions).
+                if (getattr(attn, "q_vocab_map", None) is not None
+                        and not getattr(self.config, "vocab_transvq_separate_qk", False)):
                     attn.k_vocab_map = attn.q_vocab_map
             attn.q_vocab._no_weight_decay = True
             attn.k_vocab._no_weight_decay = True
