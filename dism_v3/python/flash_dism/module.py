@@ -18,27 +18,45 @@ def value_residual_mix(v, v_first, gate):
 
 
 class TransVQMap(nn.Module):
-    """TransVQ codebook map P_phi: one transformer layer over the V codewords.
+    """TransVQ codebook map P_phi: one linear-attention transformer layer.
 
     The base codebook is a frozen reference; only this map is trained, so the
-    embedding loss updates every transformed codeword through attention and the
-    codebook does not collapse (arXiv 2602.18896, \"TransVQ\").
+    embedding loss updates every transformed codeword and the codebook does not
+    collapse (arXiv 2602.18896, \"TransVQ\"). Linear attention keeps the codebook
+    interaction bounded, and an output RMSNorm with elementwise scaling bounds the
+    magnitude of the transformed codebook.
     """
 
-    def __init__(self, dim, mlp_ratio=2.0, nhead=1, dropout=0.0):
+    def __init__(self, dim, mlp_ratio=2.0, dropout=0.0):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
-        self.attn = nn.MultiheadAttention(dim, nhead, dropout=dropout, batch_first=True)
+        self.q_proj = nn.Linear(dim, dim, bias=False)
+        self.k_proj = nn.Linear(dim, dim, bias=False)
+        self.v_proj = nn.Linear(dim, dim, bias=False)
+        self.out_proj = nn.Linear(dim, dim, bias=False)
         self.norm2 = nn.LayerNorm(dim)
         hidden = max(1, int(dim * mlp_ratio))
         self.mlp = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim))
+        self.out_norm = nn.RMSNorm(dim)  # elementwise learnable scale at the exit
+
+    @staticmethod
+    def _feature(x):
+        return torch.nn.functional.elu(x) + 1.0
 
     def forward(self, codebook):
-        # codebook: [heads, V, dim]; self-attention runs over V per head.
+        # codebook: [heads, V, dim]; linear attention runs over V per head.
         h = self.norm1(codebook)
-        attn, _ = self.attn(h, h, h, need_weights=False)
+        q = self._feature(self.q_proj(h))
+        k = self._feature(self.k_proj(h))
+        v = self.v_proj(h)
+        kv = torch.einsum("hvd,hve->hde", k, v)
+        normalizer = k.sum(dim=1)
+        numerator = torch.einsum("hvd,hde->hve", q, kv)
+        denominator = torch.einsum("hvd,hd->hv", q, normalizer).unsqueeze(-1)
+        attn = self.out_proj(numerator / (denominator + 1e-6))
         x = codebook + attn
-        return x + self.mlp(self.norm2(x))
+        x = x + self.mlp(self.norm2(x))
+        return self.out_norm(x)
 
 
 def _salt_hard_seed(seed, layer_idx):
