@@ -50,6 +50,13 @@ from nanochat.tokenizer import (
 )
 from nanochat.checkpoint_manager import save_checkpoint, load_checkpoint, load_rank_training_state
 from nanochat.loss_eval import evaluate_bpb, evaluate_hard_soft
+from nanochat.metrics import (
+    register_residual_rms_probe,
+    remove_probe,
+    snapshot_parameters,
+    update_rms_max_per_group,
+    probe_qk_vocab_usage,
+)
 from nanochat.engine import Engine
 from nanochat.flash_attention import HAS_FA3, HAS_FA2
 from scripts.base_eval import evaluate_core
@@ -107,6 +114,11 @@ parser.add_argument("--core-metric-every", type=int, default=2000, help="evaluat
 parser.add_argument("--core-metric-max-per-task", type=int, default=500, help="examples per task for CORE metric")
 parser.add_argument("--sample-every", type=int, default=2000, help="sample from model every N steps (-1 = disable)")
 parser.add_argument("--save-every", type=int, default=-1, help="save checkpoints every N steps (-1 = only at end)")
+# Diagnostics
+parser.add_argument("--log-every", type=int, default=1, help="log training metrics to wandb every N steps")
+parser.add_argument("--log-update-rms", action=argparse.BooleanOptionalAction, default=True, help="log per-layer max optimizer update RMS")
+parser.add_argument("--log-hidden-rms", action=argparse.BooleanOptionalAction, default=True, help="log per-layer max residual-stream RMS")
+parser.add_argument("--qk-hist-every", type=int, default=500, help="log DISM q/k codebook selection stats every N steps (-1 = disable)")
 # Output
 parser.add_argument("--model-tag", type=str, default=None, help="override model tag for checkpoint directory name")
 args = parser.parse_args()
@@ -364,6 +376,10 @@ def disable_fp8(model):
 # Compile the model
 
 orig_model = model # original, uncompiled model, for saving raw model state_dict and for inference/evaluation (because the shapes may change shape)
+if args.log_hidden_rms:
+    hidden_rms_handles, hidden_rms_buffer = register_residual_rms_probe(orig_model)
+else:
+    hidden_rms_handles, hidden_rms_buffer = [], None
 if getattr(orig_model, 'dynamic_compile', False):
     from torch.fx.experimental import _config as shape_config
     shape_config.use_duck_shape = False
@@ -818,11 +834,14 @@ while True:
     grad_norm_f = grad_norm.item()
     if not math.isfinite(grad_norm_f):
         raise FloatingPointError(f"Non-finite gradient norm at step {step}: {grad_norm_f}")
+    log_this_step = step % args.log_every == 0
+    update_snapshot = snapshot_parameters(orig_model) if (args.log_update_rms and log_this_step) else None
     if scaler is not None:
         scaler.step(optimizer)
         scaler.update()
     else:
         optimizer.step()
+    update_rms = update_rms_max_per_group(orig_model, update_snapshot) if update_snapshot is not None else {}
     model.zero_grad(set_to_none=True)
     train_loss_f = train_loss.item() # .item() is a CPU-GPU sync point
     synchronize()
@@ -853,9 +872,7 @@ while True:
         eta_str = ""
     epoch = f"{dataloader_state_dict['epoch']} pq: {dataloader_state_dict['pq_idx']} rg: {dataloader_state_dict['rg_idx']}"
     print0(f"step {step:05d}/{num_iterations:05d} ({pct_done:.2f}%) | loss: {debiased_smooth_loss:.6f} | grad norm: {grad_norm_f:.6f} | lrm: {lrm:.2f} | dt: {dt * 1000:.2f}ms | tok/sec: {tok_per_sec:,} | bf16_mfu: {mfu:.2f} | epoch: {epoch} | total time: {total_training_time/60:.2f}m{eta_str}")
-    if step % 100 == 0:
-        if hasattr(orig_model, "hard_probability"):
-            wandb_run.log({"step": step, "train/hard_probability": orig_model.hard_probability.item()})
+    if log_this_step:
         log_data = {
             "step": step,
             "total_training_flops": flops_so_far,
@@ -869,10 +886,28 @@ while True:
             "train/mfu": mfu,
             "train/epoch": epoch,
         }
+        if hasattr(orig_model, "hard_probability"):
+            log_data["train/hard_probability"] = orig_model.hard_probability.item()
         if args.dual_path_loss:
             log_data['train/hard_loss_weight'] = alpha
             for key,value in path_losses.items():
                 log_data['train/'+key+'_path_loss'] = value.item()
+        for key, value in update_rms.items():
+            log_data[f"train/update_rms_max/{key}"] = value
+        if hidden_rms_buffer is not None:
+            for layer_index, value in enumerate(hidden_rms_buffer.tolist()):
+                log_data[f"train/hidden_rms_max/layer{layer_index:02d}"] = value
+        if args.qk_hist_every > 0 and step % args.qk_hist_every == 0:
+            qk_stats = probe_qk_vocab_usage(orig_model, x, cu_seqlens, args.max_seq_len)
+            for layer_index, tags in qk_stats.items():
+                for tag, stats in tags.items():
+                    prefix = f"qk/{tag}"
+                    log_data[f"{prefix}_entropy/layer{layer_index:02d}"] = stats["entropy"]
+                    log_data[f"{prefix}_max_share/layer{layer_index:02d}"] = stats["max_share"]
+                    log_data[f"{prefix}_coverage/layer{layer_index:02d}"] = stats["coverage"]
+                    counts = np.asarray(stats["counts"], dtype=np.float64)
+                    log_data[f"{prefix}_hist/layer{layer_index:02d}"] = wandb.Histogram(
+                        np_histogram=(counts, np.arange(counts.size + 1)))
         wandb_run.log(log_data)
 
     # state update
@@ -896,6 +931,8 @@ if val_bpb is not None:
     print0(f"Minimum validation bpb: {min_val_bpb:.6f}")
 
 # cleanup
+if hidden_rms_handles:
+    remove_probe(hidden_rms_handles)
 if hasattr(train_loader, 'close'):
     train_loader.close()
 wandb_run.finish() # wandb run finish
