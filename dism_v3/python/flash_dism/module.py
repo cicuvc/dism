@@ -52,8 +52,9 @@ class TransVQMap(nn.Module):
         kv = torch.einsum("hvd,hve->hde", k, v)
         normalizer = k.sum(dim=1)
         numerator = torch.einsum("hvd,hde->hve", q, kv)
-        denominator = torch.einsum("hvd,hd->hv", q, normalizer).unsqueeze(-1)
-        attn = self.out_proj(numerator / (denominator + 1e-6))
+        # 1 + sum_j (q_i . k_j) keeps the denominator >= 1; numerators unchanged.
+        denominator = 1.0 + torch.einsum("hvd,hd->hv", q, normalizer).unsqueeze(-1)
+        attn = self.out_proj(numerator / denominator)
         x = codebook + attn
         x = x + self.mlp(self.norm2(x))
         return self.out_norm(x)
