@@ -39,6 +39,8 @@ class DismConfig:
     hard_prob_max: float = 1.0  # Preserve old checkpoint semantics; new runs explicitly set .95.
     value_residual: bool = False
     value_residual_gate_bias: float = 2.0
+    conv_impl: str = "fused"
+    conv_backend: str = "cuda"
 
 
 def _build(config):

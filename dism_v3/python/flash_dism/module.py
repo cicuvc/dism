@@ -249,7 +249,7 @@ class DismAttention(nn.Module):
                                       dtype=torch.int32).bool().expand(batch, self.heads).contiguous()
 
         def project(convolution, channels):
-            if compiling:
+            if compiling and not getattr(convolution, "bypass_compiled_conv", False):
                 from .compiler import conv_forward
                 dtype = torch.bfloat16 if torch.is_autocast_enabled('cuda') else x.dtype
                 values = conv_forward(x.to(dtype), convolution.weight.to(dtype),

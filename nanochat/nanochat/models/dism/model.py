@@ -10,6 +10,7 @@ from flash_dism import DismConfig as FlashConfig
 from flash_dism.modeling_dism import DismBlock
 from flash_dism.kernels.conv1d import CausalShortConv1d
 from flash_dism.kernels.linear_rmsnorm_rope import FusedLinearRMSNormRoPE
+from .conv import LinearShortConvSiLU
 from flash_dism.kernels.fused_cross_entropy import fused_cross_entropy, fused_cross_entropy_unreduced
 
 
@@ -18,6 +19,15 @@ def _gdn_value_first(attn, x, cu_seqlens, max_seqlen):
     """Value vector of the first GDN mixer, reused by later layers (value residual)."""
     return attn.gdn_v_conv(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen).unflatten(
         -1, (attn.heads, attn.value_dim))
+
+
+def _replace_convs_with_linear_fla(model, backend):
+    """Swap the fused Triton short conv for torch Linear + FLA ShortConvolution."""
+    for parent in model.modules():
+        for name, child in list(parent.named_children()):
+            if isinstance(child, CausalShortConv1d):
+                setattr(parent, name, LinearShortConvSiLU(
+                    child.in_channels, child.out_channels, child.kernel_size, backend))
 
 
 @triton.jit
@@ -91,6 +101,10 @@ class DismLM(nn.Module):
             self.layers = nn.ModuleList(DismBlock(c, i) for i in range(config.n_layer))
         if config.value_residual and not getattr(self.layers[0].attn, "is_pure_gdn", False):
             raise ValueError('value_residual requires a GDN-only first mixer layer')
+        if config.conv_impl not in ("fused", "linear_fla"):
+            raise ValueError(f"unsupported conv_impl {config.conv_impl!r}")
+        if config.conv_impl == "linear_fla":
+            _replace_convs_with_linear_fla(self, config.conv_backend)
         self._tie_vocabularies()
         self.norm = nn.RMSNorm(config.n_embd, eps=1e-6)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -133,7 +147,7 @@ class DismLM(nn.Module):
     def init_weights(self):
         initialized_weights = set()
         for m in self.modules():
-            if isinstance(m, (nn.Linear, nn.Embedding, CausalShortConv1d, FusedLinearRMSNormRoPE)):
+            if isinstance(m, (nn.Linear, nn.Embedding, CausalShortConv1d, FusedLinearRMSNormRoPE, LinearShortConvSiLU)):
                 if id(m.weight) not in initialized_weights:
                     nn.init.normal_(m.weight, std=.02)
                     initialized_weights.add(id(m.weight))
@@ -141,6 +155,8 @@ class DismLM(nn.Module):
                     nn.init.zeros_(m.bias)
             if isinstance(m, CausalShortConv1d):
                 nn.init.uniform_(m.conv_weight, -1/math.sqrt(m.kernel_size), 1/math.sqrt(m.kernel_size))
+            if isinstance(m, LinearShortConvSiLU):
+                nn.init.uniform_(m.conv.weight, -1/math.sqrt(m.kernel_size), 1/math.sqrt(m.kernel_size))
             if isinstance(m, FusedLinearRMSNormRoPE):
                 nn.init.ones_(m.rms_weight)
             if isinstance(m, nn.RMSNorm):
