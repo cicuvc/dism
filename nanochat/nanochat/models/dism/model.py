@@ -198,6 +198,17 @@ class DismLM(nn.Module):
             for module in self.modules():
                 if getattr(module, '_value_residual_gate', False):
                     nn.init.constant_(module.bias, gate_bias)
+        if getattr(self.config, 'vocab_transvq', False):
+            # Initialize the map's exit RMSNorm elementwise factor so the transformed
+            # codebook RMS matches the base codebook RMS instead of being normalized to 1.
+            for layer in self.layers:
+                attn = layer.attn
+                if getattr(attn, 'q_vocab_map', None) is None:
+                    continue
+                base_rms = attn.q_vocab.detach().float().pow(2).mean().sqrt()
+                for mapper in (attn.q_vocab_map, getattr(attn, 'k_vocab_map', None)):
+                    if mapper is not None and getattr(mapper, 'out_norm', None) is not None:
+                        mapper.out_norm.weight.fill_(base_rms)
 
     @torch.no_grad()
     def set_training_step(self, step):
@@ -226,16 +237,26 @@ class DismLM(nn.Module):
         return 6*self.scaling_parameter_count() + 12*self.config.n_layer*self.config.n_head*64*self.config.sequence_len
 
     def setup_pretraining_optimizer(self, config):
-        decay, no_decay = [], []
+        decay, no_decay, map_decay, map_no_decay = [], [], [], []
         for name, p in self.named_parameters():
+            if 'vocab_map' in name:
+                # TransVQ map is a training-time reparameterization; lock its LR to
+                # 1/5 of the main matrix LR to keep the codebook moving slowly.
+                (map_no_decay if p.ndim < 2 else map_decay).append(p)
+                continue
             exempt = (p.ndim < 2 or name.endswith(('.bias', 'q_vocab', 'k_vocab', 'log_sel_tau', 'rms_weight'))
                       or getattr(p, '_no_weight_decay', False))
             (no_decay if exempt else decay).append(p)
         groups = [dict(params=decay, weight_decay=config.weight_decay, kind='adamw'),
                   dict(params=no_decay, weight_decay=0., kind='adamw')]
+        if map_decay or map_no_decay:
+            groups += [dict(params=map_decay, weight_decay=config.weight_decay, kind='adamw', lr_scale=0.2),
+                       dict(params=map_no_decay, weight_decay=0., kind='adamw', lr_scale=0.2)]
         optimizer = torch.optim.AdamW(groups, lr=config.matrix_lr, betas=(.9, .95), eps=1e-8,
                                      fused=self.get_device().type == 'cuda')
         for g in optimizer.param_groups:
+            if 'lr_scale' in g:
+                g['lr'] = config.matrix_lr * g['lr_scale']
             g['initial_lr'] = g['lr']
         return optimizer
 

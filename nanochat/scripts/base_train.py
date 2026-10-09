@@ -114,6 +114,7 @@ parser.add_argument("--core-metric-every", type=int, default=2000, help="evaluat
 parser.add_argument("--core-metric-max-per-task", type=int, default=500, help="examples per task for CORE metric")
 parser.add_argument("--sample-every", type=int, default=2000, help="sample from model every N steps (-1 = disable)")
 parser.add_argument("--save-every", type=int, default=-1, help="save checkpoints every N steps (-1 = only at end)")
+parser.add_argument("--grad-clip", type=float, default=float("inf"), help="clip global gradient norm to this value (inf = no clipping)")
 # Diagnostics
 parser.add_argument("--log-every", type=int, default=1, help="log training metrics to wandb every N steps")
 parser.add_argument("--log-update-rms", action=argparse.BooleanOptionalAction, default=True, help="log per-layer max optimizer update RMS")
@@ -821,7 +822,7 @@ while True:
         if is_ddp_initialized():
             for v in scaler._found_inf_per_device(optimizer).values():
                 dist.all_reduce(v, op=dist.ReduceOp.MAX)
-    grad_norm = torch.nn.utils.clip_grad_norm_(orig_model.parameters(), max_norm=float("inf"))
+    grad_norm = torch.nn.utils.clip_grad_norm_(orig_model.parameters(), max_norm=args.grad_clip)
     if args.dual_path_loss and step % 100 == 0:
         group_sq = {}
         for name,p in orig_model.named_parameters():
