@@ -43,6 +43,8 @@ class DismConfig:
     conv_backend: str = "cuda"
     vocab_transvq: bool = False
     vocab_transvq_lite: bool = False
+    vocab_transvq_map: str = "linear_attn"
+    vocab_transvq_rank: int = 4
 
 
 def _build(config):

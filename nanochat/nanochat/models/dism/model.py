@@ -89,6 +89,8 @@ class DismLM(nn.Module):
                         value_residual=config.value_residual,
                         vocab_transvq=getattr(config, "vocab_transvq", False),
                         vocab_transvq_lite=getattr(config, "vocab_transvq_lite", False),
+                        vocab_transvq_map=getattr(config, "vocab_transvq_map", "linear_attn"),
+                        vocab_transvq_rank=getattr(config, "vocab_transvq_rank", 4),
                         post_norm=config.post_norm)
         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
         if config.alternating_gdn or config.rear_half_dism:
@@ -208,7 +210,15 @@ class DismLM(nn.Module):
                     continue
                 base_rms = attn.q_vocab.detach().float().pow(2).mean().sqrt()
                 for mapper in (attn.q_vocab_map, getattr(attn, 'k_vocab_map', None)):
-                    if mapper is not None and getattr(mapper, 'out_norm', None) is not None:
+                    if mapper is None:
+                        continue
+                    if hasattr(mapper, 'u'):
+                        nn.init.normal_(mapper.u, std=0.02)
+                        nn.init.normal_(mapper.v, std=0.02)
+                        nn.init.ones_(mapper.s)
+                    elif getattr(mapper, 'kind', None) == 'diagonal':
+                        nn.init.ones_(mapper.s)
+                    if getattr(mapper, 'out_norm', None) is not None:
                         mapper.out_norm.weight.fill_(base_rms)
 
     @torch.no_grad()

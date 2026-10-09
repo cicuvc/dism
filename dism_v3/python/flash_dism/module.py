@@ -18,51 +18,74 @@ def value_residual_mix(v, v_first, gate):
 
 
 class TransVQMap(nn.Module):
-    """TransVQ codebook map P_phi: one linear-attention transformer layer.
+    """TransVQ codebook map P_phi: a shared, dense-Jacobian transform of the codebook.
 
-    The base codebook is a frozen reference; only this map is trained, so the
-    embedding loss updates every transformed codeword and the codebook does not
-    collapse (arXiv 2602.18896, \"TransVQ\"). Linear attention keeps the codebook
-    interaction bounded, and an output RMSNorm with elementwise scaling bounds the
-    magnitude of the transformed codebook.
+    The base codebook is a frozen reference; only the map is trained, so every
+    codeword receives gradient through the map's dense Jacobian and the codebook
+    does not collapse. ``kind`` selects the transform:
+      - "linear_attn": one linear-attention layer over the V codewords.
+      - "rank": C' = C + U (V^T C) with U,V in R^{V x rank}; low-rank dense
+                cross-codeword mixing shared across heads.
+      - "diagonal": C' = C * s (per-dimension scale; NO cross-codeword coupling,
+                a negative control for the kernel hypothesis).
+      - "frozen_random": as "rank" but U,V are frozen random; only s is learned.
+    An output RMSNorm with elementwise scaling sets the exit scale.
     """
 
-    def __init__(self, dim, mlp_ratio=2.0, dropout=0.0, lite=False):
+    def __init__(self, dim, vocab, mlp_ratio=2.0, dropout=0.0, lite=False,
+                 kind="linear_attn", rank=4):
         super().__init__()
-        self.lite = bool(lite)
-        self.norm1 = nn.LayerNorm(dim)
-        self.q_proj = nn.Linear(dim, dim, bias=False)
-        self.k_proj = nn.Linear(dim, dim, bias=False)
-        self.q_norm = nn.RMSNorm(dim)  # q = norm(silu(linear(h)))
-        self.k_norm = nn.RMSNorm(dim)
-        if not self.lite:
-            self.v_proj = nn.Linear(dim, dim, bias=False)
-            self.out_proj = nn.Linear(dim, dim, bias=False)
-            self.norm2 = nn.LayerNorm(dim)
-            hidden = max(1, int(dim * mlp_ratio))
-            self.mlp = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim))
-        self.out_norm = nn.RMSNorm(dim)  # elementwise learnable scale at the exit
+        self.kind = str(kind)
+        self.rank = int(rank)
+        self.out_norm = nn.RMSNorm(dim)
+        if self.kind == "linear_attn":
+            self.lite = bool(lite)
+            self.norm1 = nn.LayerNorm(dim)
+            self.q_proj = nn.Linear(dim, dim, bias=False)
+            self.k_proj = nn.Linear(dim, dim, bias=False)
+            self.q_norm = nn.RMSNorm(dim)
+            self.k_norm = nn.RMSNorm(dim)
+            if not self.lite:
+                self.v_proj = nn.Linear(dim, dim, bias=False)
+                self.out_proj = nn.Linear(dim, dim, bias=False)
+                self.norm2 = nn.LayerNorm(dim)
+                hidden = max(1, int(dim * mlp_ratio))
+                self.mlp = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim))
+        elif self.kind in ("rank", "frozen_random"):
+            self.u = nn.Parameter(torch.randn(vocab, self.rank) * 0.02)
+            self.v = nn.Parameter(torch.randn(vocab, self.rank) * 0.02)
+            self.s = nn.Parameter(torch.ones(self.rank))
+            if self.kind == "frozen_random":
+                self.u.requires_grad_(False)
+                self.v.requires_grad_(False)
+        elif self.kind == "diagonal":
+            self.s = nn.Parameter(torch.ones(dim))
+        else:
+            raise ValueError(f"unknown vocab_transvq_map kind {kind!r}")
 
     def forward(self, codebook):
-        # codebook: [heads, V, dim]; linear attention runs over V per head.
-        # Feature map is elu(x)+1 (non-negative), then an RMSNorm on q and k;
-        # non-negative features keep the linear-attention denominator positive.
-        h = self.norm1(codebook)
-        q = self.q_norm(F.elu(self.q_proj(h)) + 1.0)
-        k = self.k_norm(F.elu(self.k_proj(h)) + 1.0)
-        v = h if self.lite else self.v_proj(h)
-        kv = torch.einsum("hvd,hve->hde", k, v)
-        normalizer = k.sum(dim=1)
-        numerator = torch.einsum("hvd,hde->hve", q, kv)
-        # 1 + sum_j (q_i . k_j) keeps the denominator >= 1; numerators unchanged.
-        denominator = 1.0 + torch.einsum("hvd,hd->hv", q, normalizer).unsqueeze(-1)
-        attn = numerator / denominator
-        if not self.lite:
-            attn = self.out_proj(attn)
-        x = codebook + attn
-        if not self.lite:
-            x = x + self.mlp(self.norm2(x))
-        return self.out_norm(x)
+        # codebook: [heads, V, dim]
+        if self.kind == "linear_attn":
+            h = self.norm1(codebook)
+            q = self.q_norm(F.elu(self.q_proj(h)) + 1.0)
+            k = self.k_norm(F.elu(self.k_proj(h)) + 1.0)
+            v = h if self.lite else self.v_proj(h)
+            kv = torch.einsum("hvd,hve->hde", k, v)
+            normalizer = k.sum(dim=1)
+            numerator = torch.einsum("hvd,hde->hve", q, kv)
+            denominator = 1.0 + torch.einsum("hvd,hd->hv", q, normalizer).unsqueeze(-1)
+            attn = numerator / denominator
+            if not self.lite:
+                attn = self.out_proj(attn)
+            x = codebook + attn
+            if not self.lite:
+                x = x + self.mlp(self.norm2(x))
+            return self.out_norm(x)
+        if self.kind in ("rank", "frozen_random"):
+            projected = torch.einsum("vr,hvd->hrd", self.v, codebook)
+            mixed = torch.einsum("vr,hrd->hvd", self.u * self.s, projected)
+            return self.out_norm(codebook + mixed)
+        return self.out_norm(codebook * self.s)
 
 
 def _salt_hard_seed(seed, layer_idx):
@@ -99,7 +122,8 @@ class DismAttention(nn.Module):
     def __init__(self, width, heads, *, head_dim=64, value_dim=64,
                  readout_dim=32, vocab_size=512, conv_size=4, layer_idx=None,
                  rope_theta=10000.0, qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
-                 value_residual=False, vocab_transvq=False, vocab_transvq_lite=False):
+                 value_residual=False, vocab_transvq=False, vocab_transvq_lite=False,
+                 vocab_transvq_map="linear_attn", vocab_transvq_rank=4):
         super().__init__()
         if min(width, heads, vocab_size, conv_size) <= 0:
             raise ValueError("width, heads, vocab_size and conv_size must be positive")
@@ -145,8 +169,10 @@ class DismAttention(nn.Module):
         self.vocab_transvq = bool(vocab_transvq)
         if self.vocab_transvq:
             # C' = P_phi(C): train only the map, keep the base codebook frozen.
-            self.q_vocab_map = TransVQMap(head_dim, lite=vocab_transvq_lite)
-            self.k_vocab_map = TransVQMap(head_dim, lite=vocab_transvq_lite)
+            self.q_vocab_map = TransVQMap(head_dim, vocab_size, lite=vocab_transvq_lite,
+                                          kind=vocab_transvq_map, rank=vocab_transvq_rank)
+            self.k_vocab_map = TransVQMap(head_dim, vocab_size, lite=vocab_transvq_lite,
+                                          kind=vocab_transvq_map, rank=vocab_transvq_rank)
             self.q_vocab.requires_grad_(False)
             self.k_vocab.requires_grad_(False)
 

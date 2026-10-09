@@ -13,6 +13,7 @@ class DismConfig(PretrainedConfig):
                  value_residual=False,
                  vocab_transvq=False,
                  vocab_transvq_lite=False,
+                 vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
                  intermediate_size=None, hidden_ratio=4., norm_eps=1e-6,
                  initializer_range=.02, use_cache=True, fuse_cross_entropy=True,
                  ce_softcap=30., ce_chunk_size=None, ignore_index=-100,
@@ -48,6 +49,8 @@ class DismConfig(PretrainedConfig):
         self.value_residual = bool(value_residual)
         self.vocab_transvq = bool(vocab_transvq)
         self.vocab_transvq_lite = bool(vocab_transvq_lite)
+        self.vocab_transvq_map = str(vocab_transvq_map)
+        self.vocab_transvq_rank = int(vocab_transvq_rank)
         self.intermediate_size = intermediate_size
         self.hidden_ratio = hidden_ratio
         self.norm_eps = norm_eps
