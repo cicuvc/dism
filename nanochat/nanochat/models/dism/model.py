@@ -87,6 +87,7 @@ class DismLM(nn.Module):
                         vocab_size=config.vocab_size, bos_token_id=1, eos_token_id=2,
                         soft_k_l2_norm=config.soft_k_l2_norm,
                         value_residual=config.value_residual,
+                        vocab_transvq=getattr(config, "vocab_transvq", False),
                         post_norm=config.post_norm)
         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
         if config.alternating_gdn or config.rear_half_dism:
@@ -134,6 +135,8 @@ class DismLM(nn.Module):
                 attn.k_vocab = first_hybrid.k_vocab
             if self.config.vocab_share_qk:
                 attn.k_vocab = attn.q_vocab
+                if getattr(attn, "q_vocab_map", None) is not None:
+                    attn.k_vocab_map = attn.q_vocab_map
             attn.q_vocab._no_weight_decay = True
             attn.k_vocab._no_weight_decay = True
 
@@ -205,9 +208,12 @@ class DismLM(nn.Module):
     def num_scaling_params(self):
         embedding = self.embedding.weight.numel()
         head = self.lm_head.weight.numel()
-        total = sum(p.numel() for p in self.parameters())
+        # The TransVQ codebook map is a training-time reparameterization, not
+        # model capacity, so it is excluded from the reported parameter counts.
+        transvq_map = sum(p.numel() for name, p in self.named_parameters() if 'vocab_map' in name)
+        total = sum(p.numel() for p in self.parameters()) - transvq_map
         return dict(embedding=embedding, lm_head=head, layers=total-embedding-head, total=total,
-                    matched_total=total)
+                    matched_total=total, transvq_map=transvq_map)
 
     def scaling_parameter_count(self):
         return self.num_scaling_params()['total'] - self.embedding.weight.numel()

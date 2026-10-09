@@ -109,8 +109,15 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                 k = attn.k_conv(hidden, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen)
                 q = q.reshape(1, length, heads, attn.head_dim).float()
                 k = k.reshape(1, length, heads, attn.head_dim).float()
+                if getattr(attn, "vocab_transvq", False):
+                    # Effective codebook is C' = P_phi(C), not the frozen base.
+                    with torch.autocast("cuda", enabled=False):
+                        table_q = attn.q_vocab_map(attn.q_vocab.float())
+                        table_k = attn.k_vocab_map(attn.k_vocab.float())
+                else:
+                    table_q, table_k = attn.q_vocab, attn.k_vocab
                 stats = {}
-                for tag, vec, table in (("q", q, attn.q_vocab), ("k", k, attn.k_vocab)):
+                for tag, vec, table in (("q", q, table_q), ("k", k, table_k)):
                     # Per-head counts: q_vocab/k_vocab are [heads, V, D] with independent
                     # per-head codebooks unless vocab_share_heads, so entries must not
                     # be pooled across heads.

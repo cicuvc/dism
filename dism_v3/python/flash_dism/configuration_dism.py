@@ -11,6 +11,7 @@ class DismConfig(PretrainedConfig):
                  qk_vocab_size=512, attention_type='hybrid', window_size=128,
                  conv_size=4, rope_theta=10000., qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
                  value_residual=False,
+                 vocab_transvq=False,
                  intermediate_size=None, hidden_ratio=4., norm_eps=1e-6,
                  initializer_range=.02, use_cache=True, fuse_cross_entropy=True,
                  ce_softcap=30., ce_chunk_size=None, ignore_index=-100,
@@ -44,6 +45,7 @@ class DismConfig(PretrainedConfig):
         self.readout_l2_norm = bool(readout_l2_norm)
         self.soft_k_l2_norm = bool(soft_k_l2_norm)
         self.value_residual = bool(value_residual)
+        self.vocab_transvq = bool(vocab_transvq)
         self.intermediate_size = intermediate_size
         self.hidden_ratio = hidden_ratio
         self.norm_eps = norm_eps

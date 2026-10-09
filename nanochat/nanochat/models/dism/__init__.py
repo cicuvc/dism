@@ -41,6 +41,7 @@ class DismConfig:
     value_residual_gate_bias: float = 2.0
     conv_impl: str = "fused"
     conv_backend: str = "cuda"
+    vocab_transvq: bool = False
 
 
 def _build(config):

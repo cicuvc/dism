@@ -17,6 +17,30 @@ def value_residual_mix(v, v_first, gate):
     return mixed.to(v.dtype)
 
 
+class TransVQMap(nn.Module):
+    """TransVQ codebook map P_phi: one transformer layer over the V codewords.
+
+    The base codebook is a frozen reference; only this map is trained, so the
+    embedding loss updates every transformed codeword through attention and the
+    codebook does not collapse (arXiv 2602.18896, \"TransVQ\").
+    """
+
+    def __init__(self, dim, mlp_ratio=2.0, nhead=1, dropout=0.0):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        self.attn = nn.MultiheadAttention(dim, nhead, dropout=dropout, batch_first=True)
+        self.norm2 = nn.LayerNorm(dim)
+        hidden = max(1, int(dim * mlp_ratio))
+        self.mlp = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim))
+
+    def forward(self, codebook):
+        # codebook: [heads, V, dim]; self-attention runs over V per head.
+        h = self.norm1(codebook)
+        attn, _ = self.attn(h, h, h, need_weights=False)
+        x = codebook + attn
+        return x + self.mlp(self.norm2(x))
+
+
 def _salt_hard_seed(seed, layer_idx):
     """XOR with a SplitMix64 layer salt; tensor seeds stay on their device."""
     if layer_idx is None:
@@ -51,7 +75,7 @@ class DismAttention(nn.Module):
     def __init__(self, width, heads, *, head_dim=64, value_dim=64,
                  readout_dim=32, vocab_size=512, conv_size=4, layer_idx=None,
                  rope_theta=10000.0, qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
-                 value_residual=False):
+                 value_residual=False, vocab_transvq=False):
         super().__init__()
         if min(width, heads, vocab_size, conv_size) <= 0:
             raise ValueError("width, heads, vocab_size and conv_size must be positive")
@@ -94,6 +118,13 @@ class DismAttention(nn.Module):
             # Per-head, data-dependent gate: v_first + (v - v_first) * sigmoid(g).
             self.v_residual_gate = nn.Linear(width, heads)
             self.v_residual_gate._value_residual_gate = True
+        self.vocab_transvq = bool(vocab_transvq)
+        if self.vocab_transvq:
+            # C' = P_phi(C): train only the map, keep the base codebook frozen.
+            self.q_vocab_map = TransVQMap(head_dim)
+            self.k_vocab_map = TransVQMap(head_dim)
+            self.q_vocab.requires_grad_(False)
+            self.k_vocab.requires_grad_(False)
 
     def _rotary_tables(self, length, device, *, offset=0, dtype=torch.float32, dimension=None):
         """Split-half RoPE tables for the hybrid SWA branch."""
@@ -279,7 +310,12 @@ class DismAttention(nn.Module):
         sq = self._activate_readout(self.sq_proj(x))
         sk = self._activate_readout(self.sk_proj(x), is_key=True)
         # No runtime codebook activation; interpolation owns the BF16 cast.
-        eq, ek = self.q_vocab.float(), self.k_vocab.float()
+        if self.vocab_transvq:
+            with torch.autocast('cuda', enabled=False):
+                eq = self.q_vocab_map(self.q_vocab.float())
+                ek = self.k_vocab_map(self.k_vocab.float())
+        else:
+            eq, ek = self.q_vocab.float(), self.k_vocab.float()
         tau = F.softplus(self.log_sel_tau.float()).contiguous()
         if compiling:
             from .compiler import voc_forward
