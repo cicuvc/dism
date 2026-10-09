@@ -44,7 +44,8 @@ class DismBlock(nn.Module):
                        readout_l2_norm=config.readout_l2_norm,
                        soft_k_l2_norm=config.soft_k_l2_norm,
                        value_residual=getattr(config, 'value_residual', False),
-                       vocab_transvq=getattr(config, 'vocab_transvq', False))
+                       vocab_transvq=getattr(config, 'vocab_transvq', False),
+                       vocab_transvq_lite=getattr(config, 'vocab_transvq_lite', False))
         if config.attention_type == 'hybrid':
             options['window_size'] = config.window_size
         self.attn = attention(config.hidden_size, config.num_heads, **options)

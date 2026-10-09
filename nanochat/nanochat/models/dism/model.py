@@ -88,6 +88,7 @@ class DismLM(nn.Module):
                         soft_k_l2_norm=config.soft_k_l2_norm,
                         value_residual=config.value_residual,
                         vocab_transvq=getattr(config, "vocab_transvq", False),
+                        vocab_transvq_lite=getattr(config, "vocab_transvq_lite", False),
                         post_norm=config.post_norm)
         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
         if config.alternating_gdn or config.rear_half_dism:

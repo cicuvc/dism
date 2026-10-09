@@ -27,18 +27,20 @@ class TransVQMap(nn.Module):
     magnitude of the transformed codebook.
     """
 
-    def __init__(self, dim, mlp_ratio=2.0, dropout=0.0):
+    def __init__(self, dim, mlp_ratio=2.0, dropout=0.0, lite=False):
         super().__init__()
+        self.lite = bool(lite)
         self.norm1 = nn.LayerNorm(dim)
         self.q_proj = nn.Linear(dim, dim, bias=False)
         self.k_proj = nn.Linear(dim, dim, bias=False)
-        self.v_proj = nn.Linear(dim, dim, bias=False)
         self.q_norm = nn.RMSNorm(dim)  # q = norm(silu(linear(h)))
         self.k_norm = nn.RMSNorm(dim)
-        self.out_proj = nn.Linear(dim, dim, bias=False)
-        self.norm2 = nn.LayerNorm(dim)
-        hidden = max(1, int(dim * mlp_ratio))
-        self.mlp = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim))
+        if not self.lite:
+            self.v_proj = nn.Linear(dim, dim, bias=False)
+            self.out_proj = nn.Linear(dim, dim, bias=False)
+            self.norm2 = nn.LayerNorm(dim)
+            hidden = max(1, int(dim * mlp_ratio))
+            self.mlp = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim))
         self.out_norm = nn.RMSNorm(dim)  # elementwise learnable scale at the exit
 
     def forward(self, codebook):
@@ -48,15 +50,18 @@ class TransVQMap(nn.Module):
         h = self.norm1(codebook)
         q = self.q_norm(F.elu(self.q_proj(h)) + 1.0)
         k = self.k_norm(F.elu(self.k_proj(h)) + 1.0)
-        v = self.v_proj(h)
+        v = h if self.lite else self.v_proj(h)
         kv = torch.einsum("hvd,hve->hde", k, v)
         normalizer = k.sum(dim=1)
         numerator = torch.einsum("hvd,hde->hve", q, kv)
         # 1 + sum_j (q_i . k_j) keeps the denominator >= 1; numerators unchanged.
         denominator = 1.0 + torch.einsum("hvd,hd->hv", q, normalizer).unsqueeze(-1)
-        attn = self.out_proj(numerator / denominator)
+        attn = numerator / denominator
+        if not self.lite:
+            attn = self.out_proj(attn)
         x = codebook + attn
-        x = x + self.mlp(self.norm2(x))
+        if not self.lite:
+            x = x + self.mlp(self.norm2(x))
         return self.out_norm(x)
 
 
@@ -94,7 +99,7 @@ class DismAttention(nn.Module):
     def __init__(self, width, heads, *, head_dim=64, value_dim=64,
                  readout_dim=32, vocab_size=512, conv_size=4, layer_idx=None,
                  rope_theta=10000.0, qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
-                 value_residual=False, vocab_transvq=False):
+                 value_residual=False, vocab_transvq=False, vocab_transvq_lite=False):
         super().__init__()
         if min(width, heads, vocab_size, conv_size) <= 0:
             raise ValueError("width, heads, vocab_size and conv_size must be positive")
@@ -140,8 +145,8 @@ class DismAttention(nn.Module):
         self.vocab_transvq = bool(vocab_transvq)
         if self.vocab_transvq:
             # C' = P_phi(C): train only the map, keep the base codebook frozen.
-            self.q_vocab_map = TransVQMap(head_dim)
-            self.k_vocab_map = TransVQMap(head_dim)
+            self.q_vocab_map = TransVQMap(head_dim, lite=vocab_transvq_lite)
+            self.k_vocab_map = TransVQMap(head_dim, lite=vocab_transvq_lite)
             self.q_vocab.requires_grad_(False)
             self.k_vocab.requires_grad_(False)
 

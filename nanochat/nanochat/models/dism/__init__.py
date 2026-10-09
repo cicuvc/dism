@@ -42,6 +42,7 @@ class DismConfig:
     conv_impl: str = "fused"
     conv_backend: str = "cuda"
     vocab_transvq: bool = False
+    vocab_transvq_lite: bool = False
 
 
 def _build(config):
