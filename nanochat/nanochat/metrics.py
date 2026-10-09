@@ -111,22 +111,34 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                 k = k.reshape(1, length, heads, attn.head_dim).float()
                 stats = {}
                 for tag, vec, table in (("q", q, attn.q_vocab), ("k", k, attn.k_vocab)):
-                    counts = torch.zeros(vocab_size, device=device, dtype=torch.float64)
+                    # Per-head counts: q_vocab/k_vocab are [heads, V, D] with independent
+                    # per-head codebooks unless vocab_share_heads, so entries must not
+                    # be pooled across heads.
+                    counts = torch.zeros((heads, vocab_size), device=device, dtype=torch.float64)
                     entropy_sum = 0.0
                     max_sum = 0.0
                     for start in range(0, length, chunk_size):
                         stop = min(start + chunk_size, length)
                         scores = torch.einsum("bnhd,hvd->bnhv", vec[:, start:stop], table.float())
                         probs = torch.softmax(scores, dim=-1).reshape(-1, vocab_size)
-                        counts += torch.bincount(probs.argmax(-1), minlength=vocab_size).double()
+                        idx = probs.argmax(-1).reshape(-1, heads)
+                        for head in range(heads):
+                            counts[head] += torch.bincount(idx[:, head], minlength=vocab_size).double()
                         entropy_sum += float(-(probs * (probs + 1e-12).log()).sum(-1).mean()) * (stop - start)
                         max_sum += float(probs.max(-1).values.mean()) * (stop - start)
-                    total = counts.sum().clamp_min(1.0)
+                    used = counts > 0
                     stats[tag] = {
-                        "counts": counts.cpu().tolist(),
+                        # Average per-head selection-frequency distribution [V].
+                        "counts": counts.mean(0).cpu().tolist(),
+                        # Utilization of the actual codebook parameters: fraction of the
+                        # heads*V rows that are the argmax at least once.
+                        "coverage": float(used.float().mean()),
+                        # Per-head coverage, and the head-pooled variant (meaningful only
+                        # when the codebook is shared across heads).
+                        "coverage_per_head": used.float().mean(1).cpu().tolist(),
+                        "coverage_pooled": float((counts.sum(0) > 0).float().mean()),
                         "entropy": entropy_sum / length / torch.log(torch.tensor(float(vocab_size))).item(),
                         "max_share": max_sum / length,
-                        "coverage": float((counts > 0).float().mean()),
                     }
                 results[index] = stats
                 hard = torch.ones((1, heads, length), dtype=torch.bool, device=device)

@@ -905,6 +905,9 @@ while True:
                     log_data[f"{prefix}_entropy/layer{layer_index:02d}"] = stats["entropy"]
                     log_data[f"{prefix}_max_share/layer{layer_index:02d}"] = stats["max_share"]
                     log_data[f"{prefix}_coverage/layer{layer_index:02d}"] = stats["coverage"]
+                    log_data[f"{prefix}_coverage_pooled/layer{layer_index:02d}"] = stats.get("coverage_pooled", stats["coverage"])
+                    for head_index, head_coverage in enumerate(stats.get("coverage_per_head", ())):
+                        log_data[f"{prefix}_coverage_head{head_index}/layer{layer_index:02d}"] = head_coverage
                     counts = np.asarray(stats["counts"], dtype=np.float64)
                     log_data[f"{prefix}_hist/layer{layer_index:02d}"] = wandb.Histogram(
                         np_histogram=(counts, np.arange(counts.size + 1)))
