@@ -33,21 +33,20 @@ class TransVQMap(nn.Module):
         self.q_proj = nn.Linear(dim, dim, bias=False)
         self.k_proj = nn.Linear(dim, dim, bias=False)
         self.v_proj = nn.Linear(dim, dim, bias=False)
+        self.q_norm = nn.RMSNorm(dim)  # q = norm(silu(linear(h)))
+        self.k_norm = nn.RMSNorm(dim)
         self.out_proj = nn.Linear(dim, dim, bias=False)
         self.norm2 = nn.LayerNorm(dim)
         hidden = max(1, int(dim * mlp_ratio))
         self.mlp = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim))
         self.out_norm = nn.RMSNorm(dim)  # elementwise learnable scale at the exit
 
-    @staticmethod
-    def _feature(x):
-        return torch.nn.functional.elu(x) + 1.0
-
     def forward(self, codebook):
         # codebook: [heads, V, dim]; linear attention runs over V per head.
+        # Feature map is SiLU, followed by an RMSNorm on each of q and k.
         h = self.norm1(codebook)
-        q = self._feature(self.q_proj(h))
-        k = self._feature(self.k_proj(h))
+        q = self.q_norm(F.silu(self.q_proj(h)))
+        k = self.k_norm(F.silu(self.k_proj(h)))
         v = self.v_proj(h)
         kv = torch.einsum("hvd,hve->hde", k, v)
         normalizer = k.sum(dim=1)
