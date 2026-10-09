@@ -28,6 +28,10 @@ def _replace_convs_with_linear_fla(model, backend):
             if isinstance(child, CausalShortConv1d):
                 setattr(parent, name, LinearShortConvSiLU(
                     child.in_channels, child.out_channels, child.kernel_size, backend))
+    for module in model.modules():
+        if getattr(module, "gdn_q_conv", None) is not None and getattr(module, "q_conv", None) is not None:
+            # DISM/GDN share the tied q/k input projection; compute it once if tied.
+            module.share_qk_linear = True
 
 
 @triton.jit

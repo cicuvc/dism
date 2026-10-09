@@ -46,11 +46,17 @@ class DismGdnAttention(DismAttention):
         self.gdn_dt_bias.copy_(dt+torch.log(-torch.expm1(-dt)))
 
     @torch.compiler.disable
-    def gdn_raw(self,x,cu_seqlens,max_seqlen,v_first=None):
+    def gdn_raw(self,x,cu_seqlens,max_seqlen,v_first=None,linear_q=None,linear_k=None):
         # Keep FLA metadata/custom autograd outside Dynamo (same policy as controls).
         from fla.ops.gated_delta_rule import chunk_gated_delta_rule
-        q=self.gdn_q_conv(x,cu_seqlens=cu_seqlens,max_seqlen=max_seqlen).unflatten(-1,(self.heads,self.head_dim))
-        k=self.gdn_k_conv(x,cu_seqlens=cu_seqlens,max_seqlen=max_seqlen).unflatten(-1,(self.heads,self.head_dim))
+        if linear_q is not None:
+            q=self.gdn_q_conv.depthwise_silu(linear_q,cu_seqlens=cu_seqlens).unflatten(-1,(self.heads,self.head_dim))
+        else:
+            q=self.gdn_q_conv(x,cu_seqlens=cu_seqlens,max_seqlen=max_seqlen).unflatten(-1,(self.heads,self.head_dim))
+        if linear_k is not None:
+            k=self.gdn_k_conv.depthwise_silu(linear_k,cu_seqlens=cu_seqlens).unflatten(-1,(self.heads,self.head_dim))
+        else:
+            k=self.gdn_k_conv(x,cu_seqlens=cu_seqlens,max_seqlen=max_seqlen).unflatten(-1,(self.heads,self.head_dim))
         v=self.gdn_v_conv(x,cu_seqlens=cu_seqlens,max_seqlen=max_seqlen).unflatten(-1,(self.heads,self.value_dim))
         if self.value_residual and v_first is not None:
             v = value_residual_mix(v, v_first, self.gdn_v_residual_gate(x))
@@ -60,8 +66,8 @@ class DismGdnAttention(DismAttention):
             initial_state=None,output_final_state=False,cu_seqlens=cu_seqlens,
             use_qk_l2norm_in_kernel=True)[0]
 
-    def _combine_cuda(self,output,x,v,cu_seqlens,max_seqlen,v_first=None):
-        return output+self.gdn_raw(x,cu_seqlens,max_seqlen,v_first)
+    def _combine_cuda(self,output,x,v,cu_seqlens,max_seqlen,v_first=None,linear_q=None,linear_k=None):
+        return output+self.gdn_raw(x,cu_seqlens,max_seqlen,v_first,linear_q,linear_k)
 
     def forward(self,hidden_states,attention_mask=None,past_key_values=None,use_cache=False,**kwargs):
         if use_cache or past_key_values is not None:

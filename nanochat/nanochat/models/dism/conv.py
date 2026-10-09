@@ -26,9 +26,16 @@ class LinearShortConvSiLU(nn.Module):
         self.weight = nn.Parameter(torch.empty(out_channels, in_channels))
         self.conv = ShortConvolution(out_channels, kernel_size, activation="silu", backend=backend)
 
+    def project_linear(self, x):
+        """Linear (input projection) part only; shared between DISM and GDN q/k."""
+        return F.linear(x, self.weight)
+
+    def depthwise_silu(self, hidden, cu_seqlens=None):
+        """Depthwise causal conv + SiLU on an already-projected tensor."""
+        output, _ = self.conv(hidden, cu_seqlens=cu_seqlens)
+        return output
+
     def forward(self, x, cu_seqlens=None, max_seqlen=None, input_state=None):
         if input_state is not None:
             raise NotImplementedError("linear_fla conv does not support cached decoding state")
-        hidden = F.linear(x, self.weight)
-        output, _ = self.conv(hidden, cu_seqlens=cu_seqlens)
-        return output
+        return self.depthwise_silu(self.project_linear(x), cu_seqlens=cu_seqlens)

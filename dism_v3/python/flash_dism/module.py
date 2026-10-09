@@ -104,7 +104,8 @@ class DismAttention(nn.Module):
         phase = positions[:, None] * frequencies[None, :]
         return phase.cos(), phase.sin()
 
-    def _combine_cuda(self, output, x, v, cu_seqlens, max_seqlen, v_first=None):
+    def _combine_cuda(self, output, x, v, cu_seqlens, max_seqlen, v_first=None,
+                      linear_q=None, linear_k=None):
         return output
 
     def _activate_readout(self, projected, *, is_key=False):
@@ -248,8 +249,10 @@ class DismAttention(nn.Module):
             direction = torch.randint(2, (), device=x.device, generator=generator,
                                       dtype=torch.int32).bool().expand(batch, self.heads).contiguous()
 
-        def project(convolution, channels):
-            if compiling and not getattr(convolution, "bypass_compiled_conv", False):
+        def project(convolution, channels, linear=None):
+            if linear is not None:
+                values = convolution.depthwise_silu(linear, cu_seqlens=cu_seqlens)
+            elif compiling and not getattr(convolution, "bypass_compiled_conv", False):
                 from .compiler import conv_forward
                 dtype = torch.bfloat16 if torch.is_autocast_enabled('cuda') else x.dtype
                 values = conv_forward(x.to(dtype), convolution.weight.to(dtype),
@@ -258,8 +261,16 @@ class DismAttention(nn.Module):
                 values = convolution(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen)
             return values.reshape(batch, length, self.heads, channels).contiguous()
 
-        q = project(self.q_conv, self.head_dim)
-        k = project(self.k_conv, self.head_dim)
+        # torch Linear + FLA conv: the DISM and GDN branches share the q/k input
+        # projection (tied linear weight), so compute it once and apply each
+        # branch's independent depthwise conv on top.
+        share_qk_linear = (getattr(self, "share_qk_linear", False)
+                           and getattr(self, "gdn_q_conv", None) is not None
+                           and self.q_conv.weight is self.gdn_q_conv.weight)
+        linear_q = self.q_conv.project_linear(x) if share_qk_linear else None
+        linear_k = self.k_conv.project_linear(x) if share_qk_linear else None
+        q = project(self.q_conv, self.head_dim, linear_q)
+        k = project(self.k_conv, self.head_dim, linear_k)
         v = project(self.v_conv, self.value_dim)
         if self.value_residual and v_first is not None:
             v = value_residual_mix(v, v_first, self.v_residual_gate(x))
@@ -277,7 +288,8 @@ class DismAttention(nn.Module):
         else:
             output = voc_dism(q, k, sq, sk, v, eq, ek, tau,
                               direction=direction, hard=hard, layout=layout)
-        output = self._combine_cuda(output, x, v, cu_seqlens, max_seqlen, v_first=v_first)
+        output = self._combine_cuda(output, x, v, cu_seqlens, max_seqlen, v_first=v_first,
+                                    linear_q=linear_q, linear_k=linear_k)
         gate = self.g_proj_up(self.g_proj_down(x)).reshape(batch, length, self.heads, self.value_dim)
         if compiling:
             # Let Inductor fuse this expression. FLA's current custom backward
