@@ -168,6 +168,10 @@ class DismLM(nn.Module):
                 nn.init.ones_(m.rms_weight)
             if isinstance(m, nn.RMSNorm):
                 nn.init.ones_(m.weight)
+            if isinstance(m, nn.LayerNorm):
+                nn.init.ones_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
         initialized_tables = set()
         for layer in self.layers:
             attn = layer.attn

@@ -43,10 +43,11 @@ class TransVQMap(nn.Module):
 
     def forward(self, codebook):
         # codebook: [heads, V, dim]; linear attention runs over V per head.
-        # Feature map is SiLU, followed by an RMSNorm on each of q and k.
+        # Feature map is elu(x)+1 (non-negative), then an RMSNorm on q and k;
+        # non-negative features keep the linear-attention denominator positive.
         h = self.norm1(codebook)
-        q = self.q_norm(F.silu(self.q_proj(h)))
-        k = self.k_norm(F.silu(self.k_proj(h)))
+        q = self.q_norm(F.elu(self.q_proj(h)) + 1.0)
+        k = self.k_norm(F.elu(self.k_proj(h)) + 1.0)
         v = self.v_proj(h)
         kv = torch.einsum("hvd,hve->hde", k, v)
         normalizer = k.sum(dim=1)
