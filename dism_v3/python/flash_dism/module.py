@@ -58,6 +58,8 @@ class TransVQMap(nn.Module):
             if self.kind == "frozen_random":
                 self.u.requires_grad_(False)
                 self.v.requires_grad_(False)
+        elif self.kind == "mean_shift":
+            self.m = nn.Parameter(torch.zeros(dim))
         elif self.kind == "diagonal":
             self.s = nn.Parameter(torch.ones(dim))
         else:
@@ -85,6 +87,8 @@ class TransVQMap(nn.Module):
             projected = torch.einsum("vr,hvd->hrd", self.v, codebook)
             mixed = torch.einsum("vr,hrd->hvd", self.u * self.s, projected)
             return self.out_norm(codebook + mixed)
+        if self.kind == "mean_shift":
+            return self.out_norm(codebook + self.m)
         return self.out_norm(codebook * self.s)
 
 

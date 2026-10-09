@@ -218,6 +218,8 @@ class DismLM(nn.Module):
                         nn.init.ones_(mapper.s)
                     elif getattr(mapper, 'kind', None) == 'diagonal':
                         nn.init.ones_(mapper.s)
+                    elif getattr(mapper, 'kind', None) == 'mean_shift':
+                        nn.init.zeros_(mapper.m)
                     if getattr(mapper, 'out_norm', None) is not None:
                         mapper.out_norm.weight.fill_(base_rms)
 
