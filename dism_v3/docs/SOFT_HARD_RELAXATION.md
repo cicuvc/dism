@@ -1513,3 +1513,83 @@ L11: valres   26/ 77/ 160/ 254/ 388 | sep-rank1  40/ 134/ 269/ 452/ 615
 因此根因是 **shareqk + rank1 map 造成码字利用率下降/塌缩**，与温度调度无关，锐化治不了。
 修复方向：提高码字利用率、抑制伪匹配（更强 map/更高 rank/cross-codeword mixing、码字使用
 正则、或不共享 qk）；评估应加入 **codebook 利用率 / 匹配数**指标。
+
+---
+
+## 28. REINFORCE 方案汇总与问题（为后训练准备）
+
+### 28.0 为什么需要 REINFORCE（动机）
+
+DISM 的 selector = 每个 (layer, row, head) 的 Q/K 符号 `argmax_c(q·W_c)`。
+在 hard row 上 selector 分支的梯度**恰为 0**（§20 的 `dsoft` mask；§26 的 gating
+统计）。因此任何**离散路径上的下游目标**（hard LM loss，或后训练的 RLHF/GRPO
+reward）对 matching 参数（`q_vocab`/`k_vocab`/DISM `q/k_conv.conv_weight`/共享
+linear）的梯度都是 0。要训练 matching，只能靠
+soft relaxation（β pathwise）、STE 或 score-function —— 后两者都试过，见下。
+
+### 28.1 方案 A：从零 categorical + deterministic soft baseline（远程 `dism-reinforce`）
+
+- **Estimator**：每步对所有 Q/K 符号独立 categorical 采样（温度 1），
+  `L = direct_hard + Σ_i a_i · log p_i(z_i)`，
+  `a_i = causal_return(hard_NLL − soft_NLL)/count`，soft baseline 为 no-grad 的
+  deterministic full-soft per-token NLL。
+- **配置**：40M、从 scratch、step0 起全 categorical、**无 soft 梯度、无 STE、
+  无 clip、无 reward 归一化**、无 hard-prob 退火。
+- **结果**：跑满 6000 步，final argmax NLL **3.915**，而 soft→argmax 退火基线
+  **3.098**（差 26%）。
+- **失败机制**（分析报告）：采样熵 `6.09(step0)→2.84(300)→0.43(700)→0.13(1000)
+  →0.046(3000)` nats；loss 在 300–700 反而升到 5.15→6.78；grad norm 中位数 11.5、
+  step679 峰值 82.6。
+  → **策略在 ~700 步内塌成近确定性，`∇log p→0`，selector 失去信号**；没有 soft
+  pathwise 项兜底，码字只能靠 direct hard 梯度硬撑。
+
+### 28.2 方案 B：K-side soft linear control variate（远程 `dism-residual`）
+
+- **设计**（RELAX/REBAR 式）：对每个 K 节点先跑 deterministic full-soft，
+  取 `u_i = ∂L_soft/∂h̄_i`（冻结），构造局部线性 proxy `v_i(s) = u_i·E_Q(s)`，
+  加零均值修正 `J_p v − (v(z)−μ_i)∇log p_i(z)`；Q 侧保留 A 的 scalar baseline。
+- **结果**：**只跑了 7 步就被 cancel**；`proxy_upstream_rms ≈ 3e-10`、
+  `cv_surrogate ≈ 1e-6` → **control variate 实际是死的**，退化成方案 A。
+- **结论**：**"control variate 降方差"这条线从未被真正验证过**；需要先修
+  `u_i` 的尺度/上游 detach 问题。
+
+### 28.3 方案 C：warm-start 混合（本 repo，已实现并实测）
+
+- **Estimator**：`L = L_soft(β) + λ·mean_symbol(logπ(z)·Â) + η·relu(H_floor − H(π))`，
+  `Â` 按文档标准化；soft pathwise 为主体，score-function 只做小修正。
+- **配置**：warm start 自 valres@19074（β=1, hard_prob=0.95），lr3e-5、
+  hard_prob=0、λ0→0.3、η0.1、β1→2/4，3000–6000 步。
+- **结果**：**稳定但有害**。熵 2.65→3.13→1.5（未塌缩）、gnorm ~0.55–0.67；
+  但 hard_bpb 一致差于同配置 λ=0 对照：
+  - 3000 步：λ=0 **1.1795** vs λ=0.3 **1.1849 / 1.1829**；
+  - 1500 步恢复曲线 ≠ 学习，而是**在抹掉 REINFORCE 造成的扰动**
+    （从恢复点再 restart、同 λ 又掉回 1.185）。
+- 即：warm-start 解决了 A 的**塌缩/爆炸**，但 score-function 的噪声只是累积、
+  没有带来 hard 侧收益。
+
+### 28.4 问题分类汇总
+
+| # | 问题 | 出现于 | 现状 |
+|---|---|---|---|
+| 1 | 冷启动 + 熵塌缩（`∇log p→0`） | A | warm-start + 熵下限可解决（C 不塌） |
+| 2 | control variate 死（`u≈3e-10`） | B | 未验证/未修复 |
+| 3 | 高方差：序列级奖励 × 多决策数；gating 使 SNR ↓√(1−h) | A/B/C | 只能靠更长动量/更大 batch/更低方差估计量 |
+| 4 | 方向偏置：gated 梯度方向是 soft surrogate，非 hard；argmax ≠ categorical 采样 | 全部 | β 温度是正确杠杆；REINFORCE 改不了 |
+| 5 | 与 soft pathwise 竞争：hard row 上 selector 无梯度，score term 只在小部分样本上起作用 | C | λ 小则无效、λ 大则有害 |
+| 6 | warm-start 后 hard 已近最优，无 headroom | C | score-function 噪声净累积 → 有害 |
+| 7 | 优化器噪声匹配：AdamW β1/β2、per-group β1 | Astra 分析 | 每层 4 个 selector 张量，建议统一 β1=0.95 |
+| 8 | dropout 式梯度缩放（`1/(1−h)`） | 讨论 | 对 Adam scale-invariant，改不了 SNR，无效 |
+
+### 28.5 对后训练的含义
+
+1. **后训练的核心诉求**是让离散 matching 参数被 reward 训练；但 hard 路径对
+   matching 的梯度为 0，所以**必须有可微或低方差的 estimator**。
+2. 目前证据指向：**不要用 REINFORCE 直接训 matching**（高方差、方向偏、无 headroom）。
+   - 最稳的是 **soft pathwise（β）作为主路径**，让 reward 通过软门回传；
+   - REINFORCE 只能作为**极小的修正**，且需要 control variate 真正工作。
+3. 若后训练必须走 RL（如 GRPO/PPO）：
+   - 应在 **token 级策略**上做（标准 RLHF），matching 通过 β-soft 路径或 STE 直通；
+   - 或把 REINFORCE 限制在**低维动作**（例如每行的 hard/soft 路由），而不是每个符号。
+4. **未验证但优先**：修复方案 B 的 control variate（`u_i` 尺度）、并用
+   REBAR/RELAX 的真实残差估计器重跑一次，确认它是否能把方差降下来——这是
+   "REINFORCE 能不能用"的关键实验。
