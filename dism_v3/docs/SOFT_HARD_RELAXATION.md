@@ -1970,3 +1970,77 @@ steps(19074)、种子(1729)、**tokenizer 指纹完全相同**，总训练量都
 - fwedu 在域内 bpb 上大幅领先（1.19 vs 1.32）却长程更弱 → 这是一个**明确的 trade-off**，
   评估必须两者都看。
 - 若要补长程：混入高重复/长文档/高熵数据（代码、书籍）。
+
+---
+
+## 35. MAD-lab MQAR：DISM / GDN / 混合布局的隔离测试
+
+**动机**：§32–§34 表明自然语言 bpb 会稀释长程信号。为了把"机制本身能不能做
+associative recall"和"自然语言里学不学得到"分开，接入了
+`~/cs/project/mad-lab`（MAD-lite 的合成任务套件），用它的 `in-context-recall`
+（多 query MQAR）。
+
+### 35.1 接线（新增在 mad-lab，不在本仓库）
+
+- `mad/model/layers/dism.py`：`_DismPacked` 把 MAD 的 `[B,T,dim]` 打包成
+  `[1,B·Lp,dim]`（每个 batch 行 = 一个文档，**无跨行匹配**），并要求每个文档
+  长度 256 对齐。MAD 的生成器返回 `inputs[:-1]`，所以模型输入 `T = seq_len-1`
+  是**奇数**（255/511/1023）；因此**每个文档尾部补齐到 256 的倍数**
+  （255→256，只多 1 个 token）。补齐安全：short conv 与后缀匹配递推都是因果的，
+  尾部 pad 不影响任何真实位置，输出再裁掉。
+  验证：同输入两次输出 bit-identical；只改 row 0 时 row 1–3 的 diff = 0.000e+00。
+- 变体：`DismHybrid`（DISM+GDN）、`DismOnly`（只 DISM）、`GdnOnly`
+  （参数与 DismHybrid 相同，只在 `_combine_cuda` 里丢弃 DISM 输出）、
+  `DismHybridUntied`（解开 Q/K 线性共享）、`DismHybridNormed`（相加前各分支
+  独立 RMS 归一化）、`DismHybridDeltaLP`（tiny_lm 的 rank-1 delta 写入）。
+- 训练用软门 + `hard_prob=0.5`（随机 hard 行），eval 用 hard argmax。
+- **`direction=None`**（保持用户设定，勿改）：固定 direction 在这类合成任务上
+  会造成严重的 train/infer gap。
+
+### 35.2 结果（vocab=128，best-epoch test accuracy）
+
+| 布局 | seq=256 | seq=1024 |
+|---|---|---|
+| mh-attention（n_heads=16, head_dim=8） | 0.0645 | 0.0548 |
+| mh-attention-4h（n_heads=4, head_dim=32） | 0.0640 | 双峰，见下 |
+| gdn-only ×2 | 0.9973 | 0.9970 |
+| **dism-only ×2** | **0.9992** | **0.9991** |
+| dism+GDN 相加（生产 `_combine_cuda`） | 0.9950 (0.987–0.999) | 0.9638 (0.964–0.994) |
+| dism+GDN 解绑 Q/K 线性 | 0.9994 | 0.9919 |
+| dism+GDN per-branch RMS 归一化 | 0.9856 | 0.9930 |
+| **dism+GDN rank-1 delta 写入（del_k/del_v）** | **0.9921** | **0.9918** |
+| **专用层：GDN + 2×DISM** | **0.9992** | **0.9991** |
+| 专用层：GDN + 1×DISM | 0.9921 | — |
+
+### 35.3 结论
+
+1. **层内 DISM+GDN 混合在两个任务档上都劣于 dism-only**，而且方差大得多
+   （hybrid 跨 run 0.964–0.999，dism-only 0.989–0.999 且多数 ≥0.999）。
+2. **三种混合机制都救不了**：相加、per-branch RMS 归一化、rank-1 delta 写入
+   （tiny_lm 的 `del_k/del_v`）全部落在 0.986–0.995。delta 版本探针确认机制
+   **确实在用**（`||inject||/||GDN|| = 0.07–0.12`，是相加版 4% 的两倍），
+   即不是机制退化，而是**这个任务上 GDN 与 DISM 没有互补性**。
+3. **"专用层"布局是唯一有效的做法**：`GDN + 2×DISM` 直接回到 0.9992/0.9991，
+   和纯 dism-only 相同，且 17 个 epoch 就收敛。这支持把生产架构从"层内混合"
+   改成"前半 GDN、后半 DISM+SWA 与 GDN 交错"的专用层方案。
+4. **至少保留 2 个 DISM 层**：`1 GDN + 1 DISM` = 0.9921 < `2 DISM` = 0.999。
+5. **分支塌缩现象**：训练好的 hybrid 里 DISM 只占合并输出的 4–12%
+   （`||DISM||/||GDN||` 在不同 run 之间从 0.043 到 0.403）——即
+   **winner-take-all，且胜者是随机的**。对照 nanochat 预训练的 valres：
+   `|DISM|/|GDN| = 0.18–1.59`（两个分支都在实质工作），所以这个塌缩是
+   小规模/短训练下的优化现象，不能直接外推到生产规模。
+
+### 35.4 方法学教训（这些坑都实际踩过）
+
+- **`results.csv` 用的是最后一个 epoch**，而所有 run 都会偶发 divergence spike
+  → 必须用 best-epoch。
+- **`--early-stop` 必须关掉**（MAD 默认 `early_stop=False`）：attention 基线在
+  (128,256) 上需要 **226 个 epoch** 才起飞，patience 30 会把它提前杀掉。
+- **`mh-attention.yml` 是 `n_heads=16 / dim=128` → head_dim=8，过小**；改成
+  4 头（head_dim 32）后 attention 在 (16,1024) 从 0.318 → 0.9993。
+- **run-to-run 方差极大**：完全相同的配置能给出 0.964 vs 0.994（hybrid），
+  attention 甚至能 0.059 vs 0.999（induction circuit 形成是随机相变）。
+  单 run 结果只能当趋势，定方案需要 ≥3 seeds 取 median。
+- 结构上 MHA 需要**两层组合**才能做 induction（层1 用 RoPE 造 key 后移一位，
+  层2 做 qk 等值召回），而 GDN/DISM 有 short conv、**层内**即可完成移位，
+  所以 `[mixer,swiglu]×2` 对 MHA 本身不公平——比较时需给 MHA 补深度或补 dwconv。
