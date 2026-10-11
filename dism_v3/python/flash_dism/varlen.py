@@ -116,14 +116,15 @@ def dism_core_varlen(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,
     return _VarlenCore.apply(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,layout,_lse_preabsorbed)
 
 
-def voc_dism_varlen(q,k,sq,sk,v,q_vocab,k_vocab,rtau,cu_seqlens=None,*,direction,hard,layout=None):
+def voc_dism_varlen(q,k,sq,sk,v,q_vocab,k_vocab,rtau,cu_seqlens=None,*,direction,hard,layout=None,beta=1.0):
     """Existing Triton embedding interpolation followed by native varlen core.
 
     Vocabulary activation and sq/sk activation belong to the caller. Direction
     remains [1,H], not one independent direction per document. Hard flags are
-    explicit [1,H,T], as in the current fixed-length v3 API.
+    explicit [1,H,T], as in the current fixed-length v3 API. beta is the
+    vocabulary-softmax temperature (1.0 reproduces the unscaled score).
     """
-    from .emb_kernel import EmbInterpFunction
+    from .emb_kernel import interp_embeddings
     if layout is None:
         if cu_seqlens is None:
             raise ValueError('provide cu_seqlens or layout')
@@ -137,8 +138,8 @@ def voc_dism_varlen(q,k,sq,sk,v,q_vocab,k_vocab,rtau,cu_seqlens=None,*,direction
         labels=torch.empty((1,heads,0),dtype=torch.int32,device=q.device)
         out=dism_core_varlen(q,k,sq,sk,v,lse,lse,labels,labels,direction,hard,rtau,layout=layout)
         return out+(eq.float().sum()*0+ek.float().sum()*0).to(out.dtype)
-    qfk,kfq,lk,lq,_,_,ik,iq=EmbInterpFunction.apply(
-        query,key,eq,ek,1.,rtau.detach())
+    qfk,kfq,lk,lq,ik,iq=interp_embeddings(
+        query,key,eq,ek,beta,rtau.detach())
     qv,kv=cu.select_embedding(q,k,qfk,kfq,direction)
     return dism_core_varlen(qv,kv,sq,sk,v,lq.transpose(1,2),lk.transpose(1,2),iq,ik,
                            direction,hard,rtau,layout=layout,_lse_preabsorbed=True)

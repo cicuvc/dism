@@ -11,6 +11,7 @@ class DismConfig(PretrainedConfig):
                  qk_vocab_size=512, attention_type='hybrid', window_size=128,
                  conv_size=4, rope_theta=10000., qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
                  value_residual=False,
+                 vocab_temperature=1.0,
                  vocab_transvq=False,
                  vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
@@ -47,6 +48,7 @@ class DismConfig(PretrainedConfig):
         self.readout_l2_norm = bool(readout_l2_norm)
         self.soft_k_l2_norm = bool(soft_k_l2_norm)
         self.value_residual = bool(value_residual)
+        self.vocab_temperature = float(vocab_temperature)
         self.vocab_transvq = bool(vocab_transvq)
         self.vocab_transvq_lite = bool(vocab_transvq_lite)
         self.vocab_transvq_map = str(vocab_transvq_map)

@@ -13,19 +13,19 @@ def inputs(b=2,n=5,h=3,dtype=torch.float64):
     return q,k,sq,sk,qw,kw,v,tau
 
 
-def oracle(args,direction,hard):
+def oracle(args,direction,hard,beta=1.0):
     q,k,sq,sk,qw,kw,v,tau=args
     b,n,h,_=q.shape
     outputs=[]
     for batch in range(b):
         heads=[]
         for head in range(h):
-            qs=q[batch,:,head]@qw.T;ks=k[batch,:,head]@kw.T
+            qs=beta*(q[batch,:,head]@qw.T);ks=beta*(k[batch,:,head]@kw.T)
             pq,pk=qs.softmax(-1),ks.softmax(-1)
             # Independently compute Jensen score as expectation of log probabilities.
             score=(qs.log_softmax(-1)@pk.T if direction[batch,head]
                    else pq@ks.log_softmax(-1).T)
-            match=qs.argmax(-1)[:,None]==ks.argmax(-1)[None,:]
+            match=(q[batch,:,head]@qw.T).argmax(-1)[:,None]==(k[batch,:,head]@kw.T).argmax(-1)[None,:]
             m=torch.where(hard[batch,head,:,None],match.to(q.dtype),score.exp())*tau[head].exp()
             previous=torch.zeros(n,dtype=q.dtype);out=[]
             for i in range(n):
@@ -48,6 +48,38 @@ def test_oracle(mode,direction_value,n):
     hard=torch.rand(2,3,n)<{'soft':0,'hard':1,'mixed':.5}[mode]
     got=dism_wrapper(*a,direction=direction,hard=hard)
     torch.testing.assert_close(got,oracle(a,direction,hard),atol=1e-12,rtol=1e-12)
+
+
+@pytest.mark.parametrize('beta',[1.0,2.0,5.0,20.0])
+@pytest.mark.parametrize('mode',['soft','hard','mixed'])
+def test_beta_oracle(mode,beta):
+    a=inputs(n=5);direction=torch.full((2,3),True)
+    hard=torch.rand(2,3,5)<{'soft':0,'hard':1,'mixed':.5}[mode]
+    got=dism_wrapper(*a,direction=direction,hard=hard,beta=beta)
+    torch.testing.assert_close(got,oracle(a,direction,hard,beta=beta),atol=1e-11,rtol=1e-11)
+
+
+def test_beta_default_is_unchanged():
+    a=inputs()
+    direction=torch.full((2,3),True); hard=torch.rand(2,3,5)<.5
+    torch.testing.assert_close(dism_wrapper(*a,direction=direction,hard=hard),
+                               dism_wrapper(*a,direction=direction,hard=hard,beta=1.0),
+                               atol=0,rtol=0)
+
+
+def test_beta_sharpens_soft_gate():
+    # On a hard-match row the soft gate exp(S_beta) must increase toward 1 with beta.
+    a=inputs(n=5); direction=torch.full((2,3),True); hard=torch.zeros(2,3,5,dtype=torch.bool)
+    prev=None
+    for beta in (1.0,2.0,5.0,20.0):
+        got=dism_wrapper(*a,direction=direction,hard=hard,beta=beta)
+        if prev is not None:
+            # gate sharpening raises the soft match weight; numerator moves toward the hard output
+            hard_out=dism_wrapper(*a,direction=direction,hard=torch.ones_like(hard))
+            d_beta=(got-hard_out).abs().mean()
+            d_prev=(prev-hard_out).abs().mean()
+            assert d_beta <= d_prev + 1e-12
+        prev=got
 
 
 @pytest.mark.parametrize('direction_value',[True,False])

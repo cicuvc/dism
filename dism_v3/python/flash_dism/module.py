@@ -126,7 +126,8 @@ class DismAttention(nn.Module):
     def __init__(self, width, heads, *, head_dim=64, value_dim=64,
                  readout_dim=32, vocab_size=512, conv_size=4, layer_idx=None,
                  rope_theta=10000.0, qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
-                 value_residual=False, vocab_transvq=False, vocab_transvq_lite=False,
+                 value_residual=False, vocab_temperature=1.0,
+                 vocab_transvq=False, vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4):
         super().__init__()
         if min(width, heads, vocab_size, conv_size) <= 0:
@@ -142,6 +143,11 @@ class DismAttention(nn.Module):
         self.qknorm_eps = float(qknorm_eps)
         self.readout_l2_norm = bool(readout_l2_norm)
         self.soft_k_l2_norm = bool(soft_k_l2_norm)
+        if not math.isfinite(vocab_temperature) or vocab_temperature <= 0:
+            raise ValueError("vocab_temperature must be finite and positive")
+        # Non-persistent: not part of state_dict, so existing checkpoints load.
+        self.register_buffer('vocab_temperature', torch.tensor(float(vocab_temperature)),
+                             persistent=False)
 
         self.width, self.heads = width, heads
         if layer_idx is not None and (isinstance(layer_idx, bool) or not isinstance(layer_idx, int)
@@ -220,7 +226,7 @@ class DismAttention(nn.Module):
             raise ValueError("hidden_states must have shape [B,N,width]")
         last_state = get_layer_cache(self, past_key_values)
         options = {name: kwargs.get(name) for name in
-                   ('hard_prob', 'direction', 'hard', 'hard_seed', 'generator')}
+                   ('hard_prob', 'direction', 'hard', 'hard_seed', 'generator', 'vocab_temperature')}
         v_first = kwargs.get('v_first')
         probability = options['hard_prob']
         probability = (0.0 if self.training else 1.0) if probability is None else float(probability)
@@ -276,7 +282,7 @@ class DismAttention(nn.Module):
 
     def _forward_cuda(self, x, hard_prob=None, *, direction=None, hard=None,
                 hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None,
-                v_first=None):
+                v_first=None, vocab_temperature=None):
         """Default: soft training, hard evaluation; explicit flags override sampling.
 
         direction: bool [B,H] (True selects k-to-qemb, the query-LSE path).
@@ -371,13 +377,18 @@ class DismAttention(nn.Module):
         else:
             eq, ek = self.q_vocab.float(), self.k_vocab.float()
         tau = F.softplus(self.log_sel_tau.float()).contiguous()
-        if compiling:
+        from .reinforce import enabled, sampled_voc
+        beta = self.vocab_temperature if vocab_temperature is None else vocab_temperature
+        if enabled():
+            output = sampled_voc(q, k, sq, sk, v, eq, ek, tau, direction=direction,
+                                 hard=hard, layout=layout, beta=beta)
+        elif compiling:
             from .compiler import voc_forward
-            output = voc_forward(q, k, sq, sk, v, eq, ek, tau, direction, hard,
+            output = voc_forward(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard,
                                  cu_seqlens, compiled_layout)[0]
         else:
             output = voc_dism(q, k, sq, sk, v, eq, ek, tau,
-                              direction=direction, hard=hard, layout=layout)
+                              direction=direction, hard=hard, layout=layout, beta=beta)
         output = self._combine_cuda(output, x, v, cu_seqlens, max_seqlen, v_first=v_first,
                                     linear_q=linear_q, linear_k=linear_k)
         gate = self.g_proj_up(self.g_proj_down(x)).reshape(batch, length, self.heads, self.value_dim)

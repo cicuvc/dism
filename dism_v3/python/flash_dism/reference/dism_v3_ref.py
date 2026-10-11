@@ -1,4 +1,5 @@
 import torch
+import math
 from torch import Tensor
 
 def _float(x):
@@ -131,7 +132,7 @@ def dism_ref_backward(q_vec: Tensor, k_vec: Tensor, sq_vec: Tensor, sk_vec: Tens
     return dict(q_vec=dq,k_vec=dk,sq_vec=dsq,sk_vec=dsk,q_lse=dlq,k_lse=dlk,v=dv,rtau=dtau)
 
 
-def dism_wrapper(q: Tensor, k: Tensor, sq_vec: Tensor, sk_vec: Tensor, q_weight: Tensor, k_weight: Tensor, v: Tensor, rtau: Tensor, *, direction: Tensor | None = None, hard: Tensor | None = None, hard_prob: float = .5, generator: torch.Generator | None = None):
+def dism_wrapper(q: Tensor, k: Tensor, sq_vec: Tensor, sk_vec: Tensor, q_weight: Tensor, k_weight: Tensor, v: Tensor, rtau: Tensor, *, direction: Tensor | None = None, hard: Tensor | None = None, hard_prob: float = .5, generator: torch.Generator | None = None, beta: float = 1.0):
     """
     q, k: [B, N, H, D]
     sq_vec, sk_vec: [B, N, H, R] soft readout, already SiLU activated
@@ -142,21 +143,26 @@ def dism_wrapper(q: Tensor, k: Tensor, sq_vec: Tensor, sk_vec: Tensor, q_weight:
         Default draws one GLOBAL direction per call, matching v2 semantics.
     hard: optional bool [B,H,N] for deterministic replay; otherwise sample
         with scalar hard_prob. This torch oracle does not reproduce CUDA Philox indexing.
+    beta: vocabulary-softmax temperature. The interpolated embeddings are built
+        from softmax(beta * scores) and the matching LSE is logsumexp(beta * scores);
+        the interpolated side is scaled by beta so the core soft score is
+        E_{p_k^beta}[log p_q^beta]. beta=1 is the original behavior.
     """
     if q.ndim != 4 or q.shape != k.shape: raise ValueError('Expected equal [B,N,H,D] q/k')
     B, N, H, D = q.shape
     if q_weight.ndim != 2 or q_weight.shape != k_weight.shape or q_weight.shape[1] != D:
         raise ValueError('Expected equally shaped shared tables [V,D]')
     if not 0 <= hard_prob <= 1: raise ValueError('hard_prob must be in [0,1]')
+    if not math.isfinite(beta) or beta <= 0: raise ValueError('beta must be finite and positive')
     q,k,q_weight,k_weight = map(_float,(q,k,q_weight,k_weight))
 
-    k_scores = torch.einsum('bnhd,vd->bnhv', k, k_weight)
-    q_scores = torch.einsum('bnhd,vd->bnhv', q, q_weight)
+    k_scores = beta * torch.einsum('bnhd,vd->bnhv', k, k_weight)
+    q_scores = beta * torch.einsum('bnhd,vd->bnhv', q, q_weight)
     k_lse, idx_k = torch.logsumexp(k_scores, -1), torch.argmax(k_scores, -1).transpose(-1, -2)
     q_lse, idx_q = torch.logsumexp(q_scores, -1), torch.argmax(q_scores, -1).transpose(-1, -2)
 
-    q_emb = torch.einsum('bnhv,vd->bnhd', torch.softmax(k_scores, -1), q_weight)
-    k_emb = torch.einsum('bnhv,vd->bnhd', torch.softmax(q_scores, -1), k_weight)
+    q_emb = torch.einsum('bnhv,vd->bnhd', torch.softmax(k_scores, -1), q_weight) * beta
+    k_emb = torch.einsum('bnhv,vd->bnhd', torch.softmax(q_scores, -1), k_weight) * beta
     
     if direction is None:
         direction = torch.randint(0, 2, (), device=q.device, generator=generator).bool().expand(B,H)

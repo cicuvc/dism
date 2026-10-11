@@ -32,14 +32,18 @@ def dism_core(*args, cu_seqlens=None, layout=None, ctas=0):
     return _fixed_core(*args,ctas=ctas)
 
 
-def voc_dism(*args, direction, hard, cu_seqlens=None, layout=None, ctas=0):
-    """Triton vocabulary interpolation followed by the shape-selected CUDA core."""
+def voc_dism(*args, direction, hard, cu_seqlens=None, layout=None, ctas=0, beta=1.0):
+    """Triton vocabulary interpolation followed by the shape-selected CUDA core.
+
+    ``beta`` is the vocabulary-softmax temperature (scalar float or 0-dim tensor);
+    ``beta=1.0`` is the original unscaled behavior.
+    """
     if cu_seqlens is not None or layout is not None:
         if ctas:
             raise ValueError('ctas is only supported for fixed-length execution')
         return voc_dism_varlen(*args,cu_seqlens=cu_seqlens,layout=layout,
-                               direction=direction,hard=hard)
-    return _fixed_voc(*args,direction=direction,hard=hard,ctas=ctas)
+                               direction=direction,hard=hard,beta=beta)
+    return _fixed_voc(*args,direction=direction,hard=hard,ctas=ctas,beta=beta)
 
 
 __all__ = ['DismConfig','DismModel','DismForCausalLM','DismAttention','DismSwaAttention','DismCache','dism_core','voc_dism','forward_core','backward_core',

@@ -44,6 +44,7 @@ class DismBlock(nn.Module):
                        readout_l2_norm=config.readout_l2_norm,
                        soft_k_l2_norm=config.soft_k_l2_norm,
                        value_residual=getattr(config, 'value_residual', False),
+                       vocab_temperature=getattr(config, 'vocab_temperature', 1.0),
                        vocab_transvq=getattr(config, 'vocab_transvq', False),
                        vocab_transvq_lite=getattr(config, 'vocab_transvq_lite', False),
                        vocab_transvq_map=getattr(config, 'vocab_transvq_map', 'linear_attn'),

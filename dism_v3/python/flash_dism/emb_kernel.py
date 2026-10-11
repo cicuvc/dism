@@ -469,3 +469,24 @@ class EmbInterpFunction(torch.autograd.Function):
         q, k, q_emb, k_emb, out_q, out_k, olse_q, olse_k, tau = ctx.saved_tensors
         dq, dk, dq_emb, dk_emb = emb_bwd_wrapper(q, k, q_emb, k_emb, out_q, out_k, olse_q, olse_k, doq, dok, dlq, dlk, ctx.sm_scale, tau)
         return (dq, dk, dq_emb, dk_emb, None, None)[:len(ctx.needs_input_grad)]
+
+
+def interp_embeddings(query, key, q_emb, k_emb, beta=1.0, tau=None):
+    """Embedding interpolation at temperature ``beta`` with DISM score scaling.
+
+    The Triton kernel already takes ``sm_scale=beta`` for the vocabulary softmax
+    and the LSE. The core computes ``raw - LSE``, so we additionally multiply the
+    interpolated embeddings by ``beta`` to obtain ``beta*raw - LSE_beta``, which
+    equals ``E_{p_k^beta}[log p_q^beta]`` (the soft match log-score at
+    temperature ``beta``; ``beta=1`` is the current behavior).
+
+    Returns ``(q_from_k, k_from_q, k_lse, q_lse, idx_k, idx_q)`` in the callers'
+    naming (matching ``voc_dism``/``voc_dism_varlen``).
+    """
+    b = float(beta)
+    qfk, kfq, k_lse, q_lse, _, _, idx_k, idx_q = EmbInterpFunction.apply(
+        query, key, q_emb, k_emb, b, tau)
+    if b != 1.0:
+        qfk = qfk * b
+        kfq = kfq * b
+    return qfk, kfq, k_lse, q_lse, idx_k, idx_q

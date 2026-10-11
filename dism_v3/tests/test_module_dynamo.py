@@ -100,18 +100,47 @@ def test_opaque_voc_gradient_matches_eager(packed, r, d, dv, shared_vocab):
     tables = [torch.randn((64,d) if shared_vocab else (2,64,d), device='cuda', requires_grad=True)
               for _ in range(2)]
     tau = torch.ones(2, device='cuda', requires_grad=True)
+    beta = torch.ones((), device='cuda')
     inputs = [*vectors, *tables, tau]
     direction = torch.tensor([[True, False]], device='cuda')
     hard = torch.rand(1, 2, 256, device='cuda') < .5
     cu = torch.tensor([0, 0, 256], device='cuda', dtype=torch.int32) if packed else None
     expected = voc_dism(*inputs, direction=direction, hard=hard, cu_seqlens=cu)
-    actual = voc_forward(*inputs, direction, hard, cu)[0]
+    actual = voc_forward(*inputs, beta, direction, hard, cu)[0]
     dout = torch.randn_like(actual)
     expected_grad = torch.autograd.grad(expected, inputs, dout)
     actual_grad = torch.autograd.grad(actual, inputs, dout)
     torch.testing.assert_close(actual, expected, atol=0, rtol=0)
     for a, e in zip(actual_grad, expected_grad):
         torch.testing.assert_close(a, e, atol=.001, rtol=.03)
+
+
+@pytest.mark.parametrize('beta_value', [1.0, 2.0, 5.0])
+@pytest.mark.parametrize('packed', [False, True])
+def test_opaque_voc_beta_matches_eager(beta_value, packed):
+    from flash_dism import voc_dism
+    from flash_dism.compiler import voc_forward
+    torch.manual_seed(29)
+    r, d, dv = 16, 32, 32
+    vectors = [torch.randn(1, 256, 2, dim, device='cuda', dtype=torch.bfloat16).mul_(.2).requires_grad_()
+               for dim in (d, d, r, r, dv)]
+    tables = [torch.randn(2, 64, d, device='cuda').requires_grad_() for _ in range(2)]
+    tau = torch.ones(2, device='cuda', requires_grad=True)
+    beta = torch.tensor(beta_value, device='cuda')
+    inputs = [*vectors, *tables, tau]
+    direction = torch.tensor([[True, False]], device='cuda')
+    hard = torch.rand(1, 2, 256, device='cuda') < .5
+    cu = torch.tensor([0, 256], device='cuda', dtype=torch.int32) if packed else None
+    expected = voc_dism(*inputs, direction=direction, hard=hard, cu_seqlens=cu, beta=beta)
+    actual = voc_forward(*inputs, beta, direction, hard, cu)[0]
+    dout = torch.randn_like(actual)
+    expected_grad = torch.autograd.grad(expected, inputs, dout, allow_unused=True)
+    actual_grad = torch.autograd.grad(actual, inputs, dout, allow_unused=True)
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    for a, e in zip(actual_grad, expected_grad):
+        if e is None:
+            continue
+        torch.testing.assert_close(a, e, atol=.002, rtol=.05)
 
 
 def test_prepared_layout_owns_boundary_snapshot():
@@ -121,20 +150,21 @@ def test_prepared_layout_owns_boundary_snapshot():
                .mul_(.2).requires_grad_() for dim in (32, 32, 16, 16, 32)]
     tables = [torch.randn(2, 64, 32, device='cuda', requires_grad=True) for _ in range(2)]
     inputs = [*vectors, *tables, torch.ones(2, device='cuda', requires_grad=True)]
+    beta = torch.ones((), device='cuda')
     direction = torch.tensor([[True, False]], device='cuda')
     hard = torch.rand(1, 2, 512, device='cuda') < .5
     # Reuse the same storage with distinct contents, retain both forwards, and
     # run backwards later. Neither pointer identity nor last-used-pack is safe.
     cu = torch.tensor([0, 256, 512], device='cuda', dtype=torch.int32)
     checked, layout = prepare_pack(cu, 512, 512)
-    old = voc_forward(*inputs, direction, hard, checked, layout)[0]
+    old = voc_forward(*inputs, beta, direction, hard, checked, layout)[0]
     cu.copy_(torch.tensor([0, 512, 512], device='cuda', dtype=torch.int32))
     checked2, layout2 = prepare_pack(cu, 512, 512)
-    new = voc_forward(*inputs, direction, hard, checked2, layout2)[0]
-    expected_old = voc_forward(*inputs, direction, hard,
+    new = voc_forward(*inputs, beta, direction, hard, checked2, layout2)[0]
+    expected_old = voc_forward(*inputs, beta, direction, hard,
         torch.tensor([0, 256, 512], device='cuda', dtype=torch.int32))[0]
     # Compact and capacity-padded metadata must represent identical attention.
-    expected_new = voc_forward(*inputs, direction, hard, cu[:2])[0]
+    expected_new = voc_forward(*inputs, beta, direction, hard, cu[:2])[0]
     torch.testing.assert_close(old, expected_old, atol=0, rtol=0)
     torch.testing.assert_close(new, expected_new, atol=0, rtol=0)
     dout = torch.randn_like(old)

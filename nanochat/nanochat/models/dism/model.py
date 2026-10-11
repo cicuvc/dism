@@ -87,6 +87,7 @@ class DismLM(nn.Module):
                         vocab_size=config.vocab_size, bos_token_id=1, eos_token_id=2,
                         soft_k_l2_norm=config.soft_k_l2_norm,
                         value_residual=config.value_residual,
+                        vocab_temperature=getattr(config, 'vocab_temperature', 1.0),
                         vocab_transvq=getattr(config, "vocab_transvq", False),
                         vocab_transvq_lite=getattr(config, "vocab_transvq_lite", False),
                         vocab_transvq_map=getattr(config, "vocab_transvq_map", "linear_attn"),
@@ -119,6 +120,10 @@ class DismLM(nn.Module):
         self.register_buffer('training_step', torch.zeros((), dtype=torch.int64))
         self.register_buffer('rng_counter', torch.zeros((), dtype=torch.int64))
         self.register_buffer('hard_probability', torch.zeros((), dtype=torch.float32))
+        # Non-persistent: annealed externally, never part of state_dict/checkpoints.
+        self.register_buffer('vocab_temperature',
+                             torch.tensor(float(getattr(config, 'vocab_temperature', 1.0))),
+                             persistent=False)
 
     def _tie_vocabularies(self):
         first_hybrid=None
@@ -199,6 +204,14 @@ class DismLM(nn.Module):
         self.training_step.zero_()
         self.rng_counter.zero_()
         self.hard_probability.zero_()
+        # Non-persistent buffers are not restored by load_state_dict(assign=True)
+        # after to_empty(); reset the vocabulary temperature to its config value.
+        default_beta = float(getattr(self.config, 'vocab_temperature', 1.0))
+        self.vocab_temperature.fill_(default_beta)
+        for layer in self.layers:
+            attn = layer.attn
+            if hasattr(attn, 'vocab_temperature'):
+                attn.vocab_temperature.fill_(default_beta)
         if getattr(self.config, 'value_residual', False):
             gate_bias = float(getattr(self.config, 'value_residual_gate_bias', 2.0))
             for module in self.modules():
@@ -230,8 +243,21 @@ class DismLM(nn.Module):
     def set_training_step(self, step):
         self.training_step.fill_(step)
         progress = min(max(step / max(1, self.config.anneal_steps-1), 0.), 1.)
-        progress = min(1., max(0., (progress-self.config.hard_start_fraction) / (self.config.hard_end_fraction-self.config.hard_start_fraction)))
-        self.hard_probability.fill_(self.config.hard_prob_max * progress)
+        hard_progress = min(1., max(0., (progress-self.config.hard_start_fraction) / (self.config.hard_end_fraction-self.config.hard_start_fraction)))
+        hp_start = float(getattr(self.config, 'hard_prob_start', 0.0))
+        self.hard_probability.fill_(hp_start + (self.config.hard_prob_max - hp_start) * hard_progress)
+        # Cosine vocabulary-temperature schedule (start==end keeps it constant).
+        beta_start = float(getattr(self.config, 'vocab_temperature_start', 1.0))
+        beta_end = float(getattr(self.config, 'vocab_temperature_end', 1.0))
+        self.vocab_temperature.fill_(beta_start + 0.5 * (beta_end - beta_start) * (1.0 - math.cos(math.pi * progress)))
+
+    @torch.no_grad()
+    def set_vocab_temperature(self, value):
+        """Set the vocabulary-softmax temperature used by the soft DISM branch."""
+        value = float(value)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError('vocab_temperature must be finite and positive')
+        self.vocab_temperature.fill_(value)
 
     def get_device(self):
         return self.embedding.weight.device
@@ -253,7 +279,16 @@ class DismLM(nn.Module):
         return 6*self.scaling_parameter_count() + 12*self.config.n_layer*self.config.n_head*64*self.config.sequence_len
 
     def setup_pretraining_optimizer(self, config):
+        # Optional selector-only AdamW betas. The DISM selector path is gated:
+        # on hard rows its gradient is exactly zero for q_vocab/k_vocab and the
+        # DISM short-conv filters, so those tensors see fewer active rows and a
+        # noisier gradient. A higher selector beta1 (longer momentum) reduces
+        # that noise. Disabled when selector_beta1 <= 0.
+        sel_b1 = float(getattr(self.config, 'selector_beta1', 0.0) or 0.0)
+        sel_b2 = float(getattr(self.config, 'selector_beta2', 0.0) or 0.0)
+        use_sel = sel_b1 > 0.0
         decay, no_decay, map_decay, map_no_decay = [], [], [], []
+        sel_decay, sel_no_decay = [], []
         for name, p in self.named_parameters():
             if 'vocab_map' in name:
                 # TransVQ map is a training-time reparameterization; lock its LR to
@@ -262,12 +297,25 @@ class DismLM(nn.Module):
                 continue
             exempt = (p.ndim < 2 or name.endswith(('.bias', 'q_vocab', 'k_vocab', 'log_sel_tau', 'rms_weight'))
                       or getattr(p, '_no_weight_decay', False))
+            is_selector = (name.endswith(('q_vocab', 'k_vocab'))
+                           or name.endswith(('.q_conv.conv_weight', '.k_conv.conv_weight')))
+            if use_sel and is_selector:
+                (sel_no_decay if exempt else sel_decay).append(p)
+                continue
             (no_decay if exempt else decay).append(p)
         groups = [dict(params=decay, weight_decay=config.weight_decay, kind='adamw'),
                   dict(params=no_decay, weight_decay=0., kind='adamw')]
         if map_decay or map_no_decay:
             groups += [dict(params=map_decay, weight_decay=config.weight_decay, kind='adamw', lr_scale=0.2),
                        dict(params=map_no_decay, weight_decay=0., kind='adamw', lr_scale=0.2)]
+        if use_sel:
+            sel_betas = (sel_b1, sel_b2 if sel_b2 > 0 else 0.95)
+            if sel_decay:
+                groups.append(dict(params=sel_decay, weight_decay=config.weight_decay,
+                                   kind='adamw', betas=sel_betas))
+            if sel_no_decay:
+                groups.append(dict(params=sel_no_decay, weight_decay=0.,
+                                   kind='adamw', betas=sel_betas))
         optimizer = torch.optim.AdamW(groups, lr=config.matrix_lr, betas=(.9, .95), eps=1e-8,
                                      fused=self.get_device().type == 'cuda')
         for g in optimizer.param_groups:
@@ -321,11 +369,25 @@ class DismLM(nn.Module):
                     hard = torch.full_like(hard, hard_mode)
                 if self.config.value_residual:
                     x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
-                              hard=hard, direction=direction, use_cache=False, v_first=v_first)
+                              hard=hard, direction=direction, use_cache=False, v_first=v_first,
+                              vocab_temperature=self.vocab_temperature)
                 else:
                     x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
-                              hard=hard, direction=direction, use_cache=False)
+                              hard=hard, direction=direction, use_cache=False,
+                              vocab_temperature=self.vocab_temperature)
             x = self.norm(x).to(torch.bfloat16)
+            if targets is not None and loss_reduction == 'reinforce':
+                # Optionally-sampled DISM path: differentiable mean NLL plus a
+                # detached per-token NLL used as the score-function reward/baseline.
+                with torch.autocast('cuda', enabled=False):
+                    direct = fused_cross_entropy(x, self.lm_head.weight.to(torch.bfloat16),
+                                                 targets.reshape(1, -1), ignore_index=-1,
+                                                 softcap=self.config.softcap)
+                    with torch.no_grad():
+                        tokens = fused_cross_entropy_unreduced(
+                            x, self.lm_head.weight.to(torch.bfloat16), targets.reshape(1, -1),
+                            ignore_index=-1, softcap=self.config.softcap).flatten()
+                    return direct, tokens
             if targets is not None and loss_reduction == 'mean':
                 # nanochat targets are ALREADY shifted, unlike HF labels.
                 with torch.autocast('cuda', enabled=False):

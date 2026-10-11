@@ -95,23 +95,27 @@ def _prepare_pack_fake(boundaries, tokens, maximum):
 @torch.library.custom_op('flash_dism::voc_forward_bnhd', mutates_args=())
 def voc_forward(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.Tensor,
                 v: torch.Tensor, eq: torch.Tensor, ek: torch.Tensor, tau: torch.Tensor,
-                direction: torch.Tensor, hard: torch.Tensor,
+                beta: torch.Tensor, direction: torch.Tensor, hard: torch.Tensor,
                 boundaries: Optional[torch.Tensor], layout: Optional[torch.Tensor] = None) -> list[torch.Tensor]:
+    b = float(beta)
     cu.prepare_embedding(q, k, sq, sk, v, eq, ek, tau, direction, hard, False)
     query, key, qe, ke = prepare_embedding(q, k, eq, ek)
-    qfk, kfq, lk, lq, _, _, ik, iq = emb_fwd_wrapper(query, key, qe, ke, 1., tau.detach())
-    qv, kv = select_operands(q, k, qfk, kfq, direction)
+    qfk, kfq, lk, lq, _, _, ik, iq = emb_fwd_wrapper(query, key, qe, ke, b, tau.detach())
+    # The core score must be beta*raw - LSE_beta; scale the interpolated side.
+    qsk, ksk = (qfk, kfq) if b == 1.0 else (qfk * b, kfq * b)
+    qv, kv = select_operands(q, k, qsk, ksk, direction)
     output, norm, state = cu.core_forward(
         (qv, kv, sq, sk, v, lq.transpose(1, 2), lk.transpose(1, 2),
          iq, ik, direction, hard, tau), layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1]),
         0, True, False, True)
     # All auxiliary results own newly computed storage; no inputs alias outputs.
+    # qfk/kfq are saved UNSCALED so the backward delta uses E_beta with dL/dE.
     return [output, qfk, kfq, lk, lq, ik, iq,
             state['vertical'], state['operands'][12], norm]
 
 
 @voc_forward.register_fake
-def _forward_fake(q, k, sq, sk, v, eq, ek, tau, direction, hard, boundaries, layout=None):
+def _forward_fake(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundaries, layout=None):
     b, n, h, d = q.shape
     vector = lambda: q.new_empty((b, n, h, d))
     scalar = lambda dtype: q.new_empty((b, h, n), dtype=dtype)
@@ -131,11 +135,13 @@ def _forward_fake(q, k, sq, sk, v, eq, ek, tau, direction, hard, boundaries, lay
 def voc_backward(inputs: list[torch.Tensor], saved: list[torch.Tensor],
                  boundaries: Optional[torch.Tensor], dout: torch.Tensor,
                  layout: Optional[torch.Tensor] = None) -> list[torch.Tensor]:
-    q, k, sq, sk, v, eq, ek, tau, direction, hard = inputs
+    q, k, sq, sk, v, eq, ek, tau, beta, direction, hard = inputs
+    b = float(beta)
     output, qfk, kfq, lk, lq, ik, iq, vertical, boundary, norm = saved
     cu.prepare_embedding(q, k, sq, sk, v, eq, ek, tau, direction, hard, False)
     query, key, qe, ke = prepare_embedding(q, k, eq, ek)
-    qv, kv = select_operands(q, k, qfk, kfq, direction)
+    qsk, ksk = (qfk, kfq) if b == 1.0 else (qfk * b, kfq * b)
+    qv, kv = select_operands(q, k, qsk, ksk, direction)
     raw = (qv, kv, sq, sk, v, lq.transpose(1, 2), lk.transpose(1, 2), iq, ik, direction, hard, tau)
     # Forward already absorbed tau. Do not allocate zeros or subtract it again.
     prepared = list(cu.prepare_operands(raw, boundaries is not None, True))
@@ -144,8 +150,9 @@ def voc_backward(inputs: list[torch.Tensor], saved: list[torch.Tensor],
     g, _ = cu.core_backward(prepared, vertical, output, core_norm, dout.to(torch.bfloat16).contiguous(),
                             layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1]), 0, False, False)
     doq, dok = split_interpolation_gradients(g['q_vec'], g['k_vec'], direction)
+    # doq/dok are dL/d(beta*E); the kernel wants dL/dE with out=E, so multiply by beta.
     dq, dk, dqe, dke = emb_bwd_wrapper(query, key, qe, ke, qfk, kfq, lk, lq,
-        doq, dok, g['k_lse'].transpose(1, 2).float(), g['q_lse'].transpose(1, 2).float(), 1., tau.detach())
+        doq * b, dok * b, g['k_lse'].transpose(1, 2).float(), g['q_lse'].transpose(1, 2).float(), b, tau.detach())
     dq, dk, dsq = merge_token_gradients(g['q_vec'], g['k_vec'], dq, dk, g['sq_vec'], direction)
     dqe, dke = cast_vocabulary_gradients(dqe, dke, eq, ek)
     gradients = [dq, dk, dsq, g['sk_vec'].to(sk.dtype), g['v'].to(v.dtype),
@@ -159,22 +166,22 @@ def _backward_fake(inputs, saved, boundaries, dout, layout=None):
 
 
 def _setup(ctx, inputs, output):
-    ctx.packed = inputs[10] is not None
-    ctx.has_layout = inputs[11] is not None
-    ctx.save_for_backward(*inputs[:10], *output,
-                          *([inputs[10]] if ctx.packed else []),
-                          *([inputs[11]] if ctx.has_layout else []))
+    ctx.packed = inputs[11] is not None
+    ctx.has_layout = inputs[12] is not None
+    ctx.save_for_backward(*inputs[:11], *output,
+                          *([inputs[11]] if ctx.packed else []),
+                          *([inputs[12]] if ctx.has_layout else []))
     ctx.mark_non_differentiable(*output[1:])
 
 
 def _backward(ctx, grads):
     saved = ctx.saved_tensors
-    gradients = voc_backward(list(saved[:10]), list(saved[10:20]),
-                             saved[20] if ctx.packed else None, grads[0],
-                             saved[20 + int(ctx.packed)] if ctx.has_layout else None)
+    gradients = voc_backward(list(saved[:11]), list(saved[11:21]),
+                             saved[21] if ctx.packed else None, grads[0],
+                             saved[21 + int(ctx.packed)] if ctx.has_layout else None)
     # Dispatcher omits trailing default=None arguments, while setup_context
     # receives defaults restored. Match the actual autograd input arity.
-    return (*gradients, None, None, None, None)[:len(ctx.needs_input_grad)]
+    return (*gradients, None, None, None, None, None)[:len(ctx.needs_input_grad)]
 
 
 voc_forward.register_autograd(_backward, setup_context=_setup)

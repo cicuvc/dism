@@ -35,8 +35,14 @@ class DismConfig:
     soft_qk_rope: bool = False
     shared_readout: bool = False
     soft_k_l2_norm: bool = False
+    vocab_temperature: float = 1.0
+    vocab_temperature_start: float = 1.0
+    vocab_temperature_end: float = 1.0
     split_branch_output: bool = False
     hard_prob_max: float = 1.0  # Preserve old checkpoint semantics; new runs explicitly set .95.
+    hard_prob_start: float = 0.0
+    selector_beta1: float = 0.0  # >0 splits gated DISM selector params into their own AdamW groups
+    selector_beta2: float = 0.0
     value_residual: bool = False
     value_residual_gate_bias: float = 2.0
     conv_impl: str = "fused"
