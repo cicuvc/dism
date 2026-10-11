@@ -94,7 +94,21 @@ class DismLM(nn.Module):
                         vocab_transvq_rank=getattr(config, "vocab_transvq_rank", 4),
                         post_norm=config.post_norm)
         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
-        if config.alternating_gdn or config.rear_half_dism:
+        if getattr(config, 'layer_layout', ''):
+            # Dedicated-layer layout: no layer mixes DISM and GDN internally.
+            spec = {'g': 'pure_gdn', 'd': 'dism', 'h': 'hybrid_gdn'}
+            layout = str(config.layer_layout)
+            if attention_type != 'hybrid_gdn':
+                raise ValueError('layer_layout requires the hybrid_gdn architecture')
+            if len(layout) != config.n_layer or any(ch not in spec for ch in layout):
+                raise ValueError('layer_layout must have n_layer entries drawn from g/d/h')
+            blocks = []
+            for i, ch in enumerate(layout):
+                layer_config = copy.copy(c)
+                layer_config.attention_type = spec[ch]
+                blocks.append(DismBlock(layer_config, i))
+            self.layers = nn.ModuleList(blocks)
+        elif config.alternating_gdn or config.rear_half_dism:
             if config.alternating_gdn and config.rear_half_dism:
                 raise ValueError('Choose only one mixed-layer layout')
             if attention_type != 'hybrid_gdn' or config.n_layer%2:

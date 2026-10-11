@@ -52,6 +52,10 @@ class DismConfig:
     vocab_transvq_map: str = "linear_attn"
     vocab_transvq_rank: int = 4
     vocab_transvq_separate_qk: bool = False
+    # Per-layer mixer layout, e.g. "ggggggddgddg". 'g'=pure GDN, 'd'=DISM only,
+    # 'h'=DISM+GDN hybrid. Empty string keeps the alternating_gdn/rear_half_dism
+    # behaviour. Used to test dedicated (non-mixed) layer layouts.
+    layer_layout: str = ""
 
 
 def _build(config):
