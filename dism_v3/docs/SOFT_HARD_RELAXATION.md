@@ -2324,3 +2324,135 @@ V=256 省 16× 算力、30% 参数；64×64 (V=4096) 与 V=512 的未因子化�
 则结论是"**只需把 valres 的 direction 改成 random，不必改布局**"——代价远小于重构。
 另有 gap 侧的两个候选：加快 `hard_prob` 退火（`hard_start_fraction` 0→0.3~0.5，
 或 `hard_prob_max` 直接 1.0）与 β 锐化（§19–§26 已验证能把 valres gap 0.0058→0.0029）。
+
+---
+
+## 38. 汇总：预训练评估 + MAD 合成任务评估
+
+所有数字的来源：`val_bpb` 取自各 run 的 `meta_019074.json`；PG19 取自 harness
+（`adapter.py` + `pg19.yaml`，hard eval，disjoint 窗口）；NIAH 取自
+`dism-fwedu-valres-72m-2500m/diagnostics/niah_results/*.json`（16 trials，
+所有模型共用同一组 trial）；train/infer gap 取自 `dual_validation.jsonl`；
+MAD 取自 `/tmp/dism_diag/mad_*/` 的 `logs/metrics.csv`（best-epoch，§35.4）。
+
+### 38.1 预训练：val_bpb / PG19 / NIAH
+
+共同前提：fwedu-100B sample、seq 2048、bs 131072、19074 步（2.5B tokens）、
+`rear_half_dism`、`value_residual`、seed 1729。**除注明外 `direction_policy="true"`。**
+
+| run | 改了什么 | val_bpb | PG19 2k | PG19 16k |
+|---|---|---|---|---|
+| slimpajama（换数据） | slimpajama 语料 | 1.318086 | 1.5028 | 1.4368 |
+| fwedu（无 value residual） | — | 1.190988 | 1.5272 | 1.4410 |
+| **valres（A，基线）** | value_residual | **1.182854** | **1.4374** | **1.4047** |
+| valsyncB | β 退火 + hard 调度 + selector β1 | 1.182748 | 1.4399 | 1.4063 |
+| valsync | β 退火 + hard 调度 | 1.183907 | — | — |
+| sep-rank1 | shareqk + TransVQ rank1 | 1.183828 | 1.4669 | 1.4344 |
+| shareqk | 共享 qk 线性 | 1.185901 | — | — |
+| valsched | hard_prob 推迟 | 1.189378 | — | — |
+| **C = spec2d1g** | 专用层 `ggggggddgddg` + **dir=random** | 1.201140 | 1.4853 | 1.4488 |
+| **D = spec2d1g-dirtrue** | 专用层 + dir=true | 1.204047 | 1.4947 | 1.4653 |
+| **B = valres + dir=random** | 只改 direction | 🔄 进行中 | | |
+| E1 | valres + warm-start β 1→6 | — | — | 1.4069 |
+| E2 | valsyncB + β 4→6 | — | — | 1.4105 |
+| E3 | sep-rank1 + β 1→6 | — | — | 1.4390 |
+| E4 | lite + β 1→6 | — | — | 1.4527 |
+| lite | shareqk + TransVQ lite | 1.4895→? | — | 1.4569 |
+
+**NIAH present-NLL**（越低越好；`mean` = depth 0.05/0.5/0.95 平均，`d.05` = 最远端针）：
+
+| model | 2k | 8k | 16k | 2k/d.05 | 8k/d.05 | 16k/d.05 |
+|---|---|---|---|---|---|---|
+| **fwedu_valres (A)** | **1.724** | 2.230 | **2.459** | 2.158 | 2.480 | 2.811 |
+| E1_valres | 1.745 | 2.318 | 2.475 | 2.198 | 2.484 | 2.757 |
+| E4_lite | 1.961 | 2.261 | 2.456 | 2.385 | **2.361** | **2.495** |
+| fwedu_lite | 1.966 | 2.339 | 2.586 | 2.501 | 2.537 | 2.710 |
+| slimpajama_baseline | 1.803 | 2.314 | 2.704 | 2.118 | 2.719 | 2.724 |
+| **C = spec2d1g (dir=random)** | **1.433** | **2.091** | **2.454** | **1.516** | **2.113** | 2.611 |
+| **D = spec2d1g-dirtrue** | 1.804 | 2.351 | 2.555 | 2.012 | 2.509 | 2.548 |
+| fwedu_baseline | 1.858 | 2.529 | 2.852 | 2.410 | 3.116 | 3.262 |
+| fwedu_valsyncB | 2.197 | 2.700 | 2.927 | 2.758 | 3.028 | 3.064 |
+| E2_valsyncB | 2.350 | 2.801 | 3.081 | 2.841 | 3.138 | 3.216 |
+| fwedu_seprank1 | 2.187 | 2.606 | 2.795 | 2.714 | 2.891 | 2.940 |
+| E3_seprank1 | 2.285 | 2.705 | 2.896 | 2.750 | 2.921 | 2.973 |
+
+**train/infer gap**（`hard_bpb − soft_bpb`，同 step）：
+
+| step | A valres/true | C 专用/random | D 专用/true |
+|---|---|---|---|
+| 1000 | +0.0226 | +0.0331 | +0.0891 |
+| 8000 | +0.0162 | +0.0305 | +0.0451 |
+| 19074 | +0.0058 | +0.0079 | — |
+
+**要点**
+1. **bpb 排序：valres(A) < valsyncB < … < C < D**；专用层布局代价 ~0.02 bpb，
+   `direction=random` 在专用层上反而更好（C<D）。
+2. **NIAH 排序完全不同**：C 在 2k/8k 明显最好（1.433/2.091），A 与 C 在 16k 并列
+   （2.459/2.454），**D 每档都最差**。→ 长程收益来自 `direction=random`，不是专用层。
+3. **seprank1/valsyncB 家族在 NIAH 上明显差**（16k 2.795–3.081 vs 2.459），
+   而它们的 bpb 只差 0.001–0.02 → **bpb 严重低估长程损伤**（§33）。
+4. **gap 与"是否被 GDN 稀释"直接相关**：专用层+D 是 valres 的 2.8–4×。
+
+### 38.2 MAD 合成任务（in-context-recall = MQAR）
+
+`best acc / min test loss`。`chance = 1/(V/2)`。
+
+| sl | vocab | ntr | attention | gdn-only | dism-only | **dism+GDN(hybrid)** | 其他 |
+|---|---|---|---|---|---|---|---|
+| 256 | 16 | 12800 | 0.9995 | 0.9998 | 0.9993 | 0.9997 | — |
+| 256 | 128 | 12800 | **0.0645**¹ | 0.9973 | **0.9992** | 0.9950–0.9972 | 解绑 0.9994；per-branch-RMS 0.9856；delta-LP 0.9921；专用 G+2D **0.9992** |
+| 1024 | 16 | 3200 | 0.3161 | 0.9993 | 0.9990 | 0.9994 | — |
+| 1024 | 128 | 3200 | 0.0548 | 0.9970 | **0.9991** | 0.9638–0.9945 | 解绑 0.9919；per-branch-RMS 0.9930；delta-LP 0.9918；专用 G+2D **0.9991** |
+| 2048 | 128 | 1600 | 0.0533 | — | — | 0.9794 | — |
+| **2048** | **512** | **1600** | — | 0.0043 | 0.0047 | — | ← **数据量不足，全部 chance** |
+| **2048** | **512** | **12800** | — | 0.5791 | **0.8753** | 0.3372² | A(h64,V512) **0.9940**；32×16 0.9854；64×64 0.9647 |
+
+¹ attention 是**双峰**的：同配置另一次跑 226 epoch 后到达 0.9991（induction 电路形成是随机相变）。
+² hybrid 在极限档 ep72 只有 0.337 且已饱和 → 同时低于两个单分支。
+
+**要点**
+1. **极限档（256 keys, ctx 2048）DISM 大幅胜 GDN**：0.8753 vs 0.5791（loss 0.59 vs 2.08），
+   且 DISM 到 200 epoch 仍在涨、GDN 在 60–80 epoch 就饱和。
+2. **层内 DISM+GDN 混合一致地不优于任一单分支**，且方差更大
+   （hybrid 0.964–0.997 vs dism-only 0.999）；三种混合机制（相加 / per-branch RMS /
+   rank-1 delta 写入）都救不了。**专用层布局（GDN + 2×DISM）能回到 0.9992/0.9991。**
+3. **`--num-train-examples` 不能随 seq_len 缩放**：缩到 1600 时两个架构都锁死在 chance，
+   那是数据量不足而非机制失败（这是最重要的方法学教训）。
+4. **head_dim 32→64 在极限档是巨大变量**：0.8753 → 0.9940。
+5. 因子化码表见 §36：小配置 2 mixers 更好（0.9991/0.0047 vs 0.9971/0.0096，收敛快 7×、
+   省 16× 插值算力），1 mixer 更差（0.9915 vs 0.9973）→ 压力转移到前驱层。
+
+### 38.3 新增任务 `mqmvar`（in-context 值分布 recall）
+
+**任务**：每个 key 拥有一个**每序列随机的值分布**（`n_support`、`n_obs` 都随机），
+历史形如 `A B A C A B`，下一个 `A` 应输出 `B=2/3, C=1/3, other=0`。
+生成器返回**第三个数组** `dist[T, V]`（答案位置上的计数），dataset 支持 3-tuple，
+`PLModelWrap` 见到 3-tuple 就用 **KL(D‖softmax(logits))** 作 loss，并记录
+CE / TargetEntropy / Accuracy / Perplexity。位置：`mad/data/instances.py`、
+`mad/data/dataset.py`、`mad/model/pl_model_wrapper.py`、`configs/tasks/mqmvar.yml`。
+
+原语：keys = `[0,V/2)`、values = `[V/2,V)`；每 key 随机取 `n_support∈[2,4]` 个值作为
+支撑集；历史值在该支撑集上自由采样；答案位置的**目标分布 = 该 key 历史值的经验归一化计数**
+（要求历史长度 ≥ `min_history`），答案 token 本身**不需要是该分布的一个样本**
+（这正是 KL loss 带来的自由度）。
+
+**结果**（vocab=16 / seq=128 / ntr=12800 / 2 mixers / 200 epoch）：
+
+| loss | arch | best acc | KL | test loss |
+|---|---|---|---|---|
+| **NTP token CE** | gdn-only | 0.5515 | — | 0.9107 |
+| NTP token CE | dism-only | 0.5432 | — | 0.9287 |
+| **KL(D‖Q)** | **gdn-only** | **0.9880** | **0.0001** | **0.0001** |
+| KL | **dism-only** | 0.9822 | 0.0001 | 0.0001 |
+| KL | attention-4h | 0.9633 | 0.0002 | 0.0002 |
+
+参照量：目标分布熵均值 0.7490 nats；history-only plug-in 计数器在 history≥3 的位置
+CE ≈ 0.6713。
+
+**要点**
+1. **KL loss 彻底解决信噪比**：同一模型从 loss 0.91（比 counting 最优高 ~0.25 nats 且不动）
+   变成 **KL = 0.0001、CE = 目标熵**（即 Q ≡ D）。NTP-CE 在同样本量下信噪比太低。
+2. 这一档**三个架构都饱和**（KL≈0）→ 无法区分。原因可解释：**计数目标是"值的加性和"**，
+   正好是 GDN 状态（外积累加）的原语，所以 GDN 天然会做（与 §38.2 的极限 MQAR 对照，
+   那里是精确 recall，DISM 赢）。
+3. 要让它有区分度需要往"非加性聚合 / 更长历史 / 更大支撑集"方向加难度。
