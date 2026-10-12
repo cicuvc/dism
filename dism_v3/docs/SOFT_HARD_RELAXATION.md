@@ -2261,3 +2261,66 @@ V=256 省 16× 算力、30% 参数；64×64 (V=4096) 与 V=512 的未因子化�
 - **在难任务上不成立**，且**不能用它来放大容量**。
 - 若要继续，方向应是：给因子化配**更深/更宽的前驱表征**（或专门的 symbol-forming
   层），而不是单纯扩组数。
+
+---
+
+## 37. 专用层布局 / direction 的 2x2 对照（含一次归因修正）
+
+四个格子：布局 {valres `gggggghhhhhh` / 专用 `ggggggddgddg`} ×
+`direction_policy` {true / random}。其余配置（数据、步数 19074、bs、lr、seed、
+`value_residual`）完全一致。专用层由新加的 `DismConfig.layer_layout` 指定
+（`configs/sequence_true_72m_valres_spec2d1g[_dirtrue].json`）。
+
+| | 布局 | direction | val_bpb | PG19 16k | NIAH 16k mean-present-NLL |
+|---|---|---|---|---|---|
+| **A** | valres | true | **1.182854** | **1.4047** | **2.459** |
+| B | valres | random | — 缺 — | — | — |
+| **C** | 专用 | random | 1.201140 | 1.4488 | **2.454** |
+| **D** | 专用 | true | 1.204047 | — | 2.555 |
+
+### 37.1 修正：长程 recall 的提升来自 direction，不是布局
+
+先前用 `gain = NLL_absent − NLL_present` 比较时得出结论"专用层带来长程提升"。
+补充 D 组后**该结论被推翻**：用 present NLL（recall 的直接度量，不受 absent 基线
+漂移影响）：
+
+| ctx | A valres/true | C 专用/random | D 专用/true |
+|---|---|---|---|
+| 2048 | 1.724 | **1.433** | 1.804 |
+| 8192 | 2.230 | **2.091** | 2.351 |
+| 16384 | **2.459** | 2.454 | 2.555 |
+
+**D（专用层 + 固定方向）每一档都最差，甚至不如 valres。** 所以：
+- 长程收益来自 **`direction_policy="random"`**（C），不是专用层布局；
+- `random` 同时改善 bpb（C 1.2011 < D 1.2040）和 NIAH；
+- **专用层布局本身在 bpb 和 NIAH 上都不如 valres**，之前"改成专用层"的动机被削弱。
+
+（方法学教训：`gain` 会被 absent 基线漂移污染；跨模型比较长程能力必须看
+**present NLL**。）
+
+### 37.2 train/infer gap
+
+同 step 的 `hard_bpb − soft_bpb`：
+
+| step | A valres/true | C 专用/random | D 专用/true |
+|---|---|---|---|
+| 1000 | +0.0226 | +0.0331 | **+0.0891** |
+| 8000 | +0.0162 | +0.0305 | **+0.0451** |
+| 19074 | +0.0058 | +0.0079 | — |
+
+- **专用层 + 固定方向**的 gap 是 valres 的 2.8–4×（step 8000：0.0451 vs 0.0162），
+  且分解显示 **soft 侧几乎持平、hard 侧明显更差** → 是 hard 读出路径的问题，不是学不动。
+- 机制：hybrid 里 `_combine_cuda` 是 `dism + gdn` 后过**一套共享 RMSNorm**，DISM 的
+  soft/hard 差异 ΔDISM 被整个和的尺度除掉（valres 实测 |DISM|/|GDN| = 0.18–1.59
+  → 稀释 1.7–6.7×，与观测到的 2.8× gap 比吻合）。专用层没有这个分母，gap 全额暴露。
+- **同一个共享 RMSNorm 既是 §35 分支塌缩的起因，也是 gap 被压住的原因。**
+  → 三难：稀释⇒gap 小但 DISM 被压制；专用层⇒DISM 全额发挥但 gap 全额暴露。
+- `direction=random` 把 gap 减半（D 0.0451 → C 0.0305），与用户此前"固定 direction
+  在合成任务上推训 gap 极严重"的经验一致。
+
+### 37.3 下一步
+
+缺格子 **B（valres 布局 + random）** 是关键：若 B 在 bpb 与 NIAH 上都不差于 A，
+则结论是"**只需把 valres 的 direction 改成 random，不必改布局**"——代价远小于重构。
+另有 gap 侧的两个候选：加快 `hard_prob` 退火（`hard_start_fraction` 0→0.3~0.5，
+或 `hard_prob_max` 直接 1.0）与 β 锐化（§19–§26 已验证能把 valres gap 0.0058→0.0029）。
