@@ -2577,3 +2577,44 @@ wandb：project `seq-icl-data`，group `dfa-dism` / `dfa-baselines`。
    其它为 59–199）。
 5. 仍然是 **n=1 seed**，且 416k 配置把 `n_heads` 4→1（结构性代价）。若要更严格，可补
    2–3 seed 和一个"保持 n_heads=4、改用 n_layer=2"的对照（后者对算法性质是更重的干扰）。
+
+---
+
+## 40. 推理复杂度与简化路线（direction / 递归 / 前向分离）
+
+### 40.1 direction 在纯 hard 情形下是**可证明无关**的
+
+```python
+hard_score = zeros.masked_fill(idx_q != idx_k, -inf)
+mix_score  = torch.where(hard[..., None], hard_score, norm_score)   # hard 行丢掉 norm_score
+```
+
+`direction` 只通过 `norm_score`（q-LSE vs k-LSE）和 `select_embedding`（q vs q_from_k）进入
+计算，而两者**都只喂给 `norm_score`**。所以 **hard 行上 `q_vec`/`k_vec`/两个 LSE/两个插值
+嵌入全部不被使用，只有标签 `idx_q/idx_k` 有效**。
+
+实测（valres@19074，同一权重同一 batch，只改 direction 抽样粒度）：
+
+```
+hard loss:  true / false / perhead / allhead / global  全部 = 2.731204   (std = 0.000000)
+soft loss:  true 2.717295 | false 2.722826 | perhead 2.718989 (std .00113)
+            allhead 2.720302 (std .00137) | global 2.720752 (std .00286)
+```
+
+- **推理侧（全 hard）：direction 完全无关** ⇒ 部署 kernel 不需要 direction，也不需要 LSE
+  和插值嵌入，只剩「码表 argmax → 标签匹配 → 递推 → sq·sk·v 读出」。这正是 SAM 能把硬
+  前向归约成 event stream 的原因。
+- **训练侧（soft gate）：direction 才是旋钮**。方向本身有偏好（true 2.7173 < false 2.7228），
+  而**粒度只影响方差**：perhead → global 的 per-forward std 涨 2.5×，即粗化粒度 ≈ 在 soft
+  路径上把有效 batch 缩小 2.5×。这也解释了 §37 里 random 能压 gap（0.045→0.030）的机制。
+- `cycle8`（确定性逐层）此前实测**效果不好**，仍建议 random。
+
+### 40.2 待做（已记录，未执行）
+
+1. **分离 hard / soft 前向**（收益最大，必做）。因为 hard 行不需要 `raw_scores`，而
+   `hard_prob` 从 0 爬到 0.95 ⇒ 训练后期只有 ~5% 的平面是 soft ⇒ 插值/LSE 开销可降 ~20×。
+   前提是 per-plane 特化（4 桶 = {hard,soft}×{q-LSE,k-LSE}）。
+2. **direction 粒度的 3 格配对短训**：`perhead-random`（现状）/ `cycle8` / `global-step`，
+   判据 `val_bpb + NIAH(2k/8k/16k) + hard/soft gap`。因 hard 已证明不变，这三格只在测
+   "soft 正则化强度是否够"，是干净的单变量对照。
+3. **去掉对角递推（后缀匹配）的消融**：见 §41。
