@@ -2456,3 +2456,79 @@ CE ≈ 0.6713。
    正好是 GDN 状态（外积累加）的原语，所以 GDN 天然会做（与 §38.2 的极限 MQAR 对照，
    那里是精确 recall，DISM 赢）。
 3. 要让它有区分度需要往"非加性聚合 / 更长历史 / 更大支撑集"方向加难度。
+
+---
+
+## 39. RegBench（probabilistic DFA）上的 DISM
+
+**仓库**：`~/cs/project/seq_icl`（Akyürek et al., *In-context Language Learning: Architectures
+and Algorithms*）。接入见该仓库 commit `49e6d58` / `3f9dbca` / `fac8455`。
+
+### 39.1 数据管线（重要）
+
+`ICLDFADataModule.setup()` **一次性生成全部数据并常驻内存**，之后 `trainer.fit` 就在这
+固定一批上训 200 个 epoch（每条被看 200 次）：
+
+| split | 条数 | 真实 token 长度 | 备注 |
+|---|---|---|---|
+| train | **5000** | min 129 / **mean 375** / p90 501 / max 662 | 每条 = 1 个 DFA + 10–20 个 in-context 例子 |
+| val | 250 | mean 373 | |
+| test | 250 | mean 375 | |
+
+- **train/val/test 的 DFA 互不相交**（`DFAs[:5000]` → val 取接下来 250 → test 再 250），
+  所以任务要求 in-context 推断 DFA，不能靠背 DFA。
+- 但**唯一数据只有 ~1.88M token/epoch**，200 epoch ⇒ 对 1.4M 参数模型是 **~1.3 token/参数**
+  （Chinchilla 20）→ **任何架构都必然过拟合**。实测 DISM+GDN 在 epoch 40 见顶
+  （val/loss 1.0594 / dfa_acc 0.9048），到 epoch 100 退化到 1.3168 / 0.8718；
+  而 `gla` 到 100 epoch 仍在缓慢改善。checkpoint 按 best val/loss 保存，所以最终
+  `final_val/final_test` 用的是峰值权重，那些数字仍可用。
+
+### 39.2 接入方式
+
+`src/models/sequence/rnn/dism.py`：`_DismMixerBase`（把 `[B,L,D]` 打包成
+`[1,B·Lp,D]`，每行一个文档、无跨行匹配，每个文档尾对齐到 256；BF16 autocast；
+`direction=None` 保持随机方向——固定方向在合成任务上推训 gap 极大）+
+`DismMixer`（DISM+GDN）/ `DismOnlyMixer`（纯 DISM）。注册为 `dism` / `dism-only`，
+配置 `experiment=dfa/dism{,-only}`。除 mixer 外与 `dfa/gla`、`dfa/transformer+` 完全一致
+（d_model 128 / n_layer 4 / vocab 20 / seq 4096 / bs 32 / 200 epoch / lr 5e-4 /
+cosine warmup / seed 0）。
+
+**为在 PL 2.6.1 上跑通所做的两处最小改动**（repo pin 的是 1.8.6）：
+1. 删掉 `train.py` 里三个**纯空**的 `training/validation/test_epoch_end`
+   （PL2 已移除；原方法只调 `super()`，日志体全被注释掉）；
+2. `torch.load` 默认 `weights_only=False`（Lightning checkpoint 内嵌 omegaconf 对象，
+   PyTorch≥2.6 的安全白名单会逐个全局级联报错）。
+
+wandb：project `seq-icl-data`，group `dfa-dism` / `dfa-baselines`。
+
+### 39.3 结果（seed 0，各自 best val/loss 权重）
+
+| run | mixer | 参数量 | best val/loss | best val/dfa_acc | **test/dfa_acc** | model_dfa_diff↓ | model_ngram_diff↓ |
+|---|---|---|---|---|---|---|---|
+| **dfa_dism_only_s0_fixed** | **纯 DISM** | 1,407,440 | 1.0431 | **0.9443** | **0.9465** | 0.487 | 0.407 |
+| dfa_transformerp_s0 | transformer+ | **399,360** | **0.9839** | 0.9289 | 0.9222 | **0.443** | **0.327** |
+| dfa_dism_s0 | DISM+GDN | 1,483,248 | 1.0545 | 0.9067 | 0.9028 | 0.477 | 0.415 |
+| dfa_gla_s0 | GLA（GDN） | 806,912 | 1.2501 | 0.7823 | 0.7910 | 0.705 | 0.528 |
+| dfa_lstm_s0 | LSTM | 17,536 | 1.9323（训练中） | 0.5124 | 0.5307 | — | — |
+
+（`n_gram_dfa_acc ≈ 0.93` 是**参考 n-gram 模型**的 DFA 准确率，不是被测模型。）
+
+### 39.4 结论
+
+1. **纯 DISM 拿到最高 DFA 准确率**：test 0.9465 / val 0.9443，高于 transformer+
+   (0.9222/0.9289)、远高于 GLA (0.7910/0.7823) 与 LSTM (0.53)。**这支持"类 DISM
+   架构在 regbench 上强"的印象。**
+2. **DISM+GDN 再次劣于纯 DISM**（0.9028 vs 0.9465）——这是**第三次独立复现**
+   （MAD §35 的层内混合、nanochat 的 §37、以及这里的 regbench）。同时它过拟合更早
+   （ep40 见顶后退化）。
+3. **指标排序不一致**：val/loss 上 transformer+ 最好（0.9839 vs 1.0431），但
+   dfa_accuracy 上 DISM 最好。DFA loss 里含大量"复制例子"的 token，会被更容易的部分
+   稀释。
+4. **算法探针**：`model_dfa_diff` transformer+ 0.443 < DISM+GDN 0.477 < 纯 DISM 0.487
+   < GLA 0.705；`model_ngram_diff` transformer+ 0.327 < 纯 DISM 0.407 < DISM+GDN 0.415
+   < GLA 0.528。即 **DISM 的 DFA 准确率最高、但离"参考 DFA 算法"和"n-gram 算法"都更远**
+   ——它用的是一个不同的机制（与其"最近匹配/后缀匹配"的原语一致），这点值得单独分析。
+5. **必须注意的 confound**：DISM 是 **1.41M 参数**，而 transformer+ 只有 **0.40M**
+   （3.5×）、GLA 0.81M（1.75×）。所以"准确率最高"里**包含参数量优势**，要下结论需要
+   参数对齐的对照。另外**同配置 run 间方差不可忽略**（同一份 hybrid 配置的两次 run，
+   一次 ep40 见顶后恶化、一次到 ep54 仍在改善）→ 需要 ≥2–3 seed。
