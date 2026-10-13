@@ -2917,3 +2917,43 @@ vs A `q_cov 0.833 / max_share 0.317` ⇒ **ABL 没有塌缩，是 head 分工**�
 4. **对"指数 slot"主张的意义**：递推就是那个把地址空间从 `V` 抬到 `V_eff^n` 的机制，
    代价是 O(1) 级的扫描状态。这条消融是该主张的**核心正对照**。
 5. 仍欠：**长度外推**（train@2k → 8k/16k/64k，hard 路径）与 MoM/GLA 的**等状态量四行对照**。
+
+### 41.5 待做（已记录，未执行）
+
+1. **长度外推**：固定权重（train@2k）在 8k/16k/64k/256k 上评 **hard 路径**的 recall。
+   §41.6 分析给出：外推性质来自**绝对位置不进入计算**（唯一的"位置"是因果掩码与对角偏移
+   算术），归一化是 `exp(score − zmax)` 的相对形式（不是除以 N），且匹配是离散精确等值 ⇒
+   排序与 N 无关。**因此只评 hard**；软路径的锐度随 N 变化，用 soft loss 评会把"软锐度漂移"
+   误读成"外推失败"。同时记录**累加器幅值 vs N**（每桶状态是事件求和，幅值 ~O(N)，
+   是"无条件"最可能的失效点）与 **GDN 门控累积**（经典 SSM 长度漂移）。
+   判据：hard 路径精确 recall 应无退化；任何退化须能归因到上述两条而非"位置超范围"。
+2. **等状态量四行对照**：`GLA / MoM(K slots) / 无递推 DISM(= V slots) / DISM(+递推)`
+   在同一 **M-scan**（按上下文基数 M = V, V², V³… 扫）任务上。
+   预期形态：GLA 与 MoM 随 M 饱和（slot 数固定），DISM 到 `M ~ V_eff^n` 才饱和。
+   这一张表同时回答"递推值多少"（对照 §41.4）与"离散量化值多少"（对照 GLA）。
+   §41.4 已量化：递推把地址空间从 `V` 抬到 `V_eff^n`，而消融的差距**随上下文增大**
+   （2k +0.26 → 8k +0.53）。
+
+### 41.6 递推效率优化：bf16x2 状态二元组（template 特化）
+
+现状：前向 log-domain 递推与反向普通仿射递推的状态二元组都是 **fp32x2**。
+半年前实验显示 **bf16x2 几乎不掉点（甚至略强）**。计划做成**两个独立可调的格式开关**，
+放在 **template 参数**里，通过 template instantiation 生成特化 kernel：
+
+| 路径 | 算子 | 定义位置 |
+|---|---|---|
+| **前向 log-domain affine** | `pscore::LogAffineOp`：`(a,b)*(c,d) = (a+c, softplus_approx(b+c,d))`，`identity()={0, LOG_ZERO}` | `include/summary/primitives.cuh:407` |
+| **反向普通 affine** | `pscore::AffineComposeOp`：`(a,b)*(c,d) = (a·c, b·c+d)`，`identity()={1,0}` | `include/ds_alt.cuh:63`（被 `backward/recompute.cuh:18` 使用） |
+
+存储：`float *SummaryA/SummaryB`（`summary/primitives.cuh:312`、`varlen/summary.cuh:16`），
+写入点 `summary/kernel_common.cuh:76`（`value.first.u0/u1`，即 `PackedF2`），
+另有谓词化的 `AffineComposeOp::combine_either`
+（`ds_alt.cuh:469`）与跨 warpgroup 边界的反向仿射交换（`backward/types.cuh:72`）。
+
+**必须注意的坑**：前向的 `identity()/`哨兵是 `LOG_ZERO = -1e6f`，**bf16 表示不了 -1e6**
+（bf16 指数范围仅 ~±3.4e38 但尾数 8 bit；-1e6 可表示但 `softplus_approx` 的
+`fmaxf`/`tanh.approx` 分支与掩码下溢行为会变）⇒ 需要重新定义 bf16 可表示的哨兵，
+并证明掩码/下溢语义在支持区间内等价，而不是简单把 `float` 换成半精度。
+
+要求：**两个开关独立**、默认仍是 fp32x2 且**逐位不变**、**template 特化（tile 循环内无
+运行时分支）**、边界交换处的格式一致。
