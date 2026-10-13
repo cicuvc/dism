@@ -12,6 +12,12 @@ Short training sequences are the immediate target; optimizing long-sequence
 training forward is out of near-term scope. Soft rows/heads retain their
 existing path, and document boundaries do not resample the sequence hard flag.
 
+The [hard forward optimization plan](HARD_FORWARD_PLAN.md) retains this O(N^2)
+architecture with thread-owned diagonal segments for summary and an integer
+scan in the existing scan-buffer layout for readout. That specialization is
+planned, not yet implemented, and introduces no dependency on CPU planner
+completion.
+
 Once labels and the invocation's tau/hard metadata are available, enqueue
 D2H and CPU planning alongside the CUDA forward and subsequent GPU work.
 Upload the completed matching structure asynchronously, retaining its buffers

@@ -1,5 +1,10 @@
 # v3 output kernel bring-up
 
+The separate [hard forward plan](HARD_FORWARD_PLAN.md) selects thread-owned
+diagonal segments for summary and integer scanning in the existing scan-buffer
+layout for readout, targeting sm120. It is planning only; the implemented
+bring-up below is unchanged.
+
 Current dimension extension: D and DV independently support build-time32/64/128,
 R remains32, default tanh/shared/BF16. D128/DV128 uses one input slot for capacity;
 other pairs retain two. See FORWARD_DIMS.md. The bring-up history follows.
