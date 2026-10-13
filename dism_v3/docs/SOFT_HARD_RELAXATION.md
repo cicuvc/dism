@@ -2976,7 +2976,10 @@ vs A `q_cov 0.833 / max_share 0.317` ⇒ **ABL 没有塌缩，是 head 分工**�
 
 ### 41.7 Opt-in BF16 recurrence state pairs (2026-10-13)
 
-**Experimental; numerical acceptance is incomplete.** Two independent configuration
+**Experimental; numerical acceptance is incomplete.** The component-isolation
+follow-up in §41.8 rejects all tested BF16 replacements across the sampled
+frontier; the finite-state range below is not an attention-accuracy guarantee.
+Two independent configuration
 fields, `forward_diag_bf16x2=False` and `backward_diag_bf16x2=False`, now propagate
 from flash_dism/nanochat configuration through attention, eager/compiled vocabulary
 operators, fixed/packed core autograd and native host dispatch. Both default to
@@ -3284,7 +3287,14 @@ the earlier task were preserved byte-for-byte; none are part of this change.
 - `nanochat/nanochat/models/dism/model.py:90, 91`
 - `dism_v3/docs/SOFT_HARD_RELAXATION.md:2977` (§41.7, including this report)
 
-### 41.8 关于 §41.7 那 22 个失败的定位（重要）
+### 41.8 Component frontier and sm_120 follow-up (2026-10-13)
+
+#### Earlier plan, retained with corrections
+
+以下是本轮开始前的计划记录，不是本轮测量结论。下文实测推翻了其中
+“非对称格式消除反向重算不一致”的判断：`second` 也随正链增长，单独
+将其量化仍失败。25% 仅指持久 tuple 的容量减少，不能等同整个 kernel
+寄存器减少。半年前的训练记录尚未找到；没有启动这里计划的训练 A/B。
 
 §41.7 的精度矩阵是**对抗性最坏情形**，不是训练相关的估计量。必须区分两个独立问题：
 
@@ -3307,3 +3317,346 @@ the earlier task were preserved byte-for-byte; none are part of this change.
 
 **计划**：等当前 Astra 轮结束（它会改同一批源码，期间不启动训练）后，跑短预训练 A/B：
 `fp32x2`（基线，已有 A 组可复用）/ `bf16x2` / `非对称`，同 seed 同数据，配合 sm_120 资源报告一起判。
+
+#### Measured follow-up
+
+**No tested BF16 combination passes all unchanged numerical gates.** Both log
+components matter, and reverse-affine-only BF16 is also rejected. This is a
+negative numerical result, not evidence about training loss, structural-task
+quality, or end-to-end throughput. The microbench/resource report is in
+[BF16_TUPLE_PRIOR_ART.md §5](BF16_TUPLE_PRIOR_ART.md#5-关键更正h100-的结论不能外推到-sm_120本节优先级最高).
+The historical experiment reconciliation is in that document's §6.
+
+#### Component isolation and the original fixture
+
+The diagnostic copies specialize `BinaryElement<BF16x1/BF16x2>` with independent
+FP32/BF16 fields. A pair of diagonals occupies 4/3/2 32-bit words for FP32/mixed/
+both-BF16 persistent tuple storage. Arithmetic and RN conversions follow §41.7;
+the mixed fields round independently on ingress, composition, and boundary
+exchange. Splitting chained `first=second=value` assignments is essential:
+otherwise a nominal FP32 field can inherit the other field's rounding.
+Production headers, defaults, launch settings, reference, and tests were not edited.
+
+At N256/tau=.3, the unchanged original `fixture` (seed410, two heads with opposite
+LSE directions, one repeated chain and one periodic-label chain) gives:
+
+| Format | Output rel-L2 % | max abs Δ log2 Z | max vector grad rel-L2 % | tau grad rel-L2 (ratio) | tau cosine |
+| --- | --- | --- | --- | --- | --- |
+| Forward first only | 5.587 | 0.3113 | 6.072 | 0.9796 | 0.2802 |
+| Forward second only | 9.305 | 0.4199 | 12.04 | 12.71 | 0.7187 |
+| Forward both | 12.06 | 0.7274 | 13.42 | 12.6 | 0.7585 |
+| Reverse both only | 0 | 0 | 0 | 0.4945 | 0.8799 |
+
+Thus `second` is the larger contributor in this fixture, especially for tau,
+but `first` alone already fails. Errors are not additive. The reproduced vector
+error here is 13.42%, not 25%; the earlier “~25%” was a different sweep, not a
+bound or this exact fixture. Repeating the original N512 fixture gives larger
+errors still:
+
+| N | tau | Forward both output % | max vector gradient % |
+| --- | --- | --- | --- |
+| 256 | 0.3 | 12.06 | 13.42 |
+| 256 | 1.386 | 0.6869 | 0.753 |
+| 512 | 0.3 | 26.67 | 31.01 |
+| 512 | 1.386 | 23.61 | 34.75 |
+
+#### Frontier: actual chain breaks, not merely changing both labels
+
+`tools/bf16_frontier.py` uses R32/D64/DV64, B1/H2, seed410 BF16 Q/K/SQ/SK/V,
+upstream derivative .125, and fixed CUDA execution (`ctas=1`). The reference is
+the same extension's default FP32-pair path, asserted finite for every fixture.
+For controlled lengths, all K labels and matching Q labels are zero; one fully
+mismatched Q row follows each L matching rows. Changing Q and K labels together
+would **not** break the main diagonal and is not a valid chain-length control.
+N=max(256,L) remains training-aligned. Both LSE directions are present.
+
+Measured L=16,32,64,128,256,512,1024,2048 and natural-log tau=
+-8,-2,-.3,0,.001,.01,.03,.1,.3,.7,ln4,2,4,8,16. Extra signed-range probes at
+L=16,256,2048 set `L*tau/log(2)` to ±64,±256,±1024,±8192,±60000.
+These reach near both ends of the stated finite log-state interval; masked
+sentinels are excluded from reachable-state bounds. Six original fixtures
+(N256/512 × tau0/.3/ln4) are also retained. This is **156 fixtures × 3 switch
+combinations × 3 field formats = 1,404 measurements**, not an exhaustive proof
+for every real-valued score, context length, or tensor shape.
+
+Raw `{first,second,both}.json` under ignored `build/bf16_followup/` records, for
+**every** sample: output and log2-normalizer relative/absolute L2 and max error;
+all eight gradient relative/absolute L2, max error, reference norm, and cosine;
+failed unmodified gates; extension path, tau, L and N. Nonfinite metrics are
+retained as Infinity/NaN in Python JSON output, not dropped. Console logs retain
+all failure lists. “Vector” below is max(dV,dSQ,dSK) relative L2; hard-mode Q/K/LSE
+gradients are structural zeros. Tau columns are gradient errors, not errors in
+the input tau. `log2 Z` is the returned normalizer, not exponentiated Z.
+
+At tau=.3, with forward format selected and ordinary reverse recurrence FP32:
+
+| BF16 field(s) | L | Output % | max abs Δ log2 Z | Vector grad % | tau grad rel-L2 | tau cosine |
+| --- | --- | --- | --- | --- | --- | --- |
+| first | 16 | 0.1994 | 0.008957 | 0.2205 | 0.112 | 0.9981 |
+| first | 32 | 0.2964 | 0.02047 | 0.33 | 0.01827 | 0.9998 |
+| first | 64 | 0.3976 | 0.05775 | 0.4394 | 0.03422 | 0.9998 |
+| first | 128 | 1.533 | 0.1156 | 1.804 | 0.2487 | 0.9784 |
+| first | 256 | 4.706 | 0.2726 | 5.023 | 0.4421 | 0.9354 |
+| first | 512 | 12.81 | 0.6111 | 12.57 | 0.1373 | 0.9917 |
+| first | 1024 | 29.95 | 1.403 | 32.49 | 1.675 | -0.4455 |
+| first | 2048 | 69.69 | 3.483 | 70.73 | 2.638 | -0.8302 |
+| second | 16 | 0.5483 | 0.01504 | 0.6656 | 0.2369 | 0.9949 |
+| second | 32 | 0.8504 | 0.05861 | 0.9256 | 0.07332 | 0.9984 |
+| second | 64 | 3.328 | 0.07269 | 4.022 | 0.3728 | 0.9817 |
+| second | 128 | 4.965 | 0.1203 | 5.909 | 5.397 | -0.6255 |
+| second | 256 | 10.72 | 0.282 | 15.46 | 21.8 | 0.8291 |
+| second | 512 | 30.26 | 1.091 | 39.31 | 11.63 | 0.3544 |
+| second | 1024 | 45.89 | 1.944 | 50.9 | 390.7 | 0.9854 |
+| second | 2048 | 76.43 | 2.468 | 71.01 | 84.99 | 0.4471 |
+| both | 16 | 0.5597 | 0.01973 | 0.6323 | 0.4025 | 0.9935 |
+| both | 32 | 0.6584 | 0.07612 | 0.7163 | 0.03938 | 0.9995 |
+| both | 64 | 2.83 | 0.1368 | 3.763 | 0.1781 | 0.9936 |
+| both | 128 | 5.749 | 0.3012 | 7.251 | 6.238 | -0.7618 |
+| both | 256 | 10.95 | 0.6639 | 14.18 | 21.3 | 0.8248 |
+| both | 512 | 30.37 | 0.7725 | 37.45 | 13.06 | 0.7168 |
+| both | 1024 | 62.79 | 3.329 | 60 | 251.2 | 0.9777 |
+| both | 2048 | 110.4 | 6.537 | 92.05 | 205.7 | 0.596 |
+
+Tau dependence at L256 (same controlled fixture and forward-only selection):
+
+| BF16 field(s) | tau | Output % | max abs Δ log2 Z | Vector grad % | tau grad rel-L2 | tau cosine |
+| --- | --- | --- | --- | --- | --- | --- |
+| first | -8 | 0.05321 | 6.482e-07 | 0.04217 | 1.986e-05 | 1 |
+| first | 0 | 0 | 9.537e-07 | 0 | 1.207e-06 | 1 |
+| first | 0.001 | 0.08018 | 0.0001736 | 0.09675 | 0.00748 | 1 |
+| first | 0.01 | 0.1393 | 0.003109 | 0.1419 | 0.04919 | 0.9995 |
+| first | 0.1 | 1.545 | 0.08003 | 1.646 | 0.05266 | 0.9999 |
+| first | 0.3 | 4.706 | 0.2726 | 5.023 | 0.4421 | 0.9354 |
+| first | 0.7 | 0.639 | 0.5166 | 0.7295 | 0.3047 | 0.9846 |
+| first | 1.386 | 0.01228 | 3.052e-05 | 0.003946 | 0.02102 | 0.9999 |
+| first | 4 | 35.16 | 3.791 | 36.61 | 4.173 | -0.9458 |
+| first | 16 | 33.45 | 12.35 | 39.32 | 5.36 | -0.06175 |
+| second | -8 | 1.433 | 0.001686 | 1.442 | 0.0132 | 1 |
+| second | 0 | 0.9555 | 0.01159 | 0.9721 | 0.1525 | 0.9997 |
+| second | 0.001 | 1.035 | 0.01363 | 1.021 | 0.1323 | 0.9992 |
+| second | 0.01 | 1.296 | 0.01528 | 1.431 | 1.345 | 0.7726 |
+| second | 0.1 | 4.641 | 0.2237 | 5.786 | 1.17 | 0.1425 |
+| second | 0.3 | 10.72 | 0.282 | 15.46 | 21.8 | 0.8291 |
+| second | 0.7 | 4.353 | 0.9579 | 3.143 | 3.881 | 0.9807 |
+| second | 1.386 | 1.121 | 0.4152 | 1.057 | 0.01056 | 1 |
+| second | 4 | 16.89 | 12.61 | 41.03 | 167.2 | -0.5056 |
+| second | 16 | 17.08 | 50.63 | 3279 | 85.47 | -0.9986 |
+| both | -8 | 1.433 | 0.001686 | 1.442 | 0.0132 | 1 |
+| both | 0 | 0.9555 | 0.01159 | 0.9721 | 0.1525 | 0.9997 |
+| both | 0.001 | 1.037 | 0.01363 | 1.02 | 0.126 | 0.9994 |
+| both | 0.01 | 1.3 | 0.01755 | 1.452 | 1.298 | 0.7582 |
+| both | 0.1 | 5.327 | 0.3051 | 6.413 | 1.063 | 0.223 |
+| both | 0.3 | 10.95 | 0.6639 | 14.18 | 21.3 | 0.8248 |
+| both | 0.7 | 12.7 | 0.9579 | 11.68 | 3.865 | 0.9908 |
+| both | 1.386 | 1.121 | 0.4152 | 1.057 | 0.01056 | 1 |
+| both | 4 | 48.95 | 14.84 | 1837 | 1.876e+04 | -0.6616 |
+| both | 16 | 49.36 | 59.55 | 3.03e+10 | 1.348e+11 | -0.9445 |
+
+The first **sampled** failing chain length at each tau is below. A dash means
+all eight sampled lengths passed; it does not certify longer lengths or intervening
+tau. Failure is any existing forward/gradient gate, not only the 3% output gate.
+This frontier is nonmonotonic: e.g. tau=ln4 makes the hard log2 step exactly2,
+so first-component sums can be exact while second-component rounding persists.
+
+| tau | F first | F second | F both | B first | B second | B both |
+| --- | --- | --- | --- | --- | --- | --- |
+| -8 | — | — | — | — | — | — |
+| -2 | — | — | — | — | — | — |
+| -0.3 | — | — | — | — | — | — |
+| 0 | — | — | — | 2048 | — | 2048 |
+| 0.001 | — | — | — | — | — | — |
+| 0.01 | — | 256 | 256 | 256 | — | 256 |
+| 0.03 | 2048 | 256 | 256 | — | — | — |
+| 0.1 | 512 | 128 | 128 | — | 2048 | 2048 |
+| 0.3 | 256 | 64 | 64 | — | 128 | 128 |
+| 0.7 | 512 | 128 | 128 | — | 1024 | 1024 |
+| 1.386 | — | 64 | 64 | — | 256 | 256 |
+| 2 | 128 | 16 | 16 | — | 1024 | 1024 |
+| 4 | 32 | 16 | 16 | — | — | — |
+| 8 | 32 | 16 | 16 | — | 64 | 64 |
+| 16 | 16 | 16 | 16 | — | — | — |
+
+#### What fails, and why the range statement is insufficient
+
+For a matching positive chain, `first≈L*tau/log(2)` and `second` grows on the
+same scale. BF16 spacing in [64,128) is .5 in log2 units, and in [128,256) it is1.
+Even sub-unit log error matters after `exp2(W-log2 Z)`. Only a perfectly common
+shift would cancel through normalization; the scan creates different rounding
+errors for different keys and chain histories. Keeping `second` FP32 cannot
+undo erroneous `first` additions; keeping `first` FP32 cannot undo repeated
+rounding of the chain value. At tau=.3, the original N256 chain reaches only
+about111 log2 units, far inside ±65536, yet output/vector/tau gates already fail.
+
+Backward recomputes W using transposed tiles and a different composition tree.
+Rounding is non-associative. This produces a different W from the forward pass
+that supplied log2 Z, and consequently inconsistent probability and gradient
+weights. The component ablations measure this complete production effect;
+they do not separately quantify how much of each gradient error is due to
+forward probability error versus recomputation mismatch. The latter mechanism
+is source-derived, not a measured attribution percentage.
+
+L1024/tau16 and L2048/tau16 yield **nonfinite vector/tau gradients** with
+forward-second or forward-both BF16, despite finite FP32 baselines and reachable
+log states inside the advertised interval. Some tau gradients already become
+nonfinite at tau8. Large within-range log discrepancies can overflow backward
+`exp2(recomputed_W - forward_log2_Z)`; the normalizer error at L2048/tau16 is
+583.3 log2 units for both-BF16. These are ordinary numerical failures.
+
+**Precisely:** §41.7's ±65536 statement explicitly promises sentinel/masking
+separation, not output/gradient accuracy. This experiment does not refute that
+limited sentinel proof. It refutes interpreting that interval as a numerically
+supported attention/training contract: unchanged accuracy and even finite-gradient
+requirements fail well inside it. The .031 one-composition prior-art error is
+not a bound on a composed chain or its gradients. No tolerance was changed.
+
+#### Variants, reverse affine, and rescaling cost
+
+The original 144-case fixed/packed accuracy matrix remains unmodified:
+
+| BF16 field(s) in selected path(s) | Passed | Failed | Meaning |
+| --- | --- | --- | --- |
+| both | 122 | 22 | Reproduces §41.7 |
+| first | 136 | 8 | All failures select forward BF16 at positive tau |
+| second | 122 | 22 | No cure from FP32 first |
+
+The larger frontier gives the following numbers of failing fixtures out of156
+per column; all unlisted fixtures passed their unchanged gates:
+
+| BF16 field(s) | Forward only | Reverse only | Both directions |
+| --- | --- | --- | --- |
+| first | 42 | 2 | 44 |
+| second | 74 | 18 | 74 |
+| both | 74 | 21 | 76 |
+
+Reverse-only both-BF16 reproduces tau cosine .8798739 < .95 on the original
+N256/tau=.3 fixture, with output, normalizer, dV/dSQ/dSK unchanged. Scales in
+[0,1] prevent explosive scale products, but they do not protect the precision
+of the **signed offset sum**. Tau differentiates a cancellation-sensitive sum;
+rounding the offset dominates the observed original failure. Keeping that offset
+FP32 (reverse-first-only) passes the original matrix but fails the extended
+L256/tau=.01 and L2048/tau=0 cases. Thus even that narrower option is not a
+universally accepted replacement. Passing individual fixtures is reported, not
+promoted to a quality guarantee.
+
+For a candidate rescaling `(a,b)=(r+â,r+b̂)`, composition can use
+`r_out=r_l+r_r`, `â_out=â_l+â_r`,
+`b̂_out=lse2(b̂_l+â_r,b̂_r-r_l)`. This algebra explains both the cost and the
+limitation: a growing offset reappears in the second term, and bounding both
+residuals requires rebasing. Arbitrary chain breaks give different references
+on different diagonals; one common tile/strip scalar cannot guarantee small
+residuals for simultaneous reset and long-growing chains. One FP32 reference
+**per diagonal** plus two BF16 residuals costs4 32-bit words for two diagonals,
+versus4 for the original FP32 pair and2 for both-BF16. Shuffle payload returns
+to128 bits/pair of diagonals, plus rebase temporaries and reference boundary
+handling (8 extra bytes per pair if explicitly stored). A mixed residual/FP32
+field plus that reference costs5 words. Materializing references at existing
+FP32 checkpoints avoids new external storage but requires reconstructing/rebasing
+them, and does not prove forward/backward rounding agreement. Even one reference per
+diagonal is not a guarantee that both residuals stay small: on a negative chain
+`first` decreases while `second` saturates, so their separation itself grows.
+Two independent FP32 references plus two BF16 residuals would cost6 words per
+pair of diagonals. This variant was
+**not implemented**, as requested for an extra-state proposal. No branch or
+extra state was inserted into production tile loops; bounded residual accuracy
+and a cheaper shared-reference scheme remain unverified.
+
+#### Isolation, reproduction, validation, and changed files
+
+No active training process was visible before work; GPU processes were desktop
+applications only. No run directory, checkpoint, optimizer, dataloader position,
+RNG counter, or glx file was written. No downloads, external jobs, or training
+were launched. The working-tree extension SHA256 was unchanged:
+`e9e7bd6895c5f841f82594967f5afcc761d502acc77e65a34e838e43dd098a1e`.
+
+Use conda `blkw` (`/home/cicuvc/miniconda3/envs/blkw/bin/python`). From repo root:
+
+```bash
+python dism_v3/tools/bf16_component_build.py first dism_v3/build/NEW_first
+# Repeat for second with a distinct directory; the helper refuses overwrite.
+# Within the created directory, run this version's copied build.py:
+PATH=/usr/local/cuda/bin:/home/cicuvc/miniconda3/envs/blkw/bin:$PATH MAX_JOBS=4 DISM_BUILD_JOBS=4 DISM_BUILD_CONFIGS=32,64,64 DISM_LINEINFO=1 python build.py
+```
+
+The actual mixed roots were `dism_v3/build/bf16_followup/{first,second}`.
+The existing compatible `dism_v3/build/bf16x2` extension supplies the unchanged
+both-BF16 reference. No other worktree's flash_dism/cu_flash_dism is imported.
+Exact Python selection (ROOT means `/home/cicuvc/cs/project/dism-core`):
+
+```text
+PYTHONPATH=ROOT/dism_v3/build/bf16_followup/first/python:ROOT/dism_v3/python:ROOT/dism_v3/tests
+PYTHONPATH=ROOT/dism_v3/build/bf16_followup/second/python:ROOT/dism_v3/python:ROOT/dism_v3/tests
+PYTHONPATH=ROOT/dism_v3/build/bf16x2/python:ROOT/dism_v3/python:ROOT/dism_v3/tests
+```
+
+With the corresponding path, run `dism_v3/tools/bf16_frontier.py --format first|second|both
+--output <ignored-build-path>.json` and `python -m pytest
+ dism_v3/tests/test_diag_format.py -k test_format_accuracy -q` from repo root.
+The `.cu.d` dependencies in both new builds contain no Torch/ATen/c10 headers.
+The two mixed builds each contain39 device entries, all audited for CALL and
+stack/spills; the resource inventory also includes the corresponding39 entries
+from the existing both-format extension. Other shapes were not rebuilt.
+
+`bf16_component_smoke.py`: six N512 fixed/packed format combinations passed
+**memcheck and synccheck separately for each mixed extension**, each with zero
+reported errors. The second-field standalone benchmark also passed memcheck.
+The initial attempt to reuse `test_boundary_exchange_smoke` under first-field
+memcheck returned four assertion failures/two passes and zero sanitizer errors:
+that test asserts **both** reverse fields are BF16, which intentionally does not
+describe the mixed format. The test was left unchanged; the separate component
+smoke retains the numerical gates and checks the applicable boundary executions.
+No numerical failure is waived. Racecheck, all-shape mixed variants, FP32-output
+variants, training/structural quality, concurrent tensor-core contention, and
+end-to-end attention throughput were not measured.
+
+Only these source/documentation files were changed in this follow-up (line1 for
+new files; the cited sections identify edits to existing files):
+
+- `dism_v3/tools/bf16_component_build.py:1` — isolated mixed-field source builder.
+- `dism_v3/tools/bf16_frontier.py:1` — chain/tau/output/normalizer/gradient sweep.
+- `dism_v3/tools/bf16_component_smoke.py:1` — mixed-format sanitizer fixture.
+- `dism_v3/tools/bf16_scan_bench.cu:1` — Torch-free16x64 scan/MUFU benchmark.
+- `dism_v3/tools/bf16_bench_build.py:1` — literal sm_120 compile/disassembly helper.
+- `dism_v3/tools/bf16_sass_report.py:1` — static loop/category inventory.
+- `dism_v3/tools/bf16_resource_inventory.py:1` — every-entry resource/CALL audit.
+- `dism_v3/docs/SOFT_HARD_RELAXATION.md:2979` — §41.7 status cross-reference; §41.8 at line3290.
+- `dism_v3/docs/BF16_TUPLE_PRIOR_ART.md:102` — §5 status/measurements and §6 reconciliation at line364.
+
+Raw binaries, copies, logs, timing CSVs, JSON, and SASS remain ignored under
+`dism_v3/build/bf16_followup/`; no generated artifacts were added to Git.
+
+### 41.9 更正 Astra 的解读：主指标是 spill，且收益只在反向
+
+Astra §41.8 / `ASYMMETRIC_SM120_REPORT.md` 把 `regs=168`、1 CTA/SM 当作"没有寄存器收益"的证据，
+**这两项都不该作为判据**：
+
+- `168 regs/thread` 是 **12-warp 配置 + `setmaxnreg` 重分配下的上限**；`setmaxnreg` 之后
+  ptxas 只按 **warp 数**分配，所以这个数是天花板而非可优化量。
+- **1 CTA/SM 是固定设计**，不是待优化的 occupancy（post-Ampere 后 occupancy 已不再是主要矛盾）。
+
+**真正的指标是 spill。** 实测（`stack / static spill store / load` 字节，ptxas）：
+
+| kernel | 格式 (fwd/bwd) | **spill B** | hot SHFL |
+|---|---|---|---|
+| forward fixed | P/any, B/any, M/any | **8/16/24（三者相同）** | 65–66 |
+| B3 packed | P/**P** | 192/196/232 | 130 |
+| B3 packed | P/**B** | **168/168/204** | **108** |
+| B3 packed | P/M | 176/180/216 | 119 |
+| B3 packed | **B**/P | 192/196/232 | 125 |
+| B3 packed | B/B | **168/168/204** | 103 |
+| **B3 fixed** | P/P | **344/356/388** | 130 |
+| **B1 fixed** | P/P | **336/356/428** | 90 |
+
+**结论**
+
+1. **spill 严重的地方全在反向**（B3/B1 达 168–428 B），**前向只有 8 B 且三格式完全相同**
+   ⇒ **前向改低精度零收益，前向应保持 FP32x2**。
+2. **收益只能来自反向格式**：反向切 bf16 ⇒ B3 spill **192→168（−12.5%）**、hot SHFL
+   **130→108（−17%）**；非对称反向小一些（192→176，−8%）。改前向格式对反向 spill 无影响
+   （P/P 与 B/P 相同）。
+3. 因此要做的 A/B 是 **`forward=FP32x2` 固定 + `backward∈{FP32x2, BF16x2, 非对称}`**，
+   而不是 fwd×bwd 全组合。
+4. **"只保留增长分量就行"的假设被否定**：非对称格式也失败，且 **N512 误差 25.53% 大于
+   N256 的 9.31%** ⇒ 反向重算与前向舍入不一致（bf16 舍入不满足结合律 + 转置划分）很可能
+   才是误差主因，而不是第一个分量的精度。
+5. Astra 的"保留 FP32x2、优先调度与寄存器寿命"这一建议**在质量未知的前提下过早**；
+   按 §41.8 的两问框架，仍应跑短预训练 A/B（反向三格式）来裁质量，配 spill/SHFL 数据判资源。
