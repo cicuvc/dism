@@ -379,10 +379,11 @@ def _interp_bwd(
             dk_acc, mask=rm[:, None])
 
 
-def emb_bwd_wrapper(q: torch.Tensor, k: torch.Tensor, q_emb: torch.Tensor, k_emb: torch.Tensor,
+def _emb_bwd_legacy(q: torch.Tensor, k: torch.Tensor, q_emb: torch.Tensor, k_emb: torch.Tensor,
                     out_q: torch.Tensor, out_k: torch.Tensor, olse_q: torch.Tensor, olse_k: torch.Tensor,
                     doq: torch.Tensor, dok: torch.Tensor, dlq: torch.Tensor | None, dlk: torch.Tensor | None,
                     sm_scale: float = 1.0, tau=None):
+    """Pre-FA2 backward, retained only for regression tests and benchmarks."""
     cu.validate_interpolation(q,k,q_emb,k_emb,tau)
     B, N, H, D = q.shape
     VOC = q_emb.shape[1]
@@ -442,6 +443,17 @@ def emb_bwd_wrapper(q: torch.Tensor, k: torch.Tensor, q_emb: torch.Tensor, k_emb
     )
 
     return dq, dk, dq_emb, dk_emb
+
+
+def emb_bwd_wrapper(q: torch.Tensor, k: torch.Tensor, q_emb: torch.Tensor, k_emb: torch.Tensor,
+                    out_q: torch.Tensor, out_k: torch.Tensor, olse_q: torch.Tensor, olse_k: torch.Tensor,
+                    doq: torch.Tensor, dok: torch.Tensor, dlq: torch.Tensor | None, dlk: torch.Tensor | None,
+                    sm_scale: float = 1.0, tau=None):
+    """Atomic FA2 backward; first use tunes tiles/splits, subsequent calls reuse them."""
+    # Lazy import: the split implementation reuses our delta preprocessing.
+    from .kernels.interp_bwd_split import emb_bwd_split
+    return emb_bwd_split(q, k, q_emb, k_emb, out_q, out_k, olse_q, olse_k,
+                         doq, dok, dlq, dlk, sm_scale, tau)
 
 
 def _voc_interp(x: torch.Tensor, key_voc: torch.Tensor, val_voc: torch.Tensor, sm_scale: float = 1.0):

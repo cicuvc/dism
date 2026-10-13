@@ -303,7 +303,7 @@ build details and correctness tests.
 - [Modules](docs/MODULE.md) / [language models](docs/MODEL.md): model interfaces and loss conventions.
 - [Backward validation](docs/BACKWARD_TESTING.md): acceptance tests and stricter diagnostics.
 - [sm120 training benchmark](docs/TRAINING_BENCHMARK.md): reproducible packed forward/backward timings and kernel attribution.
-- [Interpolation backward experiment](docs/INTERPOLATION_BACKWARD.md): split-attention kernels and reduction comparisons on sm120.
+- [Interpolation backward](docs/INTERPOLATION_BACKWARD.md): production atomic/autotuned split-attention kernels and sm120 comparisons.
 - [Torch oracle](python/flash_dism/reference/dism_v3_ref.py): mathematical forward and explicit backward.
 
 After installing from a source checkout, run:

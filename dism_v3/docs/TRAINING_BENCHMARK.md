@@ -160,15 +160,15 @@ From repository root, with a fresh output filename:
 ```bash
 export PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat"
 /home/cicuvc/miniconda3/envs/blkw/bin/python dism_v3/tools/bench_training.py \
-  --warmup 10 --repeats 20 --samples 5 \
+  --interp-backward baseline --warmup 10 --repeats 20 --samples 5 \
   --output dism_v3/build/bench_training_sm120_20261014.json
 
 /home/cicuvc/miniconda3/envs/blkw/bin/python dism_v3/tools/bench_training.py \
-  --batches 16 --hard-probs 0 .95 1 --warmup 10 --repeats 20 --samples 5 \
+  --interp-backward baseline --batches 16 --hard-probs 0 .95 1 --warmup 10 --repeats 20 --samples 5 \
   --profile --output dism_v3/build/bench_training_sm120_20261014_repeat_profile.json
 
 /home/cicuvc/miniconda3/envs/blkw/bin/python dism_v3/tools/bench_training.py \
-  --batches 16 --hard-probs .95 --warmup 20 --repeats 100 --samples 7 \
+  --interp-backward baseline --batches 16 --hard-probs .95 --warmup 20 --repeats 100 --samples 7 \
   --settle-seconds 2 --output dism_v3/build/bench_training_sm120_20261014_reference.json
 ```
 
@@ -176,3 +176,8 @@ JSON includes the exact configuration, source revision, extension and benchmark
 hashes, environment, sampling fractions, document lengths, timing samples,
 memory and optional kernel attribution. Generated results remain ignored under
 `dism_v3/build/`; only the benchmark source and this maintained report belong in Git.
+
+The production default subsequently changed to atomic split-attention backward
+with autotune. The explicit `--interp-backward baseline` above preserves this
+report's original implementation. See [INTERPOLATION_BACKWARD.md](INTERPOLATION_BACKWARD.md)
+for the optimized implementation and current measurements.

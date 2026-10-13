@@ -1,8 +1,12 @@
-"""Compare BNHD interpolation with the unchanged v2 BHND implementation."""
+"""Bitwise layout-migration check for the legacy BNHD and v2 BHND kernels.
+
+Production atomic backward is checked against FP64 and this legacy backward in
+test_interp_bwd_split.py; its changed FP32 reduction order is not bitwise equal.
+"""
 import pytest
 import torch
 
-from flash_dism.emb_kernel import emb_fwd_wrapper, emb_bwd_wrapper
+from flash_dism.emb_kernel import emb_fwd_wrapper, _emb_bwd_legacy as emb_bwd_wrapper
 from embedding_bhnd_reference import emb_fwd_wrapper as old_forward
 from embedding_bhnd_reference import emb_bwd_wrapper as old_backward
 

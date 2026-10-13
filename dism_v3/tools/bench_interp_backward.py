@@ -11,8 +11,8 @@ import time
 import torch
 import triton
 import cu_flash_dism as cu
-from flash_dism.emb_kernel import emb_fwd_wrapper, emb_bwd_wrapper
-from flash_dism.kernels.interp_bwd_split import emb_bwd_split, _dq, _dkv, _reduce, _tables
+from flash_dism.emb_kernel import emb_fwd_wrapper, emb_bwd_wrapper, _emb_bwd_legacy
+from flash_dism.kernels.interp_bwd_split import emb_bwd_split, _dq, _dkv
 from bench_training import measure, memory, gpu_status, ROOT
 
 
@@ -28,7 +28,8 @@ def metrics(new, old):
 def resources(directory):
     directory.mkdir(parents=True,exist_ok=True)
     rows=[]
-    for jit in (_dq,_dkv,_reduce,_tables):
+    for tuner in (_dq, _dkv):
+        jit = tuner.fn
         for i,kernel in enumerate(jit.device_caches[torch.cuda.current_device()][0].values()):
             path=directory/f'{jit.__name__}_{i}.cubin'
             path.write_bytes(kernel.asm['cubin'])
@@ -67,19 +68,17 @@ def full_operator(q,k,eq,ek,tau,args):
             def pair():
                 current=compiler.voc_forward(*inputs,boundaries,table)
                 return compiler.voc_backward(inputs,current,boundaries,dout,table)
-            compiler.emb_bwd_wrapper=original
+            compiler.emb_bwd_wrapper=_emb_bwd_legacy
             expected=backward()
-            compiler.emb_bwd_wrapper=emb_bwd_split
+            compiler.emb_bwd_wrapper=emb_bwd_wrapper
             actual=backward()
             comparison=[metrics(a,b) for a,b in zip(actual,expected)]
             assert all(torch.isfinite(x).all() for x in actual)
             del actual,expected
             row={'pattern':pattern,'tokens':n,'hard_fraction':flags.float().mean().item(),
                  'gradient_comparison':comparison,'memory':{},'variants':{}}
-            backends={'baseline':original,'fa2':emb_bwd_split}
-            if args.compare_reduction:
-                backends['atomic']=partial(emb_bwd_split,reduction='atomic')
-                backends['register']=partial(emb_bwd_split,reduction='register',splits=1)
+            backends={'baseline': _emb_bwd_legacy, 'atomic_auto': emb_bwd_wrapper,
+                      'atomic_fixed': partial(emb_bwd_split, autotune=False)}
             samples={name:{'backward':[],'pair':[]} for name in backends}
             for name,backend in backends.items():
                 compiler.emb_bwd_wrapper=backend
@@ -109,9 +108,7 @@ def main():
     parser.add_argument('--repeats',type=int,default=30)
     parser.add_argument('--samples',type=int,default=5)
     parser.add_argument('--tune-tiles',action='store_true')
-    parser.add_argument('--tune-register',action='store_true')
     parser.add_argument('--full-operator',action='store_true')
-    parser.add_argument('--compare-reduction',action='store_true',help='same tiles, paired partial vs global FP32 atomics')
     parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args()
     if args.output.exists():
@@ -142,32 +139,16 @@ def main():
         doq,dok=[torch.randn_like(q)*.1 for _ in range(2)]
         dlq,dlk=[torch.randn((1,h,n),device='cuda')*.1 for _ in range(2)]
         inputs=(q,k,eq,ek,*saved[:4],doq,dok,dlq,dlk,1.,tau)
-        variants={'baseline':partial(emb_bwd_wrapper,*inputs)}
-        variants.update({f'split{s}':partial(emb_bwd_split,*inputs,splits=s,dq_v=32,dkv_m=32,dkv_v=64)
+        variants={'baseline': partial(_emb_bwd_legacy, *inputs),
+                  'atomic_auto': partial(emb_bwd_wrapper, *inputs)}
+        variants.update({f'atomic{s}': partial(emb_bwd_split, *inputs, autotune=False, splits=s)
                          for s in args.splits})
-        variants['fa2']=partial(emb_bwd_split,*inputs)
-        if args.compare_reduction:
-            variants['register']=partial(emb_bwd_split,*inputs,reduction='register',splits=1)
-            # Both modes use the selected tile schedule and same split counts.
-            for splits in args.splits:
-                for reduction in ('partial','atomic'):
-                    variants[f'{reduction}{splits}']=partial(emb_bwd_split,*inputs,
-                                                           splits=splits,reduction=reduction)
         if args.tune_tiles:
             for dq_m,dq_v,kv_m,kv_v in [(64,64,32,64),(64,64,64,64),
-                                       (64,64,64,32),(128,32,32,64),
-                                       (32,64,32,64),(64,32,32,32)]:
+                                       (64,64,64,32),(32,64,32,64),(64,32,32,32)]:
                 name=f's16_dq{dq_m}x{dq_v}_kv{kv_m}x{kv_v}'
-                variants[name]=partial(emb_bwd_split,*inputs,splits=16,
+                variants[name]=partial(emb_bwd_split,*inputs,autotune=False,splits=16,
                                        dq_m=dq_m,dq_v=dq_v,dkv_m=kv_m,dkv_v=kv_v)
-        if args.tune_register:
-            for kv_m,kv_v in [(32,16),(64,16),(128,16),(32,32),(128,32),(32,64),(64,64)]:
-                variants[f'register{kv_m}x{kv_v}']=partial(emb_bwd_split,*inputs,splits=1,
-                    reduction='register',dkv_m=kv_m,dkv_v=kv_v)
-            for kv_v in (16,32):
-                for stages in (1,2):
-                    variants[f'register64x{kv_v}_stages{stages}']=partial(emb_bwd_split,*inputs,splits=1,
-                        reduction='register',dkv_m=64,dkv_v=kv_v,num_stages=stages)
         oracle=variants['baseline']()
         accuracy={}
         unsupported={}
@@ -194,8 +175,9 @@ def main():
             for name in order:
                 samples[name].append(measure(variants[name],5,args.repeats,1)['stream_ms_median'])
         row={'tokens':n,'accuracy':accuracy,'unsupported':unsupported,'gpu':gpu_status(),'variants':{}}
-        if args.compare_reduction:
-            row['memory']={name:memory(fn) for name,fn in variants.items()}
+        row['memory']={name:memory(fn) for name,fn in variants.items()}
+        row['autotune']={tuner.fn.__name__: [{'key':str(key),'config':str(config)}
+                          for key,config in tuner.cache.items()] for tuner in (_dq,_dkv)}
         baseline=statistics.median(samples['baseline'])
         for name,values in samples.items():
             median=statistics.median(values)

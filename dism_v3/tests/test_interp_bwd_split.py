@@ -1,10 +1,8 @@
-"""Opt-in interpolation backward: independent oracle and production comparisons."""
-from functools import partial
-
+"""Production atomic backward: independent oracle and legacy comparisons."""
 import pytest
 import torch
 
-from flash_dism.emb_kernel import emb_fwd_wrapper, emb_bwd_wrapper
+from flash_dism.emb_kernel import emb_fwd_wrapper, emb_bwd_wrapper, _emb_bwd_legacy
 from flash_dism.kernels.interp_bwd_split import emb_bwd_split
 from gradient_acceptance import assert_gradient
 
@@ -12,9 +10,8 @@ from gradient_acceptance import assert_gradient
 @pytest.mark.parametrize('d,vocab,n,strided', [(32,37,256,False), (64,512,768,False),
                                              (64,37,256,True), (32,512,256,True)])
 @pytest.mark.parametrize('beta,tau_value', [(1.,None), (.7,.5), (1.7,2.)])
-@pytest.mark.parametrize('reduction,splits',[('partial',1),('partial',16),
-                                            ('atomic',1),('atomic',16),('register',1)])
-def test_split_oracle(d, vocab, n, strided, beta, tau_value, splits, reduction):
+@pytest.mark.parametrize('autotune,splits', [(False, 1), (False, 16), (True, 16)])
+def test_split_oracle(d, vocab, n, strided, beta, tau_value, splits, autotune):
     torch.manual_seed(275)
     b, h = 2, 3
     def rand(shape):
@@ -27,8 +24,8 @@ def test_split_oracle(d, vocab, n, strided, beta, tau_value, splits, reduction):
     doq, dok = rand((b,h,n,d)).transpose(1,2), rand((b,n,h,d))
     dlq, dlk = [torch.randn((b,h,n),device='cuda') for _ in range(2)]
     args = (q,k,eq,ek,*saved[:4],doq,dok,dlq,dlk,beta,tau)
-    old = emb_bwd_wrapper(*args)
-    actual = emb_bwd_split(*args,splits=splits,reduction=reduction)
+    old = _emb_bwd_legacy(*args)
+    actual = emb_bwd_wrapper(*args) if autotune else emb_bwd_split(*args,splits=splits,autotune=False)
     xq,xk,qe,ke = [t.double().detach().requires_grad_() for t in (q,k,eq,ek)]
     sq = torch.einsum('bnhd,hvd->bhnv',xq,qe)*beta
     sk = torch.einsum('bnhd,hvd->bhnv',xk,ke)*beta
@@ -47,8 +44,7 @@ def test_split_oracle(d, vocab, n, strided, beta, tau_value, splits, reduction):
 
 @pytest.mark.parametrize('direction_value',[False,True])
 @pytest.mark.parametrize('probability',[0.,.5,1.])
-@pytest.mark.parametrize('reduction',['partial','atomic','register'])
-def test_compiled_operator_replacement(monkeypatch,direction_value,probability,reduction):
+def test_compiled_operator_replacement(monkeypatch,direction_value,probability):
     import flash_dism.compiler as compiler
     from flash_dism.varlen import VarlenLayout
     torch.manual_seed(173)
@@ -74,10 +70,10 @@ def test_compiled_operator_replacement(monkeypatch,direction_value,probability,r
         captured.append(result)
         return result
     monkeypatch.setattr(compiler.cu,'core_backward',capture)
+    monkeypatch.setattr(compiler,'emb_bwd_wrapper',_emb_bwd_legacy)
     expected = compiler.voc_backward(inputs,saved,boundaries,do,layout)
     monkeypatch.setattr(compiler.cu,'core_backward',lambda *args: captured[0])
-    monkeypatch.setattr(compiler,'emb_bwd_wrapper',partial(emb_bwd_split,reduction=reduction,
-                                                        splits=1 if reduction=='register' else 16))
+    monkeypatch.setattr(compiler,'emb_bwd_wrapper',emb_bwd_wrapper)
     actual = compiler.voc_backward(inputs,saved,boundaries,do,layout)
     for name,new,old in zip(('q','k','sq','sk','v','eq','ek','rtau'),actual,expected):
         assert_gradient(new,old,name)
@@ -98,8 +94,7 @@ def test_optional_lse_and_empty():
         assert all(torch.count_nonzero(t).item()==0 for t in got)
 
 
-@pytest.mark.parametrize('reduction',['partial','atomic','register'])
-def test_inductor_autograd(monkeypatch,reduction):
+def test_inductor_autograd(monkeypatch):
     import flash_dism.compiler as compiler
     from flash_dism.varlen import VarlenLayout
     torch.manual_seed(276)
@@ -117,9 +112,9 @@ def test_inductor_autograd(monkeypatch,reduction):
         return compiler.voc_forward(*inputs,beta,direction,hard,boundaries,layout)[0]
     output=run(*values)
     dout=torch.randn_like(output)
+    monkeypatch.setattr(compiler,'emb_bwd_wrapper',_emb_bwd_legacy)
     expected=torch.autograd.grad(output,values,dout)
-    monkeypatch.setattr(compiler,'emb_bwd_wrapper',partial(emb_bwd_split,reduction=reduction,
-                                                        splits=1 if reduction=='register' else 16))
+    monkeypatch.setattr(compiler,'emb_bwd_wrapper',emb_bwd_wrapper)
     with torch._dynamo.config.patch(capture_dynamic_output_shape_ops=True), \
          torch._inductor.config.patch(compile_threads=1):
         compiled=torch.compile(run,fullgraph=True,dynamic=True)
@@ -128,3 +123,70 @@ def test_inductor_autograd(monkeypatch,reduction):
     torch.testing.assert_close(actual_output,output,atol=0,rtol=0)
     for name,new,old in zip(('q','k','sq','sk','v','eq','ek','rtau'),actual,expected):
         assert_gradient(new,old,name)
+
+
+def test_autotune_cold_and_warm_preserve_both_contributions(monkeypatch):
+    from flash_dism.kernels.interp_bwd_split import _dq, _dkv
+    # Separate Q/K layouts force TWO first-call cache misses. A reset_to_zero
+    # tuning hook would incorrectly delete the first attention's gradients.
+    for tuner in (_dq, _dkv):
+        monkeypatch.setattr(tuner, 'cache', {})
+    calls = []
+    benchmark = _dkv.do_bench
+    def counted(fn, quantiles):
+        calls.append(1)
+        return benchmark(fn, quantiles)
+    monkeypatch.setattr(_dkv, '_do_bench', counted)
+    monkeypatch.setattr(_dkv, 'do_bench', counted)
+    torch.manual_seed(981)
+    b, n, h, d, vocab = 1, 256, 2, 64, 37
+    def rand(shape):
+        return (torch.randn(shape, device='cuda') * .25).bfloat16()
+    q = rand((b, h, n, d)).transpose(1, 2)
+    k = rand((b, n, h, d))
+    eq, ek = [rand((h, vocab, d)) for _ in range(2)]
+    saved = emb_fwd_wrapper(q, k, eq, ek)
+    doq, dok = [rand((b, n, h, d)) for _ in range(2)]
+    dlq, dlk = [torch.randn(b, h, n, device='cuda') for _ in range(2)]
+    args = (q, k, eq, ek, *saved[:4], doq, dok, dlq, dlk)
+    expected = _emb_bwd_legacy(*args)
+    cold = emb_bwd_wrapper(*args)
+    assert len(_dkv.cache) == 2
+    trials = len(calls)
+    assert trials > 2
+    # Change data without changing the tuning key, checking cache hits don't
+    # reuse old gradients or accumulate across separate wrapper invocations.
+    doq.mul_(.5)
+    dlk.mul_(2.)
+    warm_expected = _emb_bwd_legacy(*args)
+    warm = emb_bwd_wrapper(*args)
+    assert len(calls) == trials
+    for result, reference in ((cold, expected), (warm, warm_expected)):
+        for new, old in zip(result, reference):
+            relative = (new.double() - old.double()).norm() / old.double().norm().clamp_min(1e-12)
+            assert relative < 1e-4
+
+
+def test_production_backward_cuda_graph_after_warmup():
+    torch.manual_seed(982)
+    q, k = [(torch.randn(1, 256, 1, 32, device='cuda') * .25).bfloat16() for _ in range(2)]
+    eq, ek = [(torch.randn(1, 37, 32, device='cuda') * .25).bfloat16() for _ in range(2)]
+    saved = emb_fwd_wrapper(q, k, eq, ek)
+    doq, dok = [torch.randn_like(q) for _ in range(2)]
+    args = (q, k, eq, ek, *saved[:4], doq, dok, None, None)
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(stream):
+        for _ in range(3):
+            emb_bwd_wrapper(*args)
+    torch.cuda.current_stream().wait_stream(stream)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        actual = emb_bwd_wrapper(*args)
+    for _ in range(2):
+        doq.mul_(.5)
+        graph.replay()
+        expected = _emb_bwd_legacy(*args)
+        for new, old in zip(actual, expected):
+            relative = (new.double() - old.double()).norm() / old.double().norm().clamp_min(1e-12)
+            assert relative < 1e-4

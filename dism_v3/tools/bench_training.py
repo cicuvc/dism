@@ -197,9 +197,8 @@ def main():
     parser.add_argument('--tau', type=float, default=.5)
     parser.add_argument('--settle-seconds', type=float, default=1., help='untimed workload before each case')
     parser.add_argument('--profile', action='store_true', help='separate instrumented per-kernel attribution')
-    parser.add_argument('--interp-backward', choices=['baseline', 'split'], default='baseline')
-    parser.add_argument('--interp-splits', type=int, default=16)
-    parser.add_argument('--interp-reduction', choices=['partial', 'atomic', 'register'], default='partial')
+    parser.add_argument('--interp-backward', choices=['baseline', 'atomic', 'atomic-fixed'], default='atomic')
+    parser.add_argument('--interp-splits', type=int, default=16, help='token partitions for atomic-fixed only')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     if min(args.batches) < 1 or min(args.repeats, args.samples, args.warmup) < 1:
@@ -212,13 +211,14 @@ def main():
         if not Path(module.__file__).resolve().is_relative_to(ROOT / 'dism_v3/python'):
             raise RuntimeError(f'foreign import: {module.__file__}')
     torch.set_num_threads(1)
-    if args.interp_backward == 'split':
+    if args.interp_backward != 'atomic':
         from functools import partial
         import flash_dism.compiler as compiler
         from flash_dism.kernels.interp_bwd_split import emb_bwd_split
-        # Process-local experimental substitution; production defaults unchanged.
-        compiler.emb_bwd_wrapper = partial(emb_bwd_split, splits=args.interp_splits,
-                                          reduction=args.interp_reduction)
+        from flash_dism.emb_kernel import _emb_bwd_legacy
+        # Process-local comparison; the production default is atomic + autotune.
+        compiler.emb_bwd_wrapper = (_emb_bwd_legacy if args.interp_backward == 'baseline'
+                                    else partial(emb_bwd_split, autotune=False, splits=args.interp_splits))
     config = json.loads(args.config.read_text())['config']
     if config['direction_policy'] != 'true' or config['hard_granularity'] != 'sequence':
         raise ValueError('benchmark requires the fixed-true, sequence-hard baseline')
