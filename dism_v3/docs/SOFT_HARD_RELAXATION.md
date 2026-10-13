@@ -2831,3 +2831,38 @@ B 组（valres 布局 + `direction=random`）完成后四格齐了。**present-N
 
 **教训（与 §33/§38 一致）**：bpb 与长程 recall 是两个独立轴，**必须同时看**；本表里 bpb 最优的
 B 恰好是远端 recall 最差的之一。
+
+### 40.4 塌缩的定位：`direction=random` + valres 布局 会打塌 qk 码表
+
+用训练期 `--qk-hist-every 500` 记录的 `probe_qk_vocab_usage` 统计（6 个 DISM 层取平均，
+末次记录）：
+
+| run | q_coverage | **q_coverage_pooled** | q_max_share | k_coverage | k_coverage_pooled |
+|---|---|---|---|---|---|
+| A valres / true | 0.833 | (旧探针未记录) | 0.317 | 0.843 | — |
+| **B valres / random** | **0.128** | **0.577** | **0.525** | 0.180 | 0.689 |
+| C 专用 / random | 0.576 | — | — | 0.636 | — |
+| D 专用 / true | 0.572 | **0.981** | 0.445 | 0.498 | 0.990 |
+
+B 的 layer08 逐头 q_coverage = `[0.07, 0.404, 0.018, 0.039, 0.016, 0.049]`：一个头占 40%，
+其余 1.6–7%。
+
+**区分两种形态**（这是 `coverage` 与 `coverage_pooled` 同时记录的意义）：
+
+- **D（专用 / true）不是塌缩**：per-head 0.572，但 **pooled 0.981** ⇒ **健康的 head 分工**
+  （每头用自己的子集，合起来覆盖 98%）。
+- **B（valres / random）是真塌缩**：连 pooled 都只有 **0.577**，且单码字占 **52.5%** 的位置。
+
+**机制解释**：`direction=random` 让同一层的共享码表在**两种 LSE 归一化**（q-LSE / k-LSE）
+之间随机切换，两侧几何需求冲突 ⇒ 码表收敛到少数"安全"码字。在 **valres 布局**上 DISM 分支
+本身已被 GDN 稀释（§37），梯度不足以解开这个冲突，于是塌缩；在**专用层布局**上 DISM 拿到
+完整梯度，同样的随机化只产生健康的分工（pooled 0.98）。
+
+**这解释了 §40.3 的符号翻转**：塌缩后的码表是"更粗的匹配器" ⇒ 平均 bpb 略好
+（B 的 1.180388 是全部 run 最优），但精确 recall 变差（远端 NIAH 2.901，最差之一）。
+所以 §40.3 里"random 在 valres 布局伤 NIAH、在专用层布局帮 NIAH"不是玄学，而是有没有塌缩。
+
+**行动含义**：`direction=random` **不能**与"层内稀释"共存；若要保留 in-layer hybrid，就得用
+固定的/确定性的 direction（A/C/D 都是这个象限）。方向随机化的收益只在专用层布局上成立。
+既然 §40.1 已证明 direction 对 hard 前向无关，它纯粹是 **soft 路径的正则化**，而它带来的
+码表塌缩是一个**训练动力学**副作用，可在训练中直接用 `coverage_pooled` 监控。
