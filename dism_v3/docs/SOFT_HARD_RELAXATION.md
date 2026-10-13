@@ -2973,3 +2973,337 @@ vs A `q_cov 0.833 / max_share 0.317` ⇒ **ABL 没有塌缩，是 head 分工**�
    指令配比不是收益所在。
 5. **架构差异**：`MMABuffer` 的 roll/unroll 在 **H100 占 ~403/1286 周期，RTX 5090（sm_120）
    占 ~1724/2527**。H100 的结论**不能照搬**，必须在目标 GPU 上重测。
+
+### 41.7 Opt-in BF16 recurrence state pairs (2026-10-13)
+
+**Experimental; numerical acceptance is incomplete.** Two independent configuration
+fields, `forward_diag_bf16x2=False` and `backward_diag_bf16x2=False`, now propagate
+from flash_dism/nanochat configuration through attention, eager/compiled vocabulary
+operators, fixed/packed core autograd and native host dispatch. Both default to
+FP32x2. They are configuration values, not Parameters or buffers; RNG counters,
+annealing state, no-decay groups, optimizer schema and consumed input position
+are not reset. No training run or existing checkpoint was touched.
+
+`forward_diag_bf16x2=True` selects BF16 pairs for summary, output scan and backward
+forward-state recomputation. `backward_diag_bf16x2=True` selects BF16 reverse pairs
+in B1 and B3. Each composition evaluates in FP32 and rounds the two resulting
+components to BF16 RN. Two adjacent strip elements are packed per component, so
+one diagonal's affine pair occupies two BF16 values. This is actual packed register
+storage, not FP32 storage with a runtime quantization branch. The two scalar chunk
+passing kernels remain FP32. SoA summaries/checkpoints retain their FP32 external
+layout. The reverse WG mailbox retains float4 layout and expands already-rounded
+BF16 pairs on send, then repacks them on receipt; this round-trip is exact and
+preserves mailbox offsets, shared-memory size, synchronization and launch defaults.
+No shared FP32 atomics were added.
+
+Host dispatch selects template instantiations; format flags are absent from device
+argument structures. `diag_recurrence=False` plus either BF16 format is rejected
+by both the core and low-level host APIs. Cached/Torch inference and the separate
+REINFORCE collector reject BF16 selection, rather than silently ignoring it.
+The mathematical references retain their exact infinity semantics unchanged.
+
+#### Formats and finite score contract
+
+BF16 has the same eight exponent bits as FP32. The problem in §41.6 is precision,
+not an exponent range too small for one million: `-1e6` rounds to `-999424` in BF16.
+The BF16 log operator uses exactly representable `-2^20` instead. Supported reachable
+**log2 state components and input scores must lie in `[-65536,65536]` at every
+composition/boundary**, with finite input scores; this is a masking/range contract,
+not a guarantee of small attention/gradient error throughout that interval.
+Legacy masked checkpoint values below `-65536` are treated as the sentinel. Such
+values cannot also be used as reachable scores in this format. A sentinel scale
+annihilates its incoming state, and sentinel offsets are handled explicitly.
+The finite tanh approximation receives only a clamped gap in `[0,32]`; a gap of
+32 or greater uses the maximum. No BF16-path sentinel or infinity enters tanh.
+The default FP32 LogAffineOp and its finite `-1e6` arithmetic are unchanged: its
+existing bounded-score/context contract in SUMMARY.md still applies, without a
+new universal input bound or a promise for arbitrary infinite inputs.
+
+For BF16 ordinary affine, scales are in `[0,1]` and finite offsets/states must
+remain within `[-65536,65536]` at every boundary. Identity `{1,0}` and zero scale
+are exact. FP32 ordinary affine retains the pre-existing finite arithmetic
+contract. BF16 subnormal and zero behavior is checked by the device probes;
+there is no oracle substitution or relaxation of existing tests.
+
+The forward range protects masking: an unreachable incoming term never becomes
+reachable after adding a supported positive score, and an unreachable output
+has exactly zero exp2 weight against the nonnegative fallback normalizer.
+The probe enumerates every finite BF16 value in the stated range and checks both
+identity orders and hard-mismatch annihilation. Padding is the same identity.
+Training API lengths and packed boundaries still must be 256-aligned; nonaligned
+inputs reject, including with the new flags. This change does not add padding.
+
+#### Instantiations and selection
+
+For each `KernelConfig<R,D,DV>`, R=16/32, D=32/64, DV=32/64:
+
+- Fixed/packed summary add `ForwardDiagBF16=true` (two new kernels per shape).
+- Fixed/packed forward add `(DiagRecurrence,ForwardDiagBF16)=(true,true)`.
+- Each fixed/packed backward B1/B3 adds
+  `(DiagRecurrence,ForwardDiagBF16,BackwardDiagBF16)` equal to
+  `(true,false,true)`, `(true,true,false)`, `(true,true,true)`.
+- Existing FP32 on/off kernels remain. Backward BF16 instantiations live in
+  separate `*_format.cu` translation units to preserve the original FP32 kernel
+  body and code generation. The default FP32 backward recompute helper is retained
+  verbatim; the format helper is separate.
+
+With production BF16 output this is **16 new primary kernels per shape, 128 over
+all eight shapes**; there are 34 primary instances per shape including the previous
+on/off variants and chunk kernels. Optional `DISM_ENABLE_FP32=1` also instantiates
+FP32 output variants, giving `2 + 14*2 = 30` new primary kernels per shape; those
+optional output variants were not validated here. Probes are separately opt-in.
+CUDA device compilation remains Torch-free.
+
+Builds use this worktree's `build.py`, conda `blkw`, `MAX_JOBS=4` and
+`DISM_BUILD_JOBS=4`. The isolated directory is `dism_v3/build/bf16x2`, with `src`
+and `include` symlinks into this worktree and a copy of this version's build.py.
+From that directory:
+
+```bash
+PATH=/usr/local/cuda/bin:/home/cicuvc/miniconda3/envs/blkw/bin:$PATH \
+MAX_JOBS=4 DISM_BUILD_JOBS=4 DISM_BUILD_PROBES=1 DISM_LINEINFO=1 \
+/home/cicuvc/miniconda3/envs/blkw/bin/python build.py
+```
+
+From the repository root, select the new extension and this worktree's Python:
+
+```bash
+export PYTHONPATH="$PWD/dism_v3/build/bf16x2/python:$PWD/dism_v3/python:$PWD/dism_v3/tests:$PWD/nanochat"
+/home/cicuvc/miniconda3/envs/blkw/bin/python -m pytest -q dism_v3/tests/test_diag_format.py
+```
+
+Both flags can be set on `nanochat.models.dism.DismConfig` or passed to
+`flash_dism.dism_core` / `voc_dism`. This provides an experimental A/B configuration,
+**not evidence that positive-tau training is numerically accepted**. Default-false
+Python calls retain the previous extension argument list; enabling a format with
+an older extension raises an explicit error. The working-tree `python/cu_flash_dism`
+binary is untouched (SHA256
+`e9e7bd6895c5f841f82594967f5afcc761d502acc77e65a34e838e43dd098a1e`). The pre-existing
+Python `diag_recurrence` interface still requires a compatible extension; the older
+isolated `build/diag_recurrence/python` can serve default-format calls only.
+
+#### Numerical acceptance and limitations
+
+The new accuracy matrix compares against the FP32-pair CUDA path using identical
+inputs and upstream derivatives: all three opt-in combinations, fixed/packed,
+N256/512, soft/random-label/repeated-hard/mismatch, tau=0/0.3/ln4, both LSE
+directions. Packed tests include an empty document. Forward gates are the unchanged
+`.008` absolute / `.025` relative elementwise limits plus a separate new 3% vector
+relative-L2 gate (a BF16 accumulation allowance, not a change to the existing 1%
+forward tests). Gradient gates reuse `gradient_acceptance.py`: vector cosine .999,
+relative L2 .03, absolute norm allowance 1e-4; LSE .995/.10/.01; tau .95/.50/.02.
+These are the existing accepted BF16-output cancellation allowances, not a new
+justification for large recurrence error. All tests retain finite and exact-zero
+checks. No existing tolerance was changed.
+
+The first R32/D64/DV64 matrix has **22 ordinary numerical failures**, all on
+repeated hard-label chains with positive tau. Forward BF16 with tau=.3/N256 has
+about **12.06% output relative L2 error**; BF16 backward alone leaves forward output
+and normalizer bitwise unchanged but fails the tau direction gate (one case
+cosine **0.87987**, required .95). A separate diagnostic sweep observes forward
+BF16 gradient errors as large as ~25% in dV/dSQ/dSK and much larger relative tau
+errors. These results are not covered by the passing zero-mask proof.
+
+Long positive chains expose coarse spacing of the log state. Moreover, backward
+recomputes the forward state with a transposed scan/tile partition: BF16 rounding
+is not associative, so this need not reproduce the forward rounded values. The
+FP32 implementation's much smaller version of this effect cannot justify treating
+BF16 recomputation as exact. This is a numerical limitation, not a sanitizer
+finding. No claim of “almost no loss”, throughput improvement, training convergence,
+or correctness for long positive repeated chains is made. Fixing that discrepancy
+without extra state or a different recurrence evaluation remains unresolved.
+The switches remain opt-in and the failing tests are neither xfailed nor hidden.
+
+#### Validation results and resource report
+
+The full new suite (excluding the two separately run baseline checks) reports
+**195 passed, 22 failed**. Its 48 all-shape fixed/packed format cases passed;
+the 22 failures are the repeated-hard positive-tau accuracy cases described above.
+The earlier 163-case run was 141 passed / 22 failed. Compiled eager/AOT comparisons,
+configuration serialization, nanochat attention propagation and strict state/schema
+comparisons all passed. Existing selected regressions passed 250 cases with 22
+optional skips; one stale-artifact codegen test initially failed because it read
+the working-tree build instead of the loaded extension. It now reads the isolated
+extension and checks both new packed backward format kernels too; its rerun passed.
+Three checkpoint serialization/registry-load tests passed (four toy interrupted
+training cases deselected; no optimizer steps or training runs were launched).
+
+Both memcheck and synccheck passed **48 all-shape cases each, zero errors**. This
+executes every one of the 128 new primary BF16-output instantiations through all
+three opt-in format combinations, fixed and packed. An additional eight-case
+R32/D64/DV64 N512 boundary/identity/predicated-alias selection passed each sanitizer
+with zero errors. This is small-fixture coverage, not exhaustive sanitizer coverage.
+Racecheck, sm90, FP32-output builds and long-context quality/performance were not
+validated. Existing saved-BF16-output delta/tau cancellation limitations remain.
+The source-mapped mask checks, no-CALL/register-control checks and Torch-free device
+dependency checks passed for all eight shapes and all 34 primary instances/shape.
+
+Compiler resource numbers below are **stack / spill-store / spill-load bytes**,
+from `ptxas -v`, not measured dynamic spill traffic. They enumerate every new
+primary BF16-output instantiation. Register budgets and launches were not tuned.
+Zero spill is not claimed for these variants.
+
+| R/D/DV | Summary fixed F=BF16 | Summary packed F=BF16 | Forward fixed F=BF16 | Forward packed F=BF16 |
+| --- | ---: | ---: | ---: | ---: |
+| 16/32/32 | 0/0/0 | 0/0/0 | 0/0/0 | 24/20/64 |
+| 16/32/64 | 0/0/0 | 0/0/0 | 0/0/0 | 16/16/48 |
+| 16/64/32 | 0/0/0 | 16/16/40 | 0/0/0 | 16/16/48 |
+| 16/64/64 | 0/0/0 | 16/16/40 | 0/0/0 | 16/16/48 |
+| 32/32/32 | 0/0/0 | 0/0/0 | 0/0/0 | 16/16/48 |
+| 32/32/64 | 0/0/0 | 0/0/0 | 0/0/0 | 16/16/48 |
+| 32/64/32 | 0/0/0 | 16/16/40 | 0/0/0 | 16/16/48 |
+| 32/64/64 | 0/0/0 | 16/16/40 | 8/16/24 | 16/16/48 |
+
+Fixed B1 (F/B denote forward/reverse pair format):
+
+| R/D/DV | F=FP32, B=BF16 | F=BF16, B=FP32 | F=BF16, B=BF16 |
+| --- | ---: | ---: | ---: |
+| 16/32/32 | 128/140/196 | 128/140/196 | 144/156/212 |
+| 16/32/64 | 208/224/316 | 216/232/324 | 200/212/304 |
+| 16/64/32 | 160/172/236 | 160/172/236 | 160/172/236 |
+| 16/64/64 | 224/236/308 | 192/204/288 | 192/204/276 |
+| 32/32/32 | 152/164/220 | 152/164/220 | 152/164/220 |
+| 32/32/64 | 264/280/352 | 288/300/372 | 264/280/352 |
+| 32/64/32 | 176/192/260 | 160/172/228 | 176/188/252 |
+| 32/64/64 | 336/356/428 | 312/336/408 | 272/296/368 |
+
+Fixed B3 (F/B denote forward/reverse pair format):
+
+| R/D/DV | F=FP32, B=BF16 | F=BF16, B=FP32 | F=BF16, B=BF16 |
+| --- | ---: | ---: | ---: |
+| 16/32/32 | 88/104/120 | 152/164/180 | 96/108/124 |
+| 16/32/64 | 168/184/204 | 192/208/240 | 168/184/204 |
+| 16/64/32 | 200/216/248 | 208/228/260 | 200/216/248 |
+| 16/64/64 | 184/200/232 | 240/256/288 | 160/176/196 |
+| 32/32/32 | 112/124/140 | 144/156/176 | 112/124/140 |
+| 32/32/64 | 168/184/204 | 208/224/256 | 168/184/204 |
+| 32/64/32 | 168/180/204 | 240/256/288 | 168/188/212 |
+| 32/64/64 | 200/216/248 | 360/376/408 | 184/204/236 |
+
+Packed B1 (F/B denote forward/reverse pair format):
+
+| R/D/DV | F=FP32, B=BF16 | F=BF16, B=FP32 | F=BF16, B=BF16 |
+| --- | ---: | ---: | ---: |
+| 16/32/32 | 104/112/144 | 88/96/128 | 112/116/148 |
+| 16/32/64 | 192/196/228 | 256/268/296 | 192/196/228 |
+| 16/64/32 | 152/156/188 | 136/144/176 | 152/160/192 |
+| 16/64/64 | 240/244/276 | 208/208/244 | 216/220/252 |
+| 32/32/32 | 144/148/180 | 144/152/184 | 160/164/196 |
+| 32/32/64 | 264/268/300 | 272/284/312 | 264/268/300 |
+| 32/64/32 | 176/180/212 | 168/172/204 | 176/180/212 |
+| 32/64/64 | 320/328/364 | 304/316/344 | 280/280/312 |
+
+Packed B3 (F/B denote forward/reverse pair format):
+
+| R/D/DV | F=FP32, B=BF16 | F=BF16, B=FP32 | F=BF16, B=BF16 |
+| --- | ---: | ---: | ---: |
+| 16/32/32 | 16/16/52 | 56/64/92 | 16/16/52 |
+| 16/32/64 | 96/104/140 | 112/116/152 | 88/92/128 |
+| 16/64/32 | 120/124/160 | 136/144/180 | 120/120/156 |
+| 16/64/64 | 144/144/180 | 176/180/216 | 136/136/172 |
+| 32/32/32 | 48/52/88 | 88/96/132 | 32/40/76 |
+| 32/32/64 | 72/80/116 | 112/116/152 | 64/72/108 |
+| 32/64/32 | 144/144/180 | 176/180/216 | 144/148/184 |
+| 32/64/64 | 168/168/204 | 192/196/232 | 168/168/204 |
+
+The two fresh-baseline checks also passed: **112 pre-existing instruction streams**
+(64 recurrence-enabled/summary streams plus 48 recurrence-off streams) are identical
+across all eight shapes. Fixed and packed R32/D64/DV64 random, repeated-hard and
+mismatched N512 fixtures have bitwise-identical default output, normalizer, vertical
+checkpoints and horizontal boundaries versus the pre-change build. All eight
+mismatched-input gradients are bitwise identical too. Nonzero FP32 atomic gradient
+sums are not asserted bitwise across independent executions; their kernel streams
+are identical and their existing numerical regressions pass. There is no claim of
+making the pre-existing atomics deterministic. Reproduce these checks with
+`DISM_DIAG_BASELINE=$PWD/dism_v3/build/bf16x2/before` and
+`pytest -q dism_v3/tests/test_diag_format.py -k 'default_instruction_streams or default_bitwise_prechange'`.
+
+Artifacts stay ignored under `build/bf16x2/`: `build_all.log`,
+`build_isolated.log`, `build_baseline_all.log`, `tests_all.log`, `default_tests.log`,
+`regression.log`, `regression_followup.log`, `checkpoint_tests.log`,
+`memcheck{,_all}.log`, `synccheck{,_all}.log`, `numerics.json`, and `resources.json`.
+`before/` is a snapshot of the starting worktree source and a fresh pre-change
+build with the same toolchain. It includes the user's uncommitted diag_recurrence
+changes; historical diag_recurrence cubins alone are not a reproducible baseline
+for the current source/toolchain. No generated artifact is staged for Git.
+
+#### Changed file:line inventory
+
+Each number is the start of a changed hunk in the resulting source, relative to
+this task's starting worktree (not HEAD, which already had the user's recurrence
+ablation changes). New files are listed at line 1. Existing reference edits from
+the earlier task were preserved byte-for-byte; none are part of this change.
+
+- `dism_v3/include/backward/recompute.cuh:15, 120`
+- `dism_v3/include/backward/types.cuh:73`
+- `dism_v3/include/diag_format.cuh:1` (new file)
+- `dism_v3/include/forward/scan.cuh:11, 36, 48, 53, 74`
+- `dism_v3/include/summary/kernel_common.cuh:76, 81`
+- `dism_v3/include/summary/primitives.cuh:10, 444, 509, 515`
+- `dism_v3/src/backward_qk.cu:193, 200, 202`
+- `dism_v3/src/backward_qk_format.cu:1` (new file)
+- `dism_v3/src/backward_summary.cu:181, 188, 190`
+- `dism_v3/src/backward_summary_format.cu:1` (new file)
+- `dism_v3/src/forward.cu:9, 12, 63, 86, 109, 115, 170, 175, 177`
+- `dism_v3/src/frontend.cpp:16, 18, 20, 22, 27, 33, 35, 37, 39, 111, 114, 122, 125, 130, 134, 139, 147, 150, 161, 170, 227, 230, 251`
+- `dism_v3/src/host/backward_qk.cpp:10, 13, 45, 50, 57`
+- `dism_v3/src/host/backward_summary.cpp:10, 13, 40, 45, 59`
+- `dism_v3/src/host/forward.cpp:10, 15, 78, 80`
+- `dism_v3/src/host/varlen_backward_qk.cpp:11, 14, 45, 50`
+- `dism_v3/src/host/varlen_backward_summary.cpp:11, 14, 36, 41`
+- `dism_v3/src/host/varlen_forward.cpp:11, 13, 58`
+- `dism_v3/src/host/varlen_summary.cpp:10, 12, 39`
+- `dism_v3/src/host/wmma_tma_preprocess.cpp:10, 14, 17`
+- `dism_v3/src/interface.cpp:15, 20, 35, 39, 64, 69, 76, 90, 104, 106`
+- `dism_v3/src/probe/diag_format.cu:1` (new file)
+- `dism_v3/src/probe/host/diag_format.cpp:1` (new file)
+- `dism_v3/src/varlen_backward_qk.cu:195, 202, 204`
+- `dism_v3/src/varlen_backward_qk_format.cu:1` (new file)
+- `dism_v3/src/varlen_backward_summary.cu:182, 189, 191`
+- `dism_v3/src/varlen_backward_summary_format.cu:1` (new file)
+- `dism_v3/src/varlen_forward.cu:10, 13, 63, 86, 109, 115, 170, 175, 177`
+- `dism_v3/src/varlen_interface.cpp:13, 16, 20, 22, 31, 35, 48, 58`
+- `dism_v3/src/varlen_summary.cu:9, 39, 108, 133`
+- `dism_v3/src/wmma_tma_preprocess.cu:7, 34, 105, 130`
+- `dism_v3/python/flash_dism/__init__.py:21, 31, 35, 45`
+- `dism_v3/python/flash_dism/backward.py:6, 17, 23, 25, 30, 39, 42, 45, 52`
+- `dism_v3/python/flash_dism/compiler.py:7, 100, 111, 119, 138, 152, 165, 171, 185, 188`
+- `dism_v3/python/flash_dism/configuration_dism.py:22, 49`
+- `dism_v3/python/flash_dism/diag_format.py:1` (new file)
+- `dism_v3/python/flash_dism/forward.py:2, 7, 15`
+- `dism_v3/python/flash_dism/modeling_dism.py:46`
+- `dism_v3/python/flash_dism/module.py:128, 145, 254, 388, 395, 398`
+- `dism_v3/python/flash_dism/varlen.py:2, 51, 69, 84, 90, 92, 95, 105, 108, 112, 120, 123, 143, 149`
+- `dism_v3/python/flash_dism/voc.py:7, 24`
+- `dism_v3/tests/test_diag_format.py:1` (new file)
+- `dism_v3/tests/test_forward.py:86`
+- `dism_v3/tests/test_multi_codegen.py:24, 43, 58, 66`
+- `dism_v3/tests/test_summary_codegen.py:14, 23, 30, 32`
+- `dism_v3/tests/test_varlen_execution.py:115, 127`
+- `nanochat/nanochat/models/dism/__init__.py:60, 61`
+- `nanochat/nanochat/models/dism/model.py:90, 91`
+- `dism_v3/docs/SOFT_HARD_RELAXATION.md:2977` (§41.7, including this report)
+
+### 41.8 关于 §41.7 那 22 个失败的定位（重要）
+
+§41.7 的精度矩阵是**对抗性最坏情形**，不是训练相关的估计量。必须区分两个独立问题：
+
+| 问题 | 判据 | 状态 |
+|---|---|---|
+| **质量**：bf16x2 训练是否掉点 | 短预训练 A/B 的 `val_bpb + NIAH(2k/8k/16k) + gap + qk coverage_pooled` | 待跑 |
+| **资源**：是否真的降低寄存器/SHFL 压力 | sm_120 上 `regs/thread + spill`（主）、SHFL/LSU 指令数（辅）、占用率 | Astra P2 |
+
+判据：**两者都成立才值得采用**；若质量成立而寄存器/SHFL 没降，则本次改动无意义
+（H100 上 bf16x2 反而慢 1.7×，而本机 sm_120 的 LSU 是 Hopper 的一半，需实测）。
+
+支持"训练可能没问题"的证据：§41.7 的 **22 个失败全部集中在"重复 hard-label 链 + 正 tau"
+这一族退化序列**上，而不是分散到各类输入；且有半年前"bf16x2 几乎不掉点（甚至略强）"的
+训练经验。反对的证据是前向 L2 12% / 梯度 25% 的最坏值，以及**反向重算与前向舍入不一致**
+（bf16 舍入不满足结合律 + 转置划分），后者是结构性风险而非仅精度问题。
+
+**非对称格式（fp32 `first` + bf16 `second`，1.5 regs）作为对冲保留**：它把**随链长增长**的
+第一个分量留在 fp32，因此即使训练对纯 bf16x2 不容忍，也能拿到 25% 的寄存器节省，
+并顺带消除反向重算不一致。Astra 当前轮已按此实现。
+
+**计划**：等当前 Astra 轮结束（它会改同一批源码，期间不启动训练）后，跑短预训练 A/B：
+`fp32x2`（基线，已有 A 组可复用）/ `bf16x2` / `非对称`，同 seed 同数据，配合 sm_120 资源报告一起判。
