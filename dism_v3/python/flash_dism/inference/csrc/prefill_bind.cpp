@@ -1,9 +1,25 @@
 #include "prefill.hpp"
+#include "prefill_training.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 namespace py=pybind11;
 using namespace dism_prefill;
+
+template<class T> T *training_buffer(const py::dict &buffers,const char *name,int64_t count,
+                                    std::vector<std::pair<uintptr_t,uintptr_t>> &ranges) {
+    auto a=py::cast<py::array>(buffers[name]);
+    if (!a.dtype().is(py::dtype::of<T>()) || a.ndim()!=1 || a.size()!=count
+        || !(a.flags()&py::array::c_style) || !a.writeable())
+        throw std::invalid_argument(std::string(name)+": writable contiguous 1D buffer with exact dtype/size required");
+    auto begin=reinterpret_cast<uintptr_t>(a.mutable_data()),end=begin+count*sizeof(T);
+    if (count) {
+        for (auto [left,right]:ranges) if (begin<right && left<end)
+            throw std::invalid_argument("output buffers must not overlap");
+        ranges.emplace_back(begin,end);
+    }
+    return static_cast<T*>(a.mutable_data());
+}
 
 template<class T> py::array_t<T> copy_array(const std::vector<T> &v) {
     py::array_t<T> a(v.size());
@@ -35,7 +51,8 @@ PYBIND11_MODULE(_dism_prefill,m) {
             py::dict d;
             d["n"]=p.n; d["states"]=p.states; d["streams"]=p.offsets.size()-1;
             d["events"]=p.rows.size();
-            d["program_bytes"]=p.offsets.size()*8+p.rows.size()*20+p.logden.size()*8;
+            d["program_bytes"]=p.offsets.size()*8+p.rows.size()*20+p.logden.size()*8
+                +(p.dlogweight.size()+p.dlogden.size())*8;
             return d;
         })
         .def("arrays",[](const Program &p) {
@@ -43,6 +60,9 @@ PYBIND11_MODULE(_dism_prefill,m) {
             d["offsets"]=copy_array(p.offsets); d["rows"]=copy_array(p.rows);
             d["decay"]=copy_array(p.decay); d["weight"]=copy_array(p.weight);
             d["logden"]=copy_array(p.logden);
+            if (!p.dlogden.empty()) {
+                d["dlogweight"]=copy_array(p.dlogweight); d["dlogden"]=copy_array(p.dlogden);
+            }
             return d; // Owned copies, never writable aliases to the plan.
         })
         .def("chunks",[](const Program &p,int width) {
@@ -52,6 +72,7 @@ PYBIND11_MODULE(_dism_prefill,m) {
             d["offsets"]=copy_array(c.offsets); d["rows"]=copy_array(c.rows);
             d["prefixes"]=copy_array(c.prefixes); d["weights"]=copy_array(c.weights);
             d["lengths"]=copy_array(c.lengths); d["resets"]=copy_array(c.resets);
+            if (!c.dlog.empty()) d["dlog"]=copy_array(c.dlog);
             return d;
         })
         .def("execute_fp64",&mock<double>,py::arg("sq").noconvert(),py::arg("sk").noconvert(),py::arg("value").noconvert())
@@ -66,4 +87,56 @@ PYBIND11_MODULE(_dism_prefill,m) {
         py::gil_scoped_release release;
         return Builder(q,k,reset,tau,true).finish();
     });
+    m.def("plan_training",[](const Ids &q,const Ids &k,double tau) {
+        py::gil_scoped_release release;
+        return Builder(q,k,Ids(q.size(),0),tau,false,true).finish();
+    });
+    py::class_<TrainingBatchProgram,std::shared_ptr<TrainingBatchProgram>>(m,"TrainingBatchProgram")
+        .def("statistics",[](const TrainingBatchProgram &p) {
+            py::dict d;
+            d["batch"]=p.batch; d["heads"]=p.heads; d["n"]=p.n; d["chunk_size"]=p.width;
+            d["tau_rows"]=p.tau_rows;
+            d["jobs"]=p.jobs.size(); d["streams"]=p.stream_base.back();
+            d["chunks"]=p.chunk_base.back(); d["events"]=p.events; d["native_plan_ms"]=p.plan_ms;
+            return d;
+        })
+        .def("pack_into",[](const TrainingBatchProgram &p,const py::dict &buffers) {
+            int64_t streams=p.stream_base.back(),chunks=p.chunk_base.back(),slots=chunks*p.width;
+            std::vector<std::pair<uintptr_t,uintptr_t>> ranges;
+            TrainingBuffers out;
+            out.offsets=training_buffer<int64_t>(buffers,"offsets",streams+1,ranges);
+            out.rows=training_buffer<int>(buffers,"rows",slots,ranges);
+            out.prefixes=training_buffer<float>(buffers,"prefixes",slots,ranges);
+            out.weights=training_buffer<float>(buffers,"weights",slots,ranges);
+            out.dlog=training_buffer<float>(buffers,"dlog",slots,ranges);
+            out.lengths=training_buffer<int>(buffers,"lengths",chunks,ranges);
+            out.resets=training_buffer<int>(buffers,"resets",chunks,ranges);
+            out.stream_heads=training_buffer<int>(buffers,"stream_heads",streams,ranges);
+            py::gil_scoped_release release;
+            p.pack_into(out);
+        });
+    using Labels=py::array_t<int,py::array::c_style>;
+    using Taus=py::array_t<double,py::array::c_style>;
+    using Docs=py::array_t<int64_t,py::array::c_style>;
+    using Hard=py::array_t<uint8_t,py::array::c_style>;
+    py::class_<PlanningWorkers,std::shared_ptr<PlanningWorkers>>(m,"TrainingPlanner")
+        .def(py::init<int>(),py::arg("workers")=8)
+        .def("plan",[](std::shared_ptr<PlanningWorkers> pool,Labels labels,Taus tau,Docs docs,Hard hard,int width) {
+            if (labels.ndim()!=4 || labels.shape(0)!=2 || labels.shape(1)<=0 || labels.shape(2)<=0 || labels.shape(3)<=0
+                || labels.shape(1)>INT_MAX || labels.shape(2)>INT_MAX || labels.shape(3)>INT_MAX)
+                throw std::invalid_argument("labels must be int32 [2,B,H,N]");
+            int b=int(labels.shape(1)),h=int(labels.shape(2)),n=int(labels.shape(3));
+            if (int64_t(b)*h>INT_MAX || int64_t(b)*h*n>INT_MAX)
+                throw std::invalid_argument("flattened vector rows exceed int32");
+            if (!((tau.ndim()==1 && tau.shape(0)==h) || (tau.ndim()==2 && tau.shape(0)==b && tau.shape(1)==h)))
+                throw std::invalid_argument("tau must be float64 [H] or [B,H]");
+            if (docs.ndim()!=2 || docs.shape(1)!=3 || hard.ndim()!=2 || hard.shape(0)!=b || hard.shape(1)!=h)
+                throw std::invalid_argument("documents int64 [D,3]=(batch,start,end), hard uint8 [B,H] required");
+            int tau_rows=tau.ndim()==1 ? 1 : b;
+            auto label_ptr=labels.data(); auto tau_ptr=tau.data(); auto docs_ptr=docs.data(); auto hard_ptr=hard.data();
+            int64_t count=docs.shape(0);
+            py::gil_scoped_release release;
+            return std::make_shared<TrainingBatchProgram>(std::move(pool),label_ptr,b,h,n,tau_ptr,tau_rows,docs_ptr,count,hard_ptr,width);
+        },py::arg("labels").noconvert(),py::arg("tau").noconvert(),py::arg("documents").noconvert(),
+          py::arg("hard").noconvert(),py::arg("chunk_size")=16);
 }

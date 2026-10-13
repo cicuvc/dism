@@ -6,6 +6,10 @@ acceptance tolerances were changed. The existing full-hard inference planner
 provides the event topology; this study differentiates its operator, including
 the original head-shared tau. Per-query tau changes are out of scope.
 
+The subsequent [native parallel CPU planner](NATIVE_TRAINING_PLANNER.md) now
+implements full derivative planning, batch/head parallelism and pinned packing;
+its timings supersede the Python-based preparation estimates below.
+
 ## What has been validated
 
 `tools/hard_prefill_grad_reference.py` mirrors the native SAM/centroid planner
@@ -227,6 +231,8 @@ OPENBLAS_NUM_THREADS=1 PYTHONPATH=$PWD/dism_v3/python:$PWD/nanochat \
    subquadratic forward to be integrated first. Move the derivative planner,
    batch/head parallelism, coefficient generation and packing into a native
    batch API; the Python symbolic planner is only a correctness scaffold.
+   That native API is now implemented and measured in the linked report;
+   production overlap and per-layer deadline measurement remain to be done.
    Keep pinned buffers, copy streams, completion events and plan lifetime
    explicit. A worker waits for label D2H completion; the training thread
    continues enqueueing GPU forward work. Backward waits on the upload event
@@ -262,10 +268,10 @@ native parallel planning, CPU merging/staging and metadata upload independently.
 event synchronization and upload alongside the unchanged dense hard forward.
 Both are diagnostics, not production scheduling changes.
 
-The native inference planner **already is C++**. These tests use eight CPU
+The native inference planner **already is C++**. These initial tests used eight CPU
 worker threads across independent document/head jobs. However, per-job Python
 list conversion, exported arrays and batch metadata merging remain. The new
-analytic derivative planner is still Python. Native derivative generation
+analytic derivative planner was still Python at that stage. Native derivative generation
 is not included in the native timings: an explicitly synthetic float32 dlog
 field accounts for its transfer bytes only. Thus the following is not a
 complete training-plan latency benchmark or a limit on a fully native batch API.

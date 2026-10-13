@@ -25,57 +25,76 @@ struct Program {
     std::vector<int64_t> offsets{0};
     Ids rows;
     std::vector<double> decay, weight, logden;
+    // Populated only by the explicit training planner; inference is unchanged.
+    std::vector<double> dlogweight, dlogden;
 };
 
 struct ChunkProgram {
     std::vector<int64_t> offsets{0};
     Ids rows, lengths, resets;
     std::vector<float> prefixes, weights;
+    std::vector<float> dlog;
 };
 
 inline ChunkProgram chunk_program(const Program &p, int width) {
     if (width!=16 && width!=32 && width!=64)
         throw std::invalid_argument("chunk width must be 16, 32 or 64");
     ChunkProgram out;
+    out.offsets.reserve(p.offsets.size());
+    // Discover boundaries first; allocate the four padded slot arrays exactly
+    // once instead of repeatedly growing/copying them for every chunk.
+    size_t estimate=p.rows.size()/width+p.offsets.size();
+    out.lengths.reserve(estimate); out.resets.reserve(estimate);
     for (size_t stream=1;stream<p.offsets.size();++stream) {
         int64_t start=p.offsets[stream-1], end=p.offsets[stream];
         while (start<end) {
             int64_t stop=std::min(start+width,end);
             for (int64_t e=start+1;e<stop;++e)
                 if (p.rows[e]>=0 && p.decay[e]==0.) { stop=e; break; }
-            bool reset=p.rows[start]>=0 && p.decay[start]==0.;
-            double prefix=0.;
-            size_t base=out.rows.size();
-            out.rows.resize(base+width,0);
-            out.prefixes.resize(base+width,0.f);
-            out.weights.resize(base+width,0.f);
-            for (int64_t e=start;e<stop;++e) {
-                if (p.rows[e]>=0 && !(reset && e==start)) prefix+=std::log(p.decay[e]);
-                size_t slot=base+e-start;
-                out.rows[slot]=p.rows[e];
-                out.prefixes[slot]=float(prefix);
-                out.weights[slot]=float(p.weight[e]);
-            }
-            out.lengths.push_back(int(stop-start)); out.resets.push_back(int(reset));
+            out.lengths.push_back(int(stop-start));
+            out.resets.push_back(int(p.rows[start]>=0 && p.decay[start]==0.));
             start=stop;
         }
         out.offsets.push_back(out.lengths.size());
+    }
+    size_t slots=out.lengths.size()*width;
+    out.rows.resize(slots,0); out.prefixes.resize(slots,0.f);
+    out.weights.resize(slots,0.f);
+    if (!p.dlogweight.empty()) out.dlog.resize(slots,0.f);
+    int64_t e=0;
+    for (size_t chunk=0;chunk<out.lengths.size();++chunk) {
+        double prefix=0.;
+        for (int i=0;i<out.lengths[chunk];++i,++e) {
+            if (p.rows[e]>=0 && !(out.resets[chunk] && i==0)) prefix+=std::log(p.decay[e]);
+            size_t slot=chunk*width+i;
+            out.rows[slot]=p.rows[e];
+            out.prefixes[slot]=float(prefix);
+            out.weights[slot]=float(p.weight[e]);
+            if (!p.dlogweight.empty()) out.dlog[slot]=float(p.dlogweight[e]);
+        }
     }
     return out;
 }
 
 class Builder {
-    struct Stream { Ids q, k; std::vector<double> a, b; };
+    // Index ranges survive flat vector growth; no per-stream heap objects.
+    struct Stream { size_t qb, qe, kb, ke; };
     struct Group { Ids q, k; };
     dism_decode::Planner sam;
     int n;
     double tau;
     bool reference_lca;
+    bool gradients;
+    std::vector<double> logweights, derivatives;
     Ids endpoint, qnode, matched, depth, owner, parent, size, lca_node, lca_chain, lca_stack;
     std::vector<Ids> adj, up;
     std::vector<char> on_path;
     std::vector<bool> removed;
     std::vector<Stream> streams;
+    Ids stream_q, stream_k;
+    std::vector<double> stream_a, stream_b, stream_da, stream_db;
+    // cross() never recurses: retain its partition capacity within this build.
+    Ids cross_qp, cross_qd, cross_kp, cross_kd;
 
     double logweight(int length) const {
         if (!length) return neg_inf;
@@ -139,24 +158,41 @@ class Builder {
     // mode 0: downward/downward; 1: parent/downward; 2: downward/parent;
     // 3: centroid singleton. Prune zero weights before building event streams.
     void emit(const Ids &queries, const Ids &keys, int c, int mode) {
-        Stream s;
+        if (queries.empty() || keys.empty() || keys.front()>queries.back()) return;
+        Stream s{stream_q.size(),0,stream_k.size(),0};
         for (int i: queries) {
             int length = mode==3 ? matched[i] : std::min(matched[i],sam.nodes[c].length);
             if (mode==1) length=std::min(matched[i],lca_len(qnode[i],c));
-            double a = mode==2 ? 0. : logweight(length);
-            if (a!=neg_inf) { s.q.push_back(i); s.a.push_back(a); }
+            double a = mode==2 ? 0. : (gradients ? logweights[length] : logweight(length));
+            if (a!=neg_inf) {
+                stream_q.push_back(i); stream_a.push_back(a);
+                if (gradients) stream_da.push_back(mode==2 ? 0. : derivatives[length]);
+            }
         }
-        if (s.q.empty()) return;
+        s.qe=stream_q.size();
+        if (s.qb==s.qe) return;
         for (int j: keys) {
-            if (j>s.q.back()) break;
-            double b = mode==2 ? logweight(lca_len(endpoint[j],c)) : 0.;
-            if (b!=neg_inf) { s.k.push_back(j); s.b.push_back(b); }
+            if (j>stream_q.back()) break;
+            int length = mode==2 ? lca_len(endpoint[j],c) : 0;
+            double b = mode==2 ? (gradients ? logweights[length] : logweight(length)) : 0.;
+            if (b!=neg_inf) {
+                stream_k.push_back(j); stream_b.push_back(b);
+                if (gradients) stream_db.push_back(mode==2 ? derivatives[length] : 0.);
+            }
         }
-        if (!s.k.empty()) streams.push_back(std::move(s));
+        s.ke=stream_k.size();
+        if (s.kb!=s.ke) streams.push_back(s);
+        else {
+            stream_q.resize(s.qb); stream_a.resize(s.qb);
+            if (gradients) stream_da.resize(s.qb);
+        }
     }
 
     void cross(const Group &a, const Group &b, int c, int pg) {
-        Ids qp,qd,kp,kd;
+        if (a.q.empty() || b.k.empty() || b.k.front()>a.q.back()) return;
+        if (pg<0) { emit(a.q,b.k,c,0); return; }
+        auto &qp=cross_qp, &qd=cross_qd, &kp=cross_kp, &kd=cross_kd;
+        qp.clear(); qd.clear(); kp.clear(); kd.clear();
         for (int i:a.q) (owner[qnode[i]]==pg ? qp:qd).push_back(i);
         for (int j:b.k) (owner[endpoint[j]]==pg ? kp:kd).push_back(j);
         if (!qp.empty() && !kp.empty()) throw std::logic_error("split parent component");
@@ -200,7 +236,10 @@ class Builder {
         if (!reference_lca && pg>=0 && (!groups[pg].q.empty() || !groups[pg].k.empty()))
             fill_lca(c);
         // Keep original component lists for recursion; merged lists die here.
-        {
+        // The SAM root has length zero: every cross-component match has
+        // zero weight. Skip constructing groups' merge tree in that case,
+        // but still recurse into its components below.
+        if (sam.nodes[c].length>0) {
             std::vector<Group> work=groups;
             using Item=std::pair<int,int>;
             std::priority_queue<Item,std::vector<Item>,std::greater<Item>> heap;
@@ -220,14 +259,23 @@ class Builder {
     }
 
   public:
-    Builder(const Ids &q, const Ids &k, const Ids &reset, double tau_, bool reference_lca_=false)
-        : sam(1,1,1,2,0.), n(int(k.size())), tau(tau_), reference_lca(reference_lca_) {
+    Builder(const Ids &q, const Ids &k, const Ids &reset, double tau_, bool reference_lca_=false, bool gradients_=false)
+        : sam(1,1,1,2,0.), n(int(k.size())), tau(tau_), reference_lca(reference_lca_), gradients(gradients_) {
         if (!n || q.size()!=k.size() || reset.size()!=k.size() || !std::isfinite(tau))
             throw std::invalid_argument("nonempty equal label/reset lengths and finite tau required");
         if (std::abs(tau)>std::numeric_limits<double>::max()/n)
             throw std::invalid_argument("tau*N exceeds FP64 log-domain range");
+        if (gradients) {
+            logweights.resize(n+1,neg_inf); derivatives.resize(n+1,0.);
+            for (int l=1;l<=n;++l) {
+                logweights[l]=logweight(l);
+                derivatives[l]=std::exp(logweights[l-1]-logweights[l])*derivatives[l-1]
+                    + std::exp(l*tau-logweights[l])*l;
+            }
+        }
         // Reuse the existing SAM extension primitive, not its online snapshots.
         int last=0;
+        sam.nodes.reserve(2*size_t(n)); endpoint.reserve(n);
         for (int j=0;j<n;++j) {
             if (reset[j]!=0 && reset[j]!=1) throw std::invalid_argument("reset must be 0 or 1");
             sam.extend(k[j],j,last); endpoint.push_back(last);
@@ -254,6 +302,7 @@ class Builder {
             }
         }
         int state=0, length=0;
+        qnode.reserve(n); matched.reserve(n);
         for (int i=0;i<n;++i) {
             if (reset[i]) state=length=0;
             while (state && !sam.nodes[state].next.count(q[i])) {
@@ -270,32 +319,46 @@ class Builder {
 
     Program finish() const {
         Program out; out.n=n; out.states=int(sam.nodes.size()); out.logden.assign(n,0.);
+        if (gradients) out.dlogden.assign(n,0.);
         // Scalar pass. Only causal keys participate in each stream's pivot.
         for (const auto &s:streams) {
-            size_t cursor=0; double pivot=neg_inf, mass=0.;
-            for (size_t qi=0;qi<s.q.size();++qi) {
-                int i=s.q[qi];
-                while (cursor<s.k.size() && s.k[cursor]<=i) {
-                    double b=s.b[cursor++], next=std::max(pivot,b);
+            size_t cursor=s.kb; double pivot=neg_inf, mass=0., dmass=0.;
+            for (size_t qi=s.qb;qi<s.qe;++qi) {
+                int i=stream_q[qi];
+                while (cursor<s.ke && stream_k[cursor]<=i) {
+                    double b=stream_b[cursor], next=std::max(pivot,b);
+                    if (gradients) dmass=dmass*std::exp(pivot-next)+std::exp(b-next)*stream_db[cursor];
+                    ++cursor;
                     mass=mass*std::exp(pivot-next)+std::exp(b-next); pivot=next;
                 }
-                if (mass) out.logden[i]=logadd(out.logden[i],s.a[qi]+pivot+std::log(mass));
+                if (mass) {
+                    double term=stream_a[qi]+pivot+std::log(mass), next=logadd(out.logden[i],term);
+                    if (gradients) out.dlogden[i]=std::exp(out.logden[i]-next)*out.dlogden[i]
+                        +std::exp(term-next)*(stream_da[qi]+dmass/mass);
+                    out.logden[i]=next;
+                }
             }
         }
         // Compile all floating point transcendental work into coefficients.
+        size_t capacity=stream_q.size()+stream_k.size();
+        out.rows.reserve(capacity); out.decay.reserve(capacity); out.weight.reserve(capacity);
+        if (gradients) out.dlogweight.reserve(capacity);
+        out.offsets.reserve(streams.size()+1);
         for (const auto &s:streams) {
-            size_t cursor=0; double pivot=neg_inf;
-            for (size_t qi=0;qi<s.q.size();++qi) {
-                int i=s.q[qi];
-                while (cursor<s.k.size() && s.k[cursor]<=i) {
-                    double b=s.b[cursor], next=std::max(pivot,b);
-                    out.rows.push_back(s.k[cursor++]);
+            size_t cursor=s.kb; double pivot=neg_inf;
+            for (size_t qi=s.qb;qi<s.qe;++qi) {
+                int i=stream_q[qi];
+                while (cursor<s.ke && stream_k[cursor]<=i) {
+                    double b=stream_b[cursor], next=std::max(pivot,b);
+                    if (gradients) out.dlogweight.push_back(stream_db[cursor]);
+                    out.rows.push_back(stream_k[cursor++]);
                     out.decay.push_back(std::exp(pivot-next)); out.weight.push_back(std::exp(b-next));
                     pivot=next;
                 }
                 if (pivot!=neg_inf) {
                     out.rows.push_back(-i-1); out.decay.push_back(1.);
-                    out.weight.push_back(std::exp(s.a[qi]+pivot-out.logden[i]));
+                    out.weight.push_back(std::exp(stream_a[qi]+pivot-out.logden[i]));
+                    if (gradients) out.dlogweight.push_back(stream_da[qi]-out.dlogden[i]);
                 }
             }
             if (int64_t(out.rows.size())!=out.offsets.back()) out.offsets.push_back(out.rows.size());

@@ -17,6 +17,7 @@ import torch
 from bench_hard_plan_transfers import merge_plans, summary, transfer_time
 from flash_dism.forward import forward_core
 from flash_dism.inference import HardPrefillPlan
+from flash_dism.inference.training_planner import NativeTrainingPlanner
 
 
 def measure(batch, pattern, args):
@@ -47,13 +48,25 @@ def measure(batch, pattern, args):
     def build(job):
         return HardPrefillPlan(job[0], job[1], .5).native.chunks(16)
     cases = []
+    native_planner = NativeTrainingPlanner(args.workers) if args.native_planner else None
+    native_storage = None
     with ThreadPoolExecutor(max_workers=args.workers) as planners, ThreadPoolExecutor(max_workers=1) as coordinator:
         def worker(epoch):
+            nonlocal native_storage, uploaded
             times = {'worker_start_ms': (time.perf_counter()-epoch)*1000}
             start = time.perf_counter()
             copied.synchronize()  # Worker waits, never the training/main thread.
             times['worker_d2h_wait_ms'] = (time.perf_counter()-start)*1000
             times['host_labels_ready_ms'] = (time.perf_counter()-epoch)*1000
+            if native_planner is not None:
+                prepared = native_planner.prepare(pinned, np.full(h, .5), storage=native_storage)
+                native_storage = prepared.storage
+                times.update({f'native_{k}': v for k, v in prepared.timings.items()})
+                times['pinned_plan_ready_ms'] = (time.perf_counter()-epoch)*1000
+                device_plan = prepared.upload(stream=h2d_stream)
+                uploaded = device_plan.ready
+                times['upload_submitted_ms'] = (time.perf_counter()-epoch)*1000
+                return times, device_plan, prepared
             results = list(planners.map(build, jobs))
             times['plans_done_ms'] = (time.perf_counter()-epoch)*1000
             packed = merge_plans(results, jobs, h)
@@ -103,6 +116,7 @@ def measure(batch, pattern, args):
         torch.cuda.synchronize()
         idle.append((time.perf_counter()-start)*1000)
     return dict(batch=batch, heads=h, tokens=n, pattern=pattern, workers=args.workers,
+                native_planner=args.native_planner,
                 dense_forward_baseline=baseline, idle_device_synchronize=summary(idle), cases=cases)
 
 
@@ -112,6 +126,7 @@ def main():
     parser.add_argument('--patterns', nargs='+', default=['random', 'repeat'])
     parser.add_argument('--workers', type=int, default=8)
     parser.add_argument('--repeats', type=int, default=5)
+    parser.add_argument('--native-planner', action='store_true', help='full native derivatives and pinned batch packing')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     if args.output.exists():

@@ -187,8 +187,29 @@ class HardPrefillBackward:
         self.streams = len(self.packed['offsets'])-1
         self.last_kernels = []
 
+    @classmethod
+    def from_native(cls, prepared, *, mma_precision='tf32x3'):
+        """Consume one uploaded native batch plan; vectors are flattened BNHD.
+
+        rtau is returned as flat tau groups (H for head-shared input, B*H for
+        explicit per-row/head input). Soft row/head outputs remain zero.
+        """
+        if mma_precision not in ('bf16', 'tf32x3'):
+            raise ValueError('mma_precision must be bf16 or tf32x3')
+        result = cls.__new__(cls)
+        stats = prepared.statistics
+        result.device = prepared.storage.device
+        result.n = stats['batch']*stats['heads']*stats['n']
+        result.c, result.precision = stats['chunk_size'], mma_precision
+        result.data, result.streams = prepared.data, stats['streams']
+        result.device_plan, result.tau_groups = prepared, stats['tau_rows']*stats['heads']
+        result.last_kernels = []
+        return result
+
     @torch.no_grad()
     def backward(self, sq, sk, value, dout):
+        if hasattr(self, 'device_plan'):
+            self.device_plan.wait()
         if (sq.ndim != 2 or sq.shape[0] != self.n or sk.shape != sq.shape
                 or value.ndim != 2 or value.shape[0] != self.n or dout.shape != value.shape):
             raise ValueError('expected SQ/SK [N,R], V/dO [N,DV]')
@@ -213,5 +234,10 @@ class HardPrefillBackward:
             self.last_kernels.append(_key_backward[(self.streams, tiles)](
                 sq, sk, value, dout, dsk, dv, partials[1], *metadata, *config, num_warps=warps, num_stages=1))
         # Pair query/key terms per stream before summing across streams.
-        dtau = (partials[0] + partials[1]).sum()
+        if hasattr(self, 'tau_groups'):
+            contributions = (partials[0]+partials[1]).reshape(self.streams, tiles).sum(-1)
+            dtau = torch.zeros(self.tau_groups, device=self.device, dtype=torch.float32)
+            dtau.scatter_add_(0, self.data['stream_heads'].long(), contributions)
+        else:
+            dtau = (partials[0] + partials[1]).sum()
         return dict(sq_vec=dsq, sk_vec=dsk, v=dv, rtau=dtau, tau_partials=partials)
