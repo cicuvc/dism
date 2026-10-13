@@ -2957,3 +2957,19 @@ vs A `q_cov 0.833 / max_share 0.317` ⇒ **ABL 没有塌缩，是 head 分工**�
 
 要求：**两个开关独立**、默认仍是 fp32x2 且**逐位不变**、**template 特化（tile 循环内无
 运行时分支）**、边界交换处的格式一致。
+
+**交接文件**：`dism_v3/docs/BF16_TUPLE_PRIOR_ART.md` 汇总了 `~/cs/projects/glx/experiments`
+里 H100 上的先验实测。**要点（会改变本次优化的预期）**：
+
+1. **bf16x2 不是速度优化，应作为格式/容量选项。** H100 上实测**更慢**：
+   `full_forward MMA F32-tanh 1285.9 → BF16-tanh 2194.2 周期（1.7×）`，
+   尽管指令更少（870→781）且 **SHFL 减半**（124→62）。原因是打包 bf16 MUFU 展开成
+   2 条标量 `MUFU.*.BF16` + 1 条 `PRMT`。
+2. **精度契约**：bf16x2 SoA 布局实测 **`max_abs_error = 3.10e-02`**（来自 `a+c` 的舍入）。
+   `LOG_ZERO = -1e6f` 这类哨兵在 bf16 下语义会变，必须**重新定义并测试**，不能只换类型。
+3. **EX2 多项式（n=2，err 2.2e-3）无速度优势**：`scan_only` 持平，`full_forward` +2.9%，
+   带 broadcast 的 `special_full` **+24.8%**。
+4. **真正的瓶颈是 wgmma/MUFU 争用**：密集 wgmma 下扫描退化 **1.4–2.5×**。所以调 op 的
+   指令配比不是收益所在。
+5. **架构差异**：`MMABuffer` 的 roll/unroll 在 **H100 占 ~403/1286 周期，RTX 5090（sm_120）
+   占 ~1724/2527**。H100 的结论**不能照搬**，必须在目标 GPU 上重测。
