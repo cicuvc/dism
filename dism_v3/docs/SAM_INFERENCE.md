@@ -19,6 +19,10 @@ query; it does not delete historical keys and is not a document-isolation
 mechanism. For ordinary v3, omit it. Start a new engine plan/cache per document.
 No finite-delta or soft-row inference is included.
 
+The diagnostic [hard-prefill training study](HARD_PREFILL_TRAINING.md) checks
+analytic vector/tau gradients and describes a possible training backend.
+It does not change these inference APIs or production training dispatch.
+
 ## Integration boundary
 
 `HardDismPrefill` consumes int32 BHN labels and contiguous BNHD SQ/SK/V, and
