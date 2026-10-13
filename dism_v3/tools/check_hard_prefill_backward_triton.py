@@ -33,11 +33,14 @@ def inspect_kernel(kernel, directory):
 
 
 def check_case(pattern, n, tau, *, r=32, dv=64, seed=318, precision='tf32x3',
-               chunk_size=16, dtype=torch.bfloat16, resource_dir=None):
+               chunk_size=16, dtype=torch.bfloat16, resource_dir=None, fused=False):
     q, k, *vectors = fixture(pattern, n, r=r, dv=dv, seed=seed)
     inputs = [torch.tensor(x, device='cuda', dtype=dtype) for x in vectors]
     cpu = [x.float().cpu().double().numpy() for x in inputs]
     plan = HardPrefillBackward(q, k, tau, chunk_size=chunk_size, mma_precision=precision)
+    if fused:
+        from hard_prefill_backward_fused import FusedHardPrefillBackward
+        plan = FusedHardPrefillBackward.from_plan(plan, plan.packed['offsets'])
     native = HardPrefillPlan(q, k, tau).native.chunks(chunk_size)
     for name in ('offsets', 'rows', 'lengths', 'resets'):
         np.testing.assert_array_equal(plan.packed[name], native[name])
@@ -64,9 +67,11 @@ def check_case(pattern, n, tau, *, r=32, dv=64, seed=318, precision='tf32x3',
     flip = a*b < 0
     result = dict(pattern=pattern, n=n, tau=tau, r=r, dv=dv, seed=seed,
                   precision=precision, chunk_size=chunk_size, dtype=str(dtype),
+                  fused_chunk_backward=fused,
                   streams=plan.streams, chunks=len(plan.packed['lengths']),
                   device_metadata_bytes=sum(x.numel()*x.element_size() for x in plan.data.values()),
-                  matrix_snapshot_bytes=0, tau_partial_bytes=actual['tau_partials'].numel()*4,
+                  matrix_snapshot_bytes=getattr(plan, 'matrix_snapshot_bytes', 0),
+                  tau_partial_bytes=actual['tau_partials'].numel()*4,
                   gradients=measurements, production_acceptance_failures=production_failures,
                   tau_actual=a, tau_reference=b, tau_sign_flip=flip,
                   tau_sign_floor=sign_floor, tau_material_sign_flip=flip and abs(b) > sign_floor,

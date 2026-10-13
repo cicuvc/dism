@@ -18,8 +18,10 @@ from hard_prefill_grad_reference import SymbolicPlanner
 def _query_backward(SQ, SK, V, DO, DSQ, TAU, OFFSETS, ROWS, PREFIX, WEIGHT,
                     DLOG, LENGTH, RESET, R: tl.constexpr, DV: tl.constexpr,
                     C: tl.constexpr, BR: tl.constexpr, BD: tl.constexpr,
-                    BF16: tl.constexpr):
+                    BF16: tl.constexpr, STREAM_IDS = None):
     stream = tl.program_id(0)
+    if STREAM_IDS is not None:
+        stream = tl.load(STREAM_IDS + stream)
     begin = tl.load(OFFSETS + stream)
     end = tl.load(OFFSETS + stream + 1)
     tile = tl.program_id(1)
@@ -71,8 +73,10 @@ def _query_backward(SQ, SK, V, DO, DSQ, TAU, OFFSETS, ROWS, PREFIX, WEIGHT,
 def _key_backward(SQ, SK, V, DO, DSK, DV_OUT, TAU, OFFSETS, ROWS, PREFIX,
                   WEIGHT, DLOG, LENGTH, RESET, R: tl.constexpr, DV: tl.constexpr,
                   C: tl.constexpr, BR: tl.constexpr, BD: tl.constexpr,
-                  BF16: tl.constexpr):
+                  BF16: tl.constexpr, STREAM_IDS = None):
     stream = tl.program_id(0)
+    if STREAM_IDS is not None:
+        stream = tl.load(STREAM_IDS + stream)
     begin = tl.load(OFFSETS + stream)
     end = tl.load(OFFSETS + stream + 1)
     tile = tl.program_id(1)
