@@ -2199,7 +2199,7 @@ NIAH 的 present NLL（越低越好）：
 
 ---
 
-## 36. 因子化（product-quantised）qk 码表
+## 36b. 因子化（product-quantised）qk 码表（续：实现与验证）
 
 **想法**（用户提出）：把 V 个 prototype 拆成若干组因子，`V = Π S_g`。因为
 `q·E_v = Σ_g q_g·E^g_{v_g}` 且 `logsumexp_v` 对组可分解，
@@ -3695,3 +3695,112 @@ Astra §41.8 / `ASYMMETRIC_SM120_REPORT.md` 把 `regs=168`、1 CTA/SM 当作"没
 5. **不要重复的**：非对称格式、前向格式改动、以及"把整个二元组换成 bf16"。
    若将来仍要降低反向 spill，方向应是**调度与寄存器寿命**，或把重算与扫描的划分对齐
    （消除非结合舍入导致的前后向不一致），而不是换存储精度。
+
+---
+
+## 42. 本轮收尾（2026-10-13）
+
+### 42.1 文档结构说明（有历史遗留）
+
+正文按时间追加，所以**编号顺序不严格单调**：
+- §40 的 `40.3` / `40.4` 在 §41 之后（追加时插不进去了）；
+- §41 的 `41.5`–`41.10` 是 Astra 在 `diag_recurrence` 之后追加的（bf16x2 递推状态方向，
+  §41.10 结论是**无收益已回退**）；
+- `§36` 有两条同号标题（第二条已改标 **36b**）。
+
+按主题读：**§1–§28** 理论/软硬 gap/REINFORCE；**§29–§30** 全硬梯度诊断；
+**§31–§34** 长文本与 NIAH；**§35–§36b** MAD 与因子化；**§37–§41** 布局×direction 四格、
+码表塌缩、简化路线、无递推消融。
+
+### 42.2 本轮确立的结论
+
+**A 级（多次独立复现，可写进论文）**
+
+1. **bpb 与长程 recall 是两个独立的轴**；只看 bpb 会**系统性漏掉长程损伤**。四次独立复现：
+   §33（sep-rank1 家族 bpb 差 0.001–0.02，NIAH 差 0.34–0.62 nats）、§38（10 模型总表）、
+   §40.3（B 组 bpb 最好而远端最差）、§41.4（递推消融 bpb 只差 0.6%，远端 recall 归零）。
+2. **层内 DISM+GDN 混合一致地不优于任一单分支**，且 run 间方差更大；专用层布局
+   （GDN + 2×DISM）能回到纯 DISM 水平。四次独立：§35（MAD）、§37（nanochat 2×2）、
+   §39.5（RegBench）、§35.5（极限 MQAR）。
+3. **后缀匹配递推承载长程精确 recall**（§41.4）：去掉后退化**随上下文增大**
+   （2k +0.26 → 8k +0.53），远端 gain +0.28→+0.06 而近端几乎不变；且**码表未塌缩**
+   （pooled 0.87–0.92）⇒ 是**寻址结构**而非码本问题。
+4. **DISM 的优势精确落在"离散/算法式 in-context 推断"这条轴上**：RegBench **iso-param**
+   0.9434 vs transformer+ 0.9222（val/loss 也更低）vs GLA 0.7910；极限 MQAR 0.875 vs
+   0.579（loss 差 3.5×）。而在加性聚合（mqmvar）、通用 bpb、NC¹ 可达的容易档上**不体现**。
+
+**B 级（单次复现或仅有理论论证，需再验）**
+
+5. **direction 对 hard 前向可证明无关**（§40.1：代码级 + 实测 5 种粒度 std=0），
+   纯粹是 soft 路径的正则化。⇒ 推理 kernel 可完全不实现 direction/LSE/插值嵌入。
+6. **direction × 布局存在交互**（§40.3）；`direction=random` 叠加**层内稀释**会**打塌码表**
+   （§40.4：pooled 0.577、单码字占 52.5%）。这与 §40.3 的符号翻转是同一件事。
+7. **PQ 因子化精确**（§36，1e-06 级；§36.1 的 1-vs-2-mixer 交叉说明压力转移到前驱层）。
+8. **MoM 对应与"指数 slot"假设**（§41.5 起）：无递推 = 固定 `V` slot 路由；
+   有递推 = 变阶 n-gram 寻址，有效地址空间 `V_eff^n`，而携带状态 `O(R·DV)`/stream。
+   **尚无直接测量**——这是 scale 前最该补的一项。
+
+### 42.3 规模前提：72M 说服力不足
+
+本轮**全部**结论都在 72M / 2.5B tokens 上取得。需要 scale 才能判断：
+- "指数 slot" 是否随参数/深度保持（现在 n=1、小模型）；
+- 递推的收益是否随规模保持（小模型上它已决定长程成败）；
+- **层内混合的负结论是否在更大规模翻转**（混合方法常在小规模不利、大规模反转）。
+所以 **scale 前必须先做效率优化**，否则同等 GPU 时间能覆盖的规模小一圈。
+
+### 42.4 效率优化清单（按收益排序）
+
+| # | 项 | 收益 | 风险/前提 | 状态 |
+|---|---|---|---|---|
+| 1 | **分离 hard/soft 前向** | 插值/LSE 开销后期可降 **~20×**（hard_prob→0.95 ⇒ 只有 ~5% soft 平面） | 前提是 per-plane 特化（4 桶 = {hard,soft}×{q-LSE,k-LSE}） | 必做，未做 |
+| 2 | **推理删 direction/LSE/插值嵌入** | 部署 kernel 只剩 量化器+标签匹配+递推+读出 | **有证明**（§40.1） | 零风险，未做 |
+| 3 | **PQ 因子化** | 插值开销对 V 变常数；16×16 省 16× | 压力转移到前驱层（需深度配合） | 已实现且精确 |
+| 4 | 免费项：删 `top1_q/top1_k`；删 4 个死配置 + `direction_antithetic` | 死工作量 + 死代码 | 逐位不变 | 已定位，未做 |
+| 5 | direction 粒度 3 格配对短训 | 可能省一个插值侧（~2×） | 需看 `coverage_pooled` | 待做 |
+| 6 | bf16x2 递推状态二元组 | — | — | **已试，无收益，已回退**（§41.6–41.10） |
+
+### 42.5 scale 前的 gate（必须先过）
+
+1. **长度外推**：train@2k → 8k/16k/64k/256k，**只评 hard 路径**（软路径锐度随 N 变，会误读），
+   并记录累加器幅值 vs N（§40 里"无条件外推"最可能的失效点）。
+2. **M-scan 等状态量四行对照**：`GLA / MoM(K slots) / no-recur DISM(V slots) / DISM(+递推)`。
+   一张表同时回答"递推值多少""离散量化值多少""指数 slot 是否成立"。
+3. **≥2–3 seed 的 iso-param RegBench + 极限 MQAR**：现在 n=1，`0.9434 vs 0.9222` 要钉成显著；
+   建议**配对设计**（同初始化/同数据顺序），比独立 seed 省一个量级。
+4. **`coverage_pooled` 进常规监控**：它是"指数地址的底数"（§41.5 的 `6.5^n` 论证）；
+   跌破 ~0.8 即预警（§40.4）。
+
+### 42.6 工程状态与风险
+
+- **扩展双轨**：Astra 把新扩展隔离在 `dism_v3/build/diag_recurrence/python`，默认位置仍是旧的
+  ⇒ 任何新启动的 DISM 训练都必须显式把隔离路径放进 PYTHONPATH，否则报
+  `core_forward(): incompatible function arguments`（seq_icl 的 817k 就是这样挂的）。
+  **建议收敛为一条**（原地重建默认扩展；已加载旧扩展的进程不受影响）。
+- **`/` 分区 97% 满（剩 ~15G）**；wandb 写在 `dism-core/wandb/`（已在 `/`，1.2G / 47 runs）。
+- **`/tmp` 被清过一次**，诊断脚本丢失；关键脚本已复制到
+  `dism-runs/dism-fwedu-valres-72m-2500m/diagnostics/`（`niah.py`、`pg19_ablate.py`、
+  `run_niah_models.sh`、`niah_results/`）。
+- **一次异常退出**（norec run，step 5594）：无 OOM、无 Xid、无 kill 记录；wandb 心跳先断
+  12 分钟且同期网络故障（natfrp i/o timeout + SSH 暴力破解流量）⇒ 疑似 wandb online
+  在断网下抛异常。**建议长跑改 offline 模式**，训练后统一 sync。
+
+### 42.7 产物清单
+
+**dism-core**（103 commits）：
+- 记录：`dism_v3/docs/SOFT_HARD_RELAXATION.md` §1–§42
+- 实现：`flash_dism/pq_vocab.py`（因子化码表 + 精确性自检）；`diag_recurrence` 开关
+  （config→attention→compiled→fixed/packed CUDA）；`DismConfig.layer_layout`（专用层布局）；
+  `reinforce.py` + `reinforce_loss.py`（warm-start score-function，默认关闭）
+- 配置：`nanochat/configs/sequence_true_72m_valres{,_dirrandom,_norec,_spec2d1g,_spec2d1g_dirtrue}.json`
+
+**mad-lab**：`mqmvar` 任务（随机 support + 分布目标 + KL loss + 3-tuple 数据管线）；
+DISM/GDN 层与布局变体（hybrid / only / untied / normed / delta-LP / PQ）
+
+**seq_icl**：DISM mixer（`DismMixer`/`DismOnlyMixer`）+ iso-param DFA 配置；PL2 兼容补丁
+
+**run dirs**（均在 `dism-runs/`）：`dism-fwedu-valres-72m-2500m`（A，基线）、
+`-dirrandom`（B）、`-spec2d1g`（C）、`-spec2d1g-dirtrue`（D）、`-norec`（递推消融）
+
+### 42.8 未尽事项
+
+见 §40.2、§41.5，以及 42.4 / 42.5。
