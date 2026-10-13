@@ -2618,3 +2618,216 @@ soft loss:  true 2.717295 | false 2.722826 | perhead 2.718989 (std .00113)
    判据 `val_bpb + NIAH(2k/8k/16k) + hard/soft gap`。因 hard 已证明不变，这三格只在测
    "soft 正则化强度是否够"，是干净的单变量对照。
 3. **去掉对角递推（后缀匹配）的消融**：见 §41。
+
+## 41. Opt-in ablation: disable diagonal recurrence
+
+`diag_recurrence: bool = True` is the default in flash_dism `DismConfig`,
+`DismAttention`, the public core/vocabulary wrappers, and nanochat `DismConfig`.
+Set the nanochat model configuration field `diag_recurrence=False` for this
+ablation. Configuration serialization preserves it; legacy configurations omit
+it and retain `True`. It is a configuration value, not a parameter or buffer:
+RNG counters, annealing state, optimizer groups/schema and consumed input
+position are unchanged. No training run or checkpoint was modified for this work.
+
+### 41.1 Algebra and exact mathematical semantics
+
+The log-affine composition is
+
+```
+(a,b) * (c,d) = (a+c, logaddexp(b+c,d)).
+```
+
+Replacing each local `(logM,logM)` by `(-inf,logM)` gives
+`(a,b) * (-inf,logM) = (-inf,logM)` for finite incoming scores. Thus the
+inclusive scan's second component at every actual element is its own `logM`;
+no predecessor, suffix length, warp boundary or chunk boundary contributes.
+This applies to both hard and soft rows, without changing their selection:
+
+```
+W_ij = rtau                         hard row, idx_q[i] == idx_k[j]
+     = -inf                         hard row, labels differ
+     = dot(q_vec[i],k_vec[j])-LSE+rtau   soft row (existing direction convention)
+```
+
+Only causal keys `j<=i` in the same sequence participate. Let
+`z_i=max(0,max_j W_ij)`, `w_ij=exp(W_ij-z_i)` and `f_i=exp(-z_i)`. Then
+
+```
+O_i = sum_j w_ij * dot(SQ_i,SK_j) * V_j / (f_i + sum_j w_ij).
+```
+
+For a hard row with `m_i` matching causal keys, equivalently
+`O_i = exp(rtau) * sum_matching dot(SQ_i,SK_j)*V_j / (1+m_i*exp(rtau))`.
+No matches gives exactly zero. This is **not** an ordinary average of V:
+SQ/SK remain signed numerator-only readout features, and the unit zero-value
+fallback remains in the denominator. Equal labels receive equal match weights,
+regardless of the length of their matching suffix. Soft rows retain their local
+soft/Jensen score; disabling recurrence does not turn soft rows into hard rows.
+
+### 41.2 Implementation and boundaries
+
+The fixed and packed output kernels select a compile-time `DiagRecurrence`
+specialization at host dispatch. The existing tuple duplication is unchanged
+when enabled; only the first component becomes literal `-INFINITY` when disabled.
+There is no runtime flag branch in the tile loop, no new shared storage, and
+no change to synchronization, launch defaults, masks or tolerances.
+
+The existing `LogAffineOp` is unchanged. Its hard-mismatch second component
+remains finite `LOG_ZERO=-1e6`; the ablation does not feed `(-inf,-inf)` to the
+finite tanh approximation. Masked weights underflow to zero in the supported
+score regime. The mathematical reference retains exact infinity semantics;
+CUDA still has the existing BF16 MMA/readout and floating-point/tanh rounding.
+The exact algebra above is not a claim of arbitrary infinite-input support or
+bitwise agreement between CUDA and the FP64 reference.
+
+Backward has matching fixed/packed specializations: recomputation returns the
+local score, and the reverse scan's valid-element propagation coefficient is
+zero. Local readout, score, LSE and tau gradients remain. The flag is saved in
+autograd state and transported through the Dynamo custom operator, so compiled
+pretraining cannot silently use the enabled backward. Existing summary/chunk
+workspaces are still computed and allocated; the disabled specialization
+annihilates their incoming state. Removing that redundant work is not part of
+this change and no speedup is claimed.
+
+Torch dense and cached references honor the flag. Keep it fixed for a cache's
+lifetime, as with the model parameters. The separately invoked native SAM
+`HardDismDecoder` remains a suffix-matching API and has no ablation switch.
+The separate opt-in REINFORCE collector explicitly rejects recurrence-off;
+it must not silently select the original suffix operator.
+
+### 41.3 Validation
+
+Validation uses conda `blkw`, this worktree's Python package and an isolated
+extension under `build/diag_recurrence/`; the original extension is not replaced
+while live training jobs are running. Builds use `MAX_JOBS=4` and
+`DISM_BUILD_JOBS=4` with this version's `build.py`. GPU inputs are small unit
+fixtures (N256/N512 boundary and regression cases), with no optimizer steps,
+benchmarks, downloads or quality evaluations.
+
+New tests in `tests/test_diag_recurrence.py` (27 parametrized cases, all passed):
+
+| Test | Cases | What it checks |
+| --- | ---: | --- |
+| `test_reference_off_closed_form` | 3 | CPU FP64 independent matching-index sum, negative/zero/positive tau, fallback and suffix counterexample |
+| `test_reference_default_and_backward` | 3 | Bitwise default/True reference and explicit off backward versus autograd |
+| `test_cuda_reference_and_default` | 12 | Both modes, hard/soft/mixed, both directions, fixed/packed, existing `.008/.025` and relative-L2 `<.01` forward acceptance |
+| `test_cuda_off_backward` | 2 | Fixed/packed gradients using unchanged `gradient_acceptance.py` thresholds |
+| `test_decode_off_matches_dense` | 1 | Torch inference versus dense off reference |
+| `test_config_switch_roundtrip` | 1 | Flash configuration serialization and attention construction |
+| `test_off_packed_boundaries_and_fallback` | 1 | N512 continuous input, separate documents, empty document, no-match zero output/normalizer |
+| `test_compiled_off_vocabulary_autograd` | 2 | Fixed/packed Dynamo+AOT-eager vocabulary forward/backward versus eager |
+| `test_nanochat_switch_and_state_schema` | 1 | Nanochat field reaches attention; strict state loading and optimizer schema unchanged, no optimizer step |
+| `test_off_supported_shapes` | 1 | One N256 off forward for each of all eight R/D/DV shapes |
+
+Additional checks:
+
+- Existing forward oracle/sign/fallback cases: **14 passed**, optional FP32
+  cases **12 skipped** because this production build disables FP32 instances.
+- Existing CPU reference tests: **47 passed**.
+- Checkpoint serialization/registry-load tests: **3 passed**; four interrupted
+  toy-training cases deselected to avoid optimizer-step/training work.
+- Forward and multi-configuration codegen tests: **9 passed**. Exact instance
+  counts now include both recurrence specializations, retaining the no-CALL,
+  register-control and Torch-free dependency checks. They inspect the loaded
+  extension's build directory, not stale artifacts from a different build.
+- All **48** enabled instruction streams (six changed kernels × eight shapes)
+  are identical to the pre-change worktree artifacts. Both specializations
+  have no CALL. One small fixed and packed mixed input also gives bitwise-equal
+  enabled output **and normalizer** against the pre-change extension.
+- `memcheck` and `synccheck`: one N256 fixed hard/off forward each, **zero
+  reported errors**. This is not whole-matrix or backward sanitizer coverage.
+  Racecheck was not run; existing ARRIVES-immediate and BF16 delta/tau numerical
+  limitations from `VARLEN_IMPLEMENTATION.md` / `BACKWARD_DIMS.md` remain.
+
+Representative R32/D64/DV64 compiler resources, in bytes
+`stack / spill stores / spill loads` (not runtime performance measurements):
+
+| Kernel | Enabled | Disabled |
+| --- | --- | --- |
+| fixed forward | 8 / 16 / 24 | 8 / 16 / 24 |
+| packed forward | 16 / 16 / 48 | 16 / 16 / 48 |
+| fixed backward summary | 336 / 344 / 412 | 200 / 216 / 284 |
+| fixed backward QK | 344 / 356 / 388 | 184 / 200 / 228 |
+| packed backward summary | 304 / 308 / 340 | 208 / 220 / 252 |
+| packed backward QK | 192 / 196 / 232 | 152 / 156 / 192 |
+
+Logs/artifacts are ignored under `build/diag_recurrence/`: `build_all.log`,
+`build_final.log`, `final_tests.log`, `followup.log`, `cpu_final.log`,
+`sass_audit.log`, `baseline.log`, `memcheck.log`, `synccheck.log`.
+The tested new extension is in `build/diag_recurrence/python`; select that
+worktree-local directory on `PYTHONPATH` to use it. The normal
+`python/cu_flash_dism*.so` was deliberately left untouched for the live jobs.
+There are no measured loss, quality, convergence or throughput claims.
+
+The interpretation requiring care is "label-matching positions only": it
+applies to **hard rows**. Applying the requested tuple change to the existing
+mixed operator also removes recurrence on soft rows, without replacing their
+soft score by a label test. There is no remaining algebra uncertainty; the
+separate SAM/REINFORCE restrictions and finite-precision limits are stated above.
+
+### 41.4 Changed file:line inventory
+
+Paths below are relative to the repository root. Line numbers identify each
+changed hunk's start in the resulting source; tests list their entry points.
+
+- `dism_v3/include/backward/recompute.cuh:36, 81`
+- `dism_v3/include/forward/scan.cuh:35, 51, 53`
+- `dism_v3/python/flash_dism/__init__.py:21, 31, 35, 45`
+- `dism_v3/python/flash_dism/backward.py:16, 22, 24, 28, 36, 39, 42, 49`
+- `dism_v3/python/flash_dism/compiler.py:99, 110, 118, 137, 151, 164, 169, 182, 185`
+- `dism_v3/python/flash_dism/configuration_dism.py:22, 48`
+- `dism_v3/python/flash_dism/decoding.py:89`
+- `dism_v3/python/flash_dism/forward.py:6, 14`
+- `dism_v3/python/flash_dism/modeling_dism.py:45`
+- `dism_v3/python/flash_dism/module.py:128, 144, 384, 391, 394`
+- `dism_v3/python/flash_dism/reference/dism_decode_ref.py:33, 101, 117, 152`
+- `dism_v3/python/flash_dism/reference/dism_v3_ref.py:8, 19, 49, 76, 88, 106, 127, 129, 139, 183`
+- `dism_v3/python/flash_dism/varlen.py:50, 68, 83, 89, 91, 93, 102, 105, 109, 117, 120, 140, 146`
+- `dism_v3/python/flash_dism/voc.py:7, 24`
+- `dism_v3/src/backward_qk.cu:8, 47, 76, 193, 199`
+- `dism_v3/src/backward_summary.cu:8, 46, 113, 181, 187`
+- `dism_v3/src/forward.cu:9, 85, 164, 170`
+- `dism_v3/src/frontend.cpp:18, 20, 22, 24, 27, 35, 37, 39, 41, 111, 128, 132, 137, 144, 156, 165, 221`
+- `dism_v3/src/host/backward_qk.cpp:10, 13, 45, 50, 57`
+- `dism_v3/src/host/backward_summary.cpp:10, 13, 40, 45, 59`
+- `dism_v3/src/host/forward.cpp:10, 15, 77, 79`
+- `dism_v3/src/host/varlen_backward_qk.cpp:11, 14, 44, 49`
+- `dism_v3/src/host/varlen_backward_summary.cpp:11, 14, 35, 40`
+- `dism_v3/src/host/varlen_forward.cpp:11, 13, 57`
+- `dism_v3/src/interface.cpp:20, 35, 39, 75, 80, 93`
+- `dism_v3/src/varlen_backward_qk.cu:9, 48, 77, 195, 201`
+- `dism_v3/src/varlen_backward_summary.cu:9, 47, 114, 182, 188`
+- `dism_v3/src/varlen_forward.cu:10, 85, 164, 170`
+- `dism_v3/src/varlen_interface.cpp:16, 20, 22, 35, 40`
+- `dism_v3/tests/test_forward.py:82, 85`
+- `dism_v3/tests/test_multi_codegen.py:7, 11, 37, 49`
+- `nanochat/nanochat/models/dism/__init__.py:59`
+- `nanochat/nanochat/models/dism/model.py:89`
+- `dism_v3/tests/test_diag_recurrence.py:53, 63, 81, 103, 122, 131, 141, 165, 188, 212` (new test file; helpers at lines 12, 33, 38).
+- `dism_v3/docs/SOFT_HARD_RELAXATION.md:2622` (§41, this report).
+
+### 40.3 四格补全：direction × 布局 存在交互（修正 §37.1）
+
+B 组（valres 布局 + `direction=random`）完成后四格齐了。**present-NLL**（越低越好，方括号为
+最远端 d0.05）：
+
+| cell | 2048 | 8192 | **16384** | 远端@16k | val_bpb |
+|---|---|---|---|---|---|
+| **A** valres / true | 1.724 | 2.230 | **2.459** | 2.811 | 1.182854 |
+| **B** valres / **random** | 1.870 | 2.397 | 2.614 | 2.901 | **1.180388** |
+| **C** 专用 / random | **1.433** | **2.091** | **2.454** | 2.611 | 1.201140 |
+| **D** 专用 / true | 1.804 | 2.351 | 2.555 | 2.548 | 1.204047 |
+
+**做错过的推断**：§37.1 由 C vs D 得出"长程收益来自 `direction=random`、不是专用层布局"。
+补上 B 后该结论**只在专用层布局下成立**：
+
+- **valres 布局**：random **伤** NIAH（16k present-NLL 2.230→2.397、远端 2.480→2.712），
+  但**改善** bpb（1.182854→**1.180388**，全部 run 里最好）。
+- **专用层布局**：random 同时改善 bpb 和 NIAH（C vs D：1.201140<1.204047，2.454<2.555）。
+- ⇒ **direction 与布局存在交互**，不能当成独立可加的两个开关。之前的"通用规律"是过度概括。
+
+**四格没有支配者**：bpb 排序 `B < A < C < D`；NIAH(2k/8k) 排序 `C < A < D < B`；
+16k NIAH `C ≈ A < D < B`。A 是折中（bpb 次优、16k NIAH 并列最优）。
+
+**教训（与 §33/§38 一致）**：bpb 与长程 recall 是两个独立轴，**必须同时看**；本表里 bpb 最优的
+B 恰好是远端 recall 最差的之一。
