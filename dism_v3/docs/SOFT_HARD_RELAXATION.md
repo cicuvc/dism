@@ -2866,3 +2866,23 @@ B 的 layer08 逐头 q_coverage = `[0.07, 0.404, 0.018, 0.039, 0.016, 0.049]`：
 固定的/确定性的 direction（A/C/D 都是这个象限）。方向随机化的收益只在专用层布局上成立。
 既然 §40.1 已证明 direction 对 hard 前向无关，它纯粹是 **soft 路径的正则化**，而它带来的
 码表塌缩是一个**训练动力学**副作用，可在训练中直接用 `coverage_pooled` 监控。
+
+### 41.3 Ablation run
+
+`diag_recurrence=False` 的预训练 run（**唯一变量**，其余与 A 组逐项一致）：
+
+| 项 | 值 |
+|---|---|
+| run dir | `dism-runs/dism-fwedu-valres-norec-72m-2500m` |
+| model-tag | `seqtrue72m-fwedu-valres-norec` |
+| config | `nanochat/configs/sequence_true_72m_valres_norec.json`（= valres + `diag_recurrence:false`） |
+| 参数量 | **72,035,808（与 A 完全相同）** |
+| 其余 | `rear_half_dism`、`value_residual`、`direction_policy=true`、rng_seed 1729、`--data-shuffle --shuffle-seed 1337`、19074 步、bs 131072、lr 1.5e-3 —— 全部同 A |
+| 对照 | **A = `seqtrue72m-fwedu-valres`**（val_bpb 1.182854；NIAH present-NLL 1.724/2.230/2.459；gap@8k 0.0162） |
+
+**必须用新扩展**：`PYTHONPATH=dism_v3/build/diag_recurrence/python:dism_v3/python:nanochat`
+（默认位置的 `cu_flash_dism` 仍是改动前的，会报 `core_forward(): incompatible function arguments`）。
+已在 `train.sh` 内固定。
+
+**判据集合**（缺一不可）：`val_bpb` + **NIAH present-NLL(2k/8k/16k)** + `hard−soft gap` +
+`qk/*_coverage_pooled`（§40.4：塌缩的直接指标）。只看 bpb 会漏掉 recall 轴（§33/§38）。
