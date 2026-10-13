@@ -11,6 +11,8 @@ __global__ __launch_bounds__(384,1) void varlen_backward_qk_kernel(
         const __grid_constant__ dism_varlen::BackwardArgs packed) {
     const auto& args=packed.common;
     const auto task=dism_varlen::backward_task(packed);
+    // CTA-uniform exit before constructing any barriers or starting a producer.
+    if (args.score.hard[(task.begin / packed.hard_row_tokens) * args.score.heads + task.head]) return;
     extern __shared__ __align__(1024) unsigned char storage[];
     kt::shared_allocator<1024> allocator(reinterpret_cast<int*>(storage));
     int group=kt::warpgroup::groupid(),warp=kt::warpgroup::warpid();
@@ -133,8 +135,7 @@ __global__ __launch_bounds__(384,1) void varlen_backward_qk_kernel(
                                 args.debug_g[(int64_t(task.bh)*score_args.n+query)*score_args.n+k0+pos.first]=g;
 #endif
                             tau_sum+=g;
-                            bool hard=score_args.hard[int64_t(task.bh)*score_args.padded+query];
-                            soft[e]=hard?0.f:g;
+                            soft[e]=g;
                             if (query_lse) row_lse[c][e]-=soft[e];
                             if (!query_lse) key_lse[r]-=soft[e];
                         }

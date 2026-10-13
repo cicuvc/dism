@@ -23,10 +23,10 @@ std::vector<at::Tensor> varlen_backward_qk_cuda(std::vector<at::Tensor> operands
     auto options=normalizer.options();
     auto private_options=options.dtype(fp32_output?at::kFloat:at::kBFloat16);
     auto dq=at::zeros({1,layout.tokens,h,D},options);
-    auto dk=at::empty({1,layout.tokens,h,D},private_options);
+    auto dk=at::zeros({1,layout.tokens,h,D},private_options);
     // Global [H,T]; both T and document starts are256-token aligned.
     auto dlq=at::zeros({layout.padded*h},options);
-    auto dlk=at::empty({layout.padded*h},private_options);
+    auto dlk=at::zeros({layout.padded*h},private_options);
     auto dtau=at::zeros({h},options);
     if (!layout.tokens) return {dq,dk,dlq,dlk,dtau};
     auto args=input.common();
@@ -41,12 +41,12 @@ std::vector<at::Tensor> varlen_backward_qk_cuda(std::vector<at::Tensor> operands
     copy_output_map(args.lse_output,lse_map);
 #if DISM_ENABLE_FP32
     if (fp32_output)
-        launch_backward(varlen_backward_qk_address<true>(),args,layout,operands[0].device());
+        launch_backward(varlen_backward_qk_address<true>(),args,layout,operands[0].device(),layout.tokens/operands[9].size(0));
     else
 #else
     TORCH_CHECK(!fp32_output,"FP32 output instances are disabled in this build");
 #endif
-        launch_backward(varlen_backward_qk_address<false>(),args,layout,operands[0].device());
+        launch_backward(varlen_backward_qk_address<false>(),args,layout,operands[0].device(),layout.tokens/operands[9].size(0));
     return {dq,dk,dlq,dlk,dtau};
 }
 

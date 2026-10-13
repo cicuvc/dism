@@ -120,7 +120,7 @@ def run_case(config, batch, pattern, probability, args):
     direction = torch.ones(1, h, dtype=torch.bool, device='cuda')
     # Common random numbers across probability cases; one flag per row/head.
     row_hard = torch.rand(1, h, batch, device='cuda') < probability
-    hard = row_hard.unsqueeze(-1).expand(1, h, batch, n).reshape(1, h, tokens).contiguous()
+    hard = row_hard.squeeze(0).T.contiguous()
     boundaries = torch.tensor([0, *torch.tensor(lengths).cumsum(0).tolist()],
                               dtype=torch.int32, device='cuda')
     layout = VarlenLayout.from_cu_seqlens(boundaries, tokens)
@@ -147,6 +147,7 @@ def run_case(config, batch, pattern, probability, args):
               'document_lengths': lengths, 'sum_document_lengths_squared': sum(x*x for x in lengths),
               'hard_probability': probability, 'realized_hard_fraction': row_hard.float().mean().item(),
               'tau': args.tau, 'finite_output_and_gradients': True,
+              'core_semantics': 'soft-only; hard rows return zero, not hard attention',
               'checkpoint_budget_bytes': layout.checkpoint_bytes(h), 'gpu_before': gpu_status()}
     result['memory'] = {'forward': memory(forward), 'backward': memory(backward), 'pair': memory(pair)}
     result['timings'] = timings = {}

@@ -6,15 +6,21 @@ from test_backward_summary import pytestmark
 
 
 def torch_voc(q,k,sq,sk,v,eq,ek,tau,direction,hard):
+    # Compact flags select the new soft-only CUDA contract. Keep the legacy
+    # token-mask oracle available for reference-only diagnostic callers.
+    keep=(~hard)[:,None,:,None] if hard.ndim==2 else None
+    if keep is not None:
+        hard=torch.zeros(q.shape[0],q.shape[2],q.shape[1],device=q.device,dtype=torch.bool)
     eq,ek=eq.bfloat16().float(),ek.bfloat16().float()
     qs=torch.einsum('bnhd,hvd->bhnv',q.float(),eq)
     ks=torch.einsum('bnhd,hvd->bhnv',k.float(),ek)
     q_from_k=torch.einsum('bhnv,hvd->bnhd',ks.softmax(-1),eq).bfloat16()
     k_from_q=torch.einsum('bhnv,hvd->bnhd',qs.softmax(-1),ek).bfloat16()
     select=direction[:,None,:,None]
-    return dism_ref(torch.where(select,q,k_from_q),torch.where(select,q_from_k,k),
+    result = dism_ref(torch.where(select,q,k_from_q),torch.where(select,q_from_k,k),
                     sq,sk,qs.logsumexp(-1).transpose(1,2),ks.logsumexp(-1).transpose(1,2),
                     qs.argmax(-1),ks.argmax(-1),direction,hard,v,tau)
+    return result if keep is None else result*keep
 
 
 @pytest.mark.parametrize('mode',['soft','mixed','hard'])

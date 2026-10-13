@@ -34,6 +34,39 @@ def test_baseline_structure_and_state():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+def test_compact_hard_preserves_row_rng_and_direction_offset():
+    from nanochat.models.dism.model import sample_flags
+    spec = baseline_spec()
+    config = dict(spec.config)
+    config.update(sequence_len=512, vocab_size=128, n_layer=2, n_head=2,
+                  n_embd=64, intermediate_size=128, qk_vocab_size=32,
+                  direction_policy='random')
+    model = build_model(ModelSpec(spec.architecture, spec.architecture_version, config)).cuda().train()
+    model.init_weights()
+    model.set_training_step(3000)
+    counter = model.rng_counter.clone()
+    seed = model.config.rng_seed + 104729
+    row_flags, _ = sample_flags(counter, model.hard_probability, 2, 2, seed)
+    _, old_direction = sample_flags(counter, model.hard_probability, 1024, 2, seed)
+    captured = []
+    def capture(module, args, kwargs):
+        captured.append((kwargs['hard'].clone(), kwargs['direction'].clone()))
+    hook = model.layers[1].attn.register_forward_pre_hook(capture, with_kwargs=True)
+    try:
+        with torch.no_grad():
+            model(torch.randint(128, (2, 512), device='cuda'),
+                  cu_seqlens=torch.tensor([0,256,512,768,1024], device='cuda', dtype=torch.int32))
+    finally:
+        hook.remove()
+    assert len(captured) == 1
+    hard, direction = captured[0]
+    assert hard.shape == (2, 2)  # two original rows, not four documents
+    torch.testing.assert_close(hard, row_flags.squeeze(0).T, atol=0, rtol=0)
+    torch.testing.assert_close(direction, old_direction, atol=0, rtol=0)
+    assert model.rng_counter.item() == counter.item() + 1
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 def test_gdn_hybrid_compile_and_resume(tmp_path):
     spec = baseline_spec()
     config = dict(spec.config)

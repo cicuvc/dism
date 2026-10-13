@@ -31,30 +31,22 @@ __global__ __launch_bounds__(384, 1) void dism_forward_kernel(
         Scheduler::Task task;
 #pragma unroll 1
         while (scheduler.next(task)) {
+            if (args.hard[task.batch * args.heads + task.head]) continue;
             int query_block = 2 * warp + group;
             int q_start = task.q_start + 16 * query_block;
             kt::rt_bf<16, CONFIG.KcKeyDim> query;
             kt::rt_bf<16, READOUT_DIM> soft_query;
-            kt::rv<int,16,kt::ducks::rv_layout::ortho> labels;
             kt::rv_fl<16,kt::ducks::rv_layout::ortho> bias;
             kt::warp::rv_maps::zero(bias);
             prefetch.setup();
             auto first = prefetch.waitBuffer(2, shared.tiles.prefetch, shared.metadata.prefetch);
             bool query_lse = shared.query_lse;
-            float tau2 = shared.tau2;
             auto& meta = first.template get<1>();
             kt::group<8>::load(query, first.template get<0>().q);
             kt::group<8>::load(soft_query, first.template get<0>().sq);
-            kt::warp::load(labels, meta.labels.template subvec<16>(query_block));
             if (query_lse) kt::warp::load(bias, meta.lse.template subvec<16>(query_block));
             bias.data[0][0].x *= -1.f;
             bias.data[0][0].y *= -1.f;
-            uint32_t hard = 0;
-#pragma unroll
-            for (int r = 0; r < 2; ++r) {
-                int index = 16 * query_block + 8 * r + kt::warp::laneid() / 4;
-                hard |= uint32_t(meta.hard[index] != 0) << r;
-            }
             kt::warpgroup::sync(group + 1);
             first.submitToNextAndTrigger();
             prefetch.moveNext();
@@ -73,14 +65,13 @@ __global__ __launch_bounds__(384, 1) void dism_forward_kernel(
                 kt::rt_fl<16,WarpKSize> score;
                 {
                     kt::rt_bf<WarpKSize,CONFIG.KcKeyDim> key;
-                    kt::rv<int,WarpKSize,kt::ducks::rv_layout::align> key_labels;
                     kt::rv_fl<WarpKSize,kt::ducks::rv_layout::align> key_bias;
                     kt::warp::rv_maps::zero(key_bias);
-                    load_forward_key_metadata(key_labels, key_bias, packet.template get<1>(), query_lse);
+                    load_forward_key_metadata(key_bias, packet.template get<1>(), query_lse);
                     kt::warp::load<true>(key, kv.k.payload);
                     initialize_score(score, bias, key_bias, query_lse);
                     [[clang::always_inline]] kt::warp::wmma::mma_ABt(score, query, key, score);
-                    finish_score(score, labels, key_labels, hard, tau2);
+                    finish_score(score);
                 }
                 auto scan = make_forward_scan(score);
                 Scan::HState incoming;

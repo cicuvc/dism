@@ -9,8 +9,13 @@ from test_varlen_summary import packed_inputs
 def slice_inputs(inputs,start,n):
     q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau=inputs
     matrices=[x[:,start:start+n].contiguous() for x in (q,k,sq,sk,v,lq,lk)]
+    if hard.ndim == 2:
+        row_tokens=q.shape[1]//hard.shape[0]
+        local_hard=hard[start//row_tokens:start//row_tokens+1].contiguous()
+    else:
+        local_hard=hard[:,:,start:start+n].contiguous()
     return (*matrices,iq[:,:,start:start+n].contiguous(),ik[:,:,start:start+n].contiguous(),
-            direction,hard[:,:,start:start+n].contiguous(),tau)
+            direction,local_hard,tau)
 
 
 @pytest.mark.parametrize('lengths',[[0,0],[256,512,256,0],

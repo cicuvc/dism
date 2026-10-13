@@ -39,17 +39,13 @@ __device__ __forceinline__ void produce_packed_forward(const ArgsT<FP32Output>& 
         bool query_lse = args.direction[task.batch * args.heads + task.head];
         if (leader) {
             shared.query_lse = query_lse;
-            shared.tau2 = args.tau[task.head] * 1.4426950408889634f;
             kt::tma::expect_bytes(first.getBarrier(), sizeof(QTile) + sizeof(SQTile));
             kt::tma::load_async(tiles.q, args.q, {0, task.head, task.begin+task.q_start, 0}, first.getBarrier());
             kt::tma::load_async(tiles.sq, args.sq, {0, task.head, task.begin+task.q_start, 0}, first.getBarrier());
         }
-        kt::warp::load_async(metadata.labels, args.q_label, {0, 0, 0, int(task.metadata)+task.q_start});
         if (query_lse) {
             kt::warp::load_async(metadata.lse, args.q_lse, {0, 0, 0, int(task.metadata)+task.q_start});
         }
-        load_async_any(metadata.hard, args.hard +
-            task.metadata + task.q_start);
         kt::warp::load_async_commit_group(first.getBarrier());
         first.submitToNextAndTrigger();
         prefetch.moveNext();
@@ -68,7 +64,6 @@ __device__ __forceinline__ void produce_packed_forward(const ArgsT<FP32Output>& 
                 kt::tma::load_async(kv.sk, args.sk, {0, task.begin+tile * WarpKSize, task.head, 0}, packet.getBarrier());
                 kt::tma::load_async(kv.v, args.v, {0, task.begin+tile * WarpKSize, task.head, 0}, packet.getBarrier());
             }
-            load_key_vector_async(meta.k_idx, args.k_label, {0, 0, 0, int(task.metadata)+tile * WarpKSize});
             if (!query_lse) {
                 load_key_vector_async(meta.klse, args.k_lse, {0, 0, 0, int(task.metadata)+tile * WarpKSize});
             }

@@ -8,7 +8,7 @@ class DismConfig:
     direction_policy: str = "random"
     direction_freeze_step: int = 3000
     direction_antithetic: bool = False
-    hard_granularity: str = "token"
+    hard_granularity: str = "sequence"
     sequence_len: int = 1024
     vocab_size: int = 32000
     n_layer: int = 12

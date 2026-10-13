@@ -18,41 +18,21 @@ __device__ __forceinline__ void initialize_score(Score &score, const QBias &q_bi
         kt::warp::rt_maps::add_col(score, {0.f}, k_bias);
 }
 
-// Predicated hard overwrite only. Diagonal scan preserves row-column, so
-// noncausal scores cannot influence a causal bottom-edge summary. Upper-triangle
-// summaries are unspecified; the eventual output softmax still needs masking.
-__device__ __forceinline__ void finish_score_pair(float2 &value, uint32_t hard, int q_label,
-                                                  int k_label_x, int k_label_y, float tau2) {
-    constexpr float LOG2E = 1.4426950408889634f;
-    asm volatile("{ .reg .pred ph, px, py;\n"
-                 "setp.ne.u32 ph, %5, 0;\n"
-                 "setp.eq.s32 px, %6, %7;\n"
-                 "setp.eq.s32 py, %6, %8;\n"
-                 "mul.f32 %0, %0, %4;\n"
-                 "mul.f32 %1, %1, %4;\n"
-                 "@ph selp.f32 %0, %2, %3, px;\n"
-                 "@ph selp.f32 %1, %2, %3, py; }"
-                 : "+&f"(value.x), "+&f"(value.y)
-                 : "f"(tau2), "f"(LOG_ZERO), "f"(LOG2E), "r"(hard), "r"(q_label), "r"(k_label_x),
-                   "r"(k_label_y));
-}
-
-template <class Score, class QIndex, class KIndex>
-__device__ __forceinline__ void finish_score(Score &score, const QIndex &q_labels,
-                                             const KIndex &k_labels, uint32_t hard_rows, float tau2) {
+// Soft-only conversion. Hard training rows are skipped at the task boundary.
+// Noncausal scores cannot influence a causal bottom-edge summary.
+template <class Score>
+__device__ __forceinline__ void finish_score(Score &score) {
 #pragma unroll
     for (int rb = 0; rb < score.height; ++rb) {
 #pragma unroll
         for (int cb = 0; cb < score.width; ++cb) {
 #pragma unroll
             for (int rh = 0; rh < 2; ++rh) {
-                uint32_t hard = (hard_rows >> (rb * 2 + rh)) & 1;
-                int label = rh ? q_labels.data[rb][0].y : q_labels.data[rb][0].x;
 #pragma unroll
                 for (int ch = 0; ch < 2; ++ch) {
                     auto &value = score.tiles[rb][cb].data[rh + 2 * ch];
-                    auto labels = k_labels.data[cb][ch];
-                    finish_score_pair(value, hard, label, labels.x, labels.y, tau2);
+                    value.x *= 1.4426950408889634f;
+                    value.y *= 1.4426950408889634f;
                 }
             }
         }
@@ -86,7 +66,6 @@ produce_summary_tasks(const TmaSummarizationKernelArgs &args, LoadPipe &load_pip
                       PrefetchPipe &prefetch_pipe, LoadSharedMemoryLayouts &shared,
                       FixedLengthScheduler &scheduler, uint32_t warp_in_group) {
     constexpr uint32_t CONSUMER_A = 0;
-    constexpr float LOG2E = 1.4426950408889634f;
     kt::warpgroup::decrease_registers<40>();
     // Keep the whole warp for coalesced cp.async metadata loads.
     if (warp_in_group == 0) {
@@ -94,6 +73,7 @@ produce_summary_tasks(const TmaSummarizationKernelArgs &args, LoadPipe &load_pip
         FixedLengthScheduler::TaskInfo task;
 #pragma unroll 1
         while (scheduler.getNextTask(task)) {
+            if (args.hard_flags[task.Batch * args.Head + task.Head]) continue;
             bool query_lse = args.direction[task.Batch * args.Head + task.Head];
 
             prefetch_pipe.setup();
@@ -101,7 +81,6 @@ produce_summary_tasks(const TmaSummarizationKernelArgs &args, LoadPipe &load_pip
                                                      shared.Vectors.Prefetch);
             if (leader) {
                 shared.direction = query_lse;
-                shared.tau2 = args.rtau[task.Head] * LOG2E;
             }
             auto &tiles = prefetch.template get<0>();
             auto &vectors = prefetch.template get<1>();
@@ -113,13 +92,6 @@ produce_summary_tasks(const TmaSummarizationKernelArgs &args, LoadPipe &load_pip
                 kt::tma::load_async(tiles.preflight_k[0].kbuffer, args.KVec,
                                     {task.Batch, 0, task.Head, 0}, prefetch.getBarrier());
             }
-            load_async_any(vectors.hard_flags,
-                           args.hard_flags +
-                               (task.Batch * args.Head + task.Head) * args.PaddedSeqlen +
-                               task.QStart);
-            kt::warp::load_async(vectors.q_idx, args.IdxQ, {task.Batch, task.Head, 0, task.QStart});
-            load_key_vector_async(vectors.preflight_k[0].k_idx, args.IdxK,
-                                 {task.Batch, task.Head, 0, 0});
             if (query_lse) {
                 kt::warp::load_async(vectors.qlse, args.QLseVec,
                                      {task.Batch, task.Head, 0, task.QStart});
@@ -148,8 +120,6 @@ produce_summary_tasks(const TmaSummarizationKernelArgs &args, LoadPipe &load_pip
                                             {task.Batch, tile * CONFIG.WarpKSize, task.Head, 0},
                                             packet.getBarrier());
                     }
-                    load_key_vector_async(meta.k_idx, args.IdxK,
-                                         {task.Batch, task.Head, 0, tile * CONFIG.WarpKSize});
                     if (!query_lse) {
                         load_key_vector_async(meta.klse, args.KLseVec,
                                              {task.Batch, task.Head, 0, tile * CONFIG.WarpKSize});

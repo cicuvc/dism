@@ -16,7 +16,7 @@ def packed_inputs(lengths, mode='mixed', heads=3):
     v=torch.randn_like(q)
     lq,lk=[torch.full((1,t,h),6.,device='cuda') for _ in range(2)]
     iq,ik=[torch.randint(8,(1,h,t),device='cuda') for _ in range(2)]
-    hard=torch.rand(1,h,t,device='cuda')<dict(soft=0.,mixed=.5,hard=1.)[mode]
+    hard=torch.rand(1,h,device='cuda')<dict(soft=0.,mixed=.5,hard=1.)[mode]
     direction=(torch.arange(h,device='cuda')%2==0)[None].contiguous()
     tau=torch.full((h,),2.,device='cuda')
     return layout,(q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau)
@@ -37,7 +37,7 @@ def test_ragged_summary(lengths,mode):
         oracle=summarize(q[:,start:start+n].contiguous(),k[:,start:start+n].contiguous(),
             lq[:,start:start+n]-tau,lk[:,start:start+n]-tau,
             iq[:,:,start:start+n].contiguous(),ik[:,:,start:start+n].contiguous(),
-            direction,hard[:,:,start:start+n].contiguous(),tau,ctas=1)
+            direction,hard,tau,ctas=1)
         valid=torch.arange(p,device='cuda')[None,:] < (torch.arange(rows,device='cuda')[:,None]+1)*32
         for result,expected in zip((a,b),oracle):
             actual=result[offset*3:(offset+rows*p)*3].view(1,3,rows,p)

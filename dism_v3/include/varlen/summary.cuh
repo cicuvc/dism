@@ -33,7 +33,6 @@ produce_packed_summary(const TmaSummarizationKernelArgs &args, LoadPipe &load_pi
                       PrefetchPipe &prefetch_pipe, LoadSharedMemoryLayouts &shared,
                       const SummaryTask &task, uint32_t warp_in_group) {
     constexpr uint32_t CONSUMER_A = 0;
-    constexpr float LOG2E = 1.4426950408889634f;
     kt::warpgroup::decrease_registers<40>();
     // Keep the whole warp for coalesced cp.async metadata loads.
     if (warp_in_group == 0) {
@@ -46,7 +45,6 @@ produce_packed_summary(const TmaSummarizationKernelArgs &args, LoadPipe &load_pi
                                                      shared.Vectors.Prefetch);
             if (leader) {
                 shared.direction = query_lse;
-                shared.tau2 = args.rtau[task.Head] * LOG2E;
             }
             auto &tiles = prefetch.template get<0>();
             auto &vectors = prefetch.template get<1>();
@@ -58,13 +56,6 @@ produce_packed_summary(const TmaSummarizationKernelArgs &args, LoadPipe &load_pi
                 kt::tma::load_async(tiles.preflight_k[0].kbuffer, args.KVec,
                                     {0, task.begin, task.Head, 0}, prefetch.getBarrier());
             }
-            load_async_any(vectors.hard_flags,
-                           args.hard_flags +
-                               task.metadata +
-                               task.QStart);
-            kt::warp::load_async(vectors.q_idx, args.IdxQ, {0, 0, 0, int(task.metadata)+task.QStart});
-            load_key_vector_async(vectors.preflight_k[0].k_idx, args.IdxK,
-                                 {0, 0, 0, int(task.metadata)});
             if (query_lse) {
                 kt::warp::load_async(vectors.qlse, args.QLseVec,
                                      {0, 0, 0, int(task.metadata)+task.QStart});
@@ -93,8 +84,6 @@ produce_packed_summary(const TmaSummarizationKernelArgs &args, LoadPipe &load_pi
                                             {0, task.begin+tile * CONFIG.WarpKSize, task.Head, 0},
                                             packet.getBarrier());
                     }
-                    load_key_vector_async(meta.k_idx, args.IdxK,
-                                         {0, 0, 0, int(task.metadata)+tile * CONFIG.WarpKSize});
                     if (!query_lse) {
                         load_key_vector_async(meta.klse, args.KLseVec,
                                              {0, 0, 0, int(task.metadata)+tile * CONFIG.WarpKSize});

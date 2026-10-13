@@ -15,8 +15,8 @@ std::tuple<at::Tensor,at::Tensor> varlen_summary_cuda(
     int h=validate_operands(operands,layout);
     c10::cuda::CUDAGuard guard(operands[0].device());
     auto options=operands[0].options().dtype(at::kFloat);
-    auto a=at::empty({layout.forward*h},options);
-    auto b=at::empty_like(a);
+    auto a=at::full({layout.forward*h},LOG_ZERO,options);
+    auto b=at::full_like(a,LOG_ZERO);
     if (!layout.tokens) return {a,b};
     TORCH_CHECK(layout.tokens*h<=INT_MAX,"packed metadata coordinate exceeds int32");
     int t=layout.tokens;
@@ -36,7 +36,8 @@ std::tuple<at::Tensor,at::Tensor> varlen_summary_cuda(
     std::vector<int2> tasks;
     for (int s=0;s<layout.sequences;++s)
         append_tasks(tasks,s,h*(layout.get(s,Length)/CONFIG.getQBlockSize()));
-    launch_common(varlen_summary_address(),args,layout,tasks,SUMMARY_SHARED_BYTES,operands[0].device());
+    launch_common(varlen_summary_address(),args,layout,tasks,SUMMARY_SHARED_BYTES,operands[0].device(),
+                  384,t/operands[9].size(0));
     return {a,b};
 }
 

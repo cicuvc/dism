@@ -63,6 +63,7 @@ struct BackwardArgs {
     dism_backward::Args common;
     const int64_t* documents;
     const int2* tasks;
+    int hard_row_tokens;
 };
 static_assert(sizeof(BackwardArgs)<=4096);
 
@@ -86,8 +87,7 @@ __device__ __forceinline__ BackwardTask backward_task(const BackwardArgs& a) {
 struct LocalScore {
     int heads,n,padded;
     const float *q_lse,*k_lse,*tau,*vertical,*horizontal;
-    const int *q_label,*k_label;
-    const uint8_t *hard,*direction;
+    const uint8_t *direction;
 };
 __device__ __forceinline__ LocalScore local_score(
         const dism_backward::Args& a,const BackwardTask& task) {
@@ -97,7 +97,7 @@ __device__ __forceinline__ LocalScore local_score(
     return {a.score.heads,task.n,task.n,
         a.score.q_lse+start,a.score.k_lse+start,a.score.tau,
         a.score.vertical+task.vertical,a.score.horizontal+task.forward,
-        a.score.q_label+start,a.score.k_label+start,a.score.hard+start,a.score.direction};
+        a.score.direction};
 }
 
 template<class HeldPipe,class InputPipe>
@@ -135,14 +135,14 @@ __device__ __forceinline__ void produce_backward(const dism_backward::Args& a,
 #if DISM_HOST_API
 template<class Kernel>
 inline void launch_backward(Kernel kernel,const dism_backward::Args& common,
-                            const Layout& layout,at::Device device) {
+                            const Layout& layout,at::Device device,int hard_row_tokens) {
     std::vector<int2> tasks;
     for (int s=0;s<layout.sequences;++s)
         append_tasks(tasks,s,common.score.heads*(layout.get(s,Length)/128));
     if (tasks.empty()) return;
     auto documents=dism_metadata::documents(layout.cpu,device);
     auto work=upload_records(tasks,device);
-    BackwardArgs args{common,documents.data_ptr<int64_t>(),reinterpret_cast<const int2*>(work.data_ptr())};
+    BackwardArgs args{common,documents.data_ptr<int64_t>(),reinterpret_cast<const int2*>(work.data_ptr()),hard_row_tokens};
     C10_CUDA_CHECK(cudaFuncSetAttribute(kernel,cudaFuncAttributeMaxDynamicSharedMemorySize,
                                       dism_backward::SharedBytes));
     launch_kernel(kernel,tasks.size(),384,dism_backward::SharedBytes,at::cuda::getCurrentCUDAStream(),args);

@@ -24,9 +24,9 @@ static std::vector<at::Tensor> backward_qk_impl(std::vector<at::Tensor> operands
                 "invalid reverse chunk boundary");
     auto options=vertical.options();
     auto dq=at::zeros({b,n,h,D},options);
-    auto dk=at::empty({b,n,h,D},options.dtype(fp32_output?at::kFloat:at::kBFloat16));
+    auto dk=at::zeros({b,n,h,D},options.dtype(fp32_output?at::kFloat:at::kBFloat16));
     auto dlq=at::zeros({b,h,n},options);
-    auto dlk=at::empty({b,h,n},options.dtype(fp32_output?at::kFloat:at::kBFloat16));
+    auto dlk=at::zeros({b,h,n},options.dtype(fp32_output?at::kFloat:at::kBFloat16));
     auto dtau=at::zeros({h},options);
     args.dq=dq.data_ptr<float>(); args.dk=dk.data_ptr();
     set_key_output(args,2,dk);

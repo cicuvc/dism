@@ -38,16 +38,16 @@ std::tuple<at::Tensor, at::Tensor> forward_cuda(
         check(k_lse, at::kFloat, q_lse.sizes(), "k_lse");
         check(q_label, at::kInt, q_lse.sizes(), "q_label");
         check(k_label, at::kInt, q_lse.sizes(), "k_label");
-        check(hard, at::kByte, q_lse.sizes(), "hard");
+        check(hard, at::kByte, {batch,heads}, "hard");
         check(direction, at::kByte, {batch,heads}, "direction");
         check(tau, at::kFloat, {heads}, "tau");
         int checkpoints = (n - 1) / 32;
         check(boundary, at::kFloat, {batch,heads,checkpoints,padded}, "boundary");
         if (vertical)
             check(*vertical, at::kFloat, {batch,heads,(n-1)/16,padded}, "vertical");
-        auto output = at::empty({batch,n,heads,DIM},
+        auto output = at::zeros({batch,n,heads,DIM},
                                q.options().dtype(FP32Output ? at::kFloat : at::kBFloat16));
-        auto lse2 = at::empty({batch,heads,n}, q.options().dtype(at::kFloat));
+        auto lse2 = at::zeros({batch,heads,n}, q.options().dtype(at::kFloat));
         auto q_stride = kt::gl_strides{size_t(padded * heads * CONFIG.KcKeyDim),
                                        size_t(CONFIG.KcKeyDim), size_t(heads * CONFIG.KcKeyDim)};
         auto sq_stride = kt::gl_strides{size_t(padded * heads * READOUT_DIM),

@@ -304,7 +304,7 @@ struct TmaSummarizationKernelArgs {
     kt::gl<float, -1, -1, 1, -1> KLseVec; // [batch, head, seq]
     kt::gl<int, -1, -1, 1, -1> IdxQ;      // [batch, head, seq]
     kt::gl<int, -1, -1, 1, -1> IdxK;      // [batch, head, seq]
-    uint8_t *hard_flags;                  // [batch, head, seq] must be contiguous
+    uint8_t *hard_flags;                  // [training row, head], skip entire task
     uint8_t *direction;                   // [batch, head] must be contiguous
     float *rtau;                          // [head]
 
@@ -326,17 +326,13 @@ struct LoadSharedMemoryLayouts {
     union VectorRegion {
         struct DefaultLayout {
             kt::sv_fl<CONFIG.WarpKSize> klse;
-            kt::sv<int, CONFIG.WarpKSize> k_idx;
         } Default[CONFIG.KStages];
         struct PrefetchLayout {
             DefaultLayout preflight_k[CONFIG.KPrefetch];
             kt::sv_fl<CONFIG.getQBlockSize()> qlse;
-            kt::sv<int, CONFIG.getQBlockSize()> q_idx;
-            uint8_t hard_flags[CONFIG.getQBlockSize()];
         } Prefetch[1];
     } Vectors;
     bool direction;
-    float tau2; // Producer converts natural-log rtau to log2 for hard matches.
 };
 
 // Include allocator alignment and both barrier rings, not just tile storage.

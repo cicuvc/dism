@@ -26,7 +26,18 @@ inline int validate_operands(const std::vector<at::Tensor>& operands,const Layou
     check(6,at::kFloat,{layout.padded*h});
     check(7,at::kInt,{layout.padded*h});
     check(8,at::kInt,{layout.padded*h});
-    check(9,at::kByte,{layout.padded*h});
+    const auto& hard=operands[9];
+    TORCH_CHECK(hard.dim()==2 && hard.size(0)>0,
+                "hard must be [training_rows,H], not a token mask");
+    check(9,at::kByte,{hard.size(0),h});
+    TORCH_CHECK(layout.tokens%hard.size(0)==0 &&
+                (layout.tokens/hard.size(0))%256==0,"invalid packed hard row length");
+    int row_tokens=layout.tokens?layout.tokens/hard.size(0):256;
+    for (int s=0;s<layout.sequences;++s) {
+        int begin=layout.get(s,Begin),n=layout.get(s,Length);
+        TORCH_CHECK(!n || begin/row_tokens==(begin+n-1)/row_tokens,
+                    "a document cannot cross a hard training-row boundary");
+    }
     check(10,at::kByte,{1,h});
     check(11,at::kFloat,{h});
     return h;
@@ -43,17 +54,19 @@ template<class Common> struct PackedArgs {
     Common common;
     const int64_t* documents;
     const int2* tasks;
+    int hard_row_tokens;
 };
 
 #if DISM_HOST_API
 template<class Kernel,class Common>
 inline void launch_common(Kernel kernel,const Common& common,const Layout& layout,
-        const std::vector<int2>& tasks,size_t shared_bytes,at::Device device,int threads=384) {
+        const std::vector<int2>& tasks,size_t shared_bytes,at::Device device,int threads=384,
+        int hard_row_tokens=256) {
     if (tasks.empty()) return;
     auto documents=dism_metadata::documents(layout.cpu,device);
     auto work=upload_records(tasks,device);
     PackedArgs<Common> args{common,documents.data_ptr<int64_t>(),
-                           reinterpret_cast<const int2*>(work.data_ptr())};
+                           reinterpret_cast<const int2*>(work.data_ptr()),hard_row_tokens};
     if (shared_bytes)
         C10_CUDA_CHECK(cudaFuncSetAttribute(kernel,cudaFuncAttributeMaxDynamicSharedMemorySize,shared_bytes));
     launch_kernel(kernel,tasks.size(),threads,shared_bytes,at::cuda::getCurrentCUDAStream(),args);

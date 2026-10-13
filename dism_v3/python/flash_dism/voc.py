@@ -9,7 +9,8 @@ def voc_dism(q,k,sq,sk,v,q_vocab,k_vocab,rtau,*,direction,hard,ctas=0,beta=1.0):
 
     Vocabularies are [H,V,D] or shared [V,D], with caller-owned activation.
     R/D/DV select a compiled configuration automatically.
-    Explicit direction [B,H] and hard [B,H,N] are replayed by forward/backward.
+    Explicit direction [B,H] and hard [B,H] are replayed by forward/backward.
+    CUDA currently computes only soft rows; hard rows return zero placeholders.
     beta is the vocabulary-softmax temperature: beta=1 reproduces the unscaled
     ``q_vec @ k_vec - LSE + rtau``; larger beta sharpens the soft match gate
     toward the hard argmax indicator (see docs/SOFT_HARD_RELAXATION.md).

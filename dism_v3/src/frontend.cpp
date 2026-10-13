@@ -69,6 +69,19 @@ static void check_tensor(const T& x,const T& anchor,at::ScalarType dtype,
 }
 
 // Raw public argument order: Q,K,SQ,SK,V,LQ,LK,IQ,IK,direction,hard,tau.
+static void check_hard(const T& hard,const T& q,bool packed) {
+    TORCH_CHECK(hard.device()==q.device() && hard.scalar_type()==at::kBool &&
+                hard.dim()==2 && hard.size(1)==q.size(2) && hard.size(0)>0,
+                "hard must be bool [training_rows,H]; token-level masks are unsupported");
+    if (!packed) {
+        TORCH_CHECK(hard.size(0)==q.size(0),"fixed hard must be [B,H]");
+    } else {
+        TORCH_CHECK(q.size(1)%hard.size(0)==0 &&
+                    (q.size(1)/hard.size(0))%256==0,
+                    "packed hard rows must evenly divide tokens into 256-aligned training rows");
+    }
+}
+
 static V prepare(const V& x,bool packed,bool absorbed=false) {
     TORCH_CHECK(x.size()==12,"expected twelve core operands");
     const auto& q=x[0];
@@ -89,7 +102,7 @@ static V prepare(const V& x,bool packed,bool absorbed=false) {
         check_tensor(x[i],q,x[i].scalar_type(),{b,h,n},"labels");
     }
     check_tensor(x[9],q,at::kBool,{b,h},"direction");
-    check_tensor(x[10],q,at::kBool,{b,h,n},"hard");
+    check_hard(x[10],q,packed);
     check_tensor(x[11],q,at::kFloat,{h},"tau");
     V result;
     for (int i=0;i<5;++i) {
@@ -102,7 +115,7 @@ static V prepare(const V& x,bool packed,bool absorbed=false) {
     }
     for (int i:{7,8}) result.push_back(x[i].to(at::kInt).contiguous());
     result.push_back(x[10].to(at::kByte).contiguous());
-    if (packed) for (int i=5;i<10;++i) result[i]=result[i].view({-1});
+    if (packed) for (int i=5;i<9;++i) result[i]=result[i].view({-1});
     result.push_back(x[9].to(at::kByte).contiguous());
     result.push_back(x[11].contiguous());
     return result;
@@ -233,7 +246,7 @@ void bind_frontend(py::module_& m) {
         check_tensor(lq,q,at::kFloat,{b,n,h},"LSE");
         check_tensor(lk,q,at::kFloat,{b,n,h},"LSE");
         check_tensor(direction,q,at::kBool,{b,h},"direction");
-        check_tensor(hard,q,at::kBool,{b,h,n},"hard");
+        check_hard(hard,q,false);
         for (const auto& label:{iq,ik}) {
             TORCH_CHECK(label.scalar_type()==at::kInt || label.scalar_type()==at::kLong,"labels must be integer");
             check_tensor(label,q,label.scalar_type(),{b,h,n},"labels");
@@ -256,7 +269,7 @@ void bind_frontend(py::module_& m) {
         check_tensor(sk,q,at::kBFloat16,sq.sizes(),"sk");
         check_tensor(v,q,at::kBFloat16,{b,n,h,v.size(3)},"v");
         check_tensor(direction,q,at::kBool,{b,h},"direction");
-        check_tensor(hard,q,at::kBool,{b,h,n},"hard");
+        check_hard(hard,q,b==1);
         check_tensor(tau,q,at::kFloat,{h},"tau");
         auto table=[&](T value) {
             TORCH_CHECK(value.device()==q.device() && value.is_floating_point(),"invalid vocabulary device/dtype");

@@ -23,7 +23,8 @@ def test_capped_hard_schedule_and_state():
     assert DismConfig().hard_prob_max == 1.0
     holder = SimpleNamespace(config=DismConfig(anneal_steps=101, hard_prob_max=.95),
                              training_step=torch.zeros((), dtype=torch.int64),
-                             hard_probability=torch.zeros(()))
+                             hard_probability=torch.zeros(()),
+                             vocab_temperature=torch.ones(()))
     for step, expected in [(0,0.), (50,.475), (100,.95), (200,.95)]:
         DismLM.set_training_step(holder, step)
         assert holder.training_step.item() == step

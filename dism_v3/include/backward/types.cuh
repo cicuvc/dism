@@ -109,6 +109,7 @@ __device__ __forceinline__ void produce(const Args& a,Shared& shared,
     Scheduler::Task task;
 #pragma unroll 1
     while (scheduler.next(task)) {
+        if (a.score.hard[task.bh]) continue;
         auto first = held.waitBuffer(0,shared.held);
         if (leader) {
             auto& data = first.template get<0>();

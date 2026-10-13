@@ -34,7 +34,7 @@ std::tuple<at::Tensor, at::Tensor> launch_summary(Kernel kernel, at::Tensor quer
     check(k_lse, at::kFloat, q_lse.sizes(), "k_lse");
     check(q_labels, at::kInt, q_lse.sizes(), "q_labels");
     check(k_labels, at::kInt, q_lse.sizes(), "k_labels");
-    check(hard, at::kByte, q_lse.sizes(), "hard");
+    check(hard, at::kByte, {batch, heads}, "hard");
     check(direction, at::kByte, {batch, heads}, "direction");
     check(tau, at::kFloat, {heads}, "tau");
     // Omit only the32-row warp block containing the final token, not its CTA.
@@ -42,8 +42,8 @@ std::tuple<at::Tensor, at::Tensor> launch_summary(Kernel kernel, at::Tensor quer
     constexpr int warps_per_workload = CONFIG.getQBlockSize() / CONFIG.WarpQSize;
     int summary_workloads = (checkpoints + warps_per_workload - 1) / warps_per_workload;
     auto summary_a =
-        at::empty({batch, heads, checkpoints, padded}, query.options().dtype(at::kFloat));
-    auto summary_b = at::empty_like(summary_a);
+        at::full({batch, heads, checkpoints, padded}, LOG_ZERO, query.options().dtype(at::kFloat));
+    auto summary_b = at::full_like(summary_a, LOG_ZERO);
     if (summary_workloads == 0) return {summary_a, summary_b};
     using QGlobal = decltype(TmaSummarizationKernelArgs::QVec);
     using KGlobal = decltype(TmaSummarizationKernelArgs::KVec);

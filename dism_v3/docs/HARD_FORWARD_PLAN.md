@@ -7,6 +7,12 @@ log-domain affine arithmetic with integer state. The two stages share an
 integer boundary contract, not a per-position register layout. This plan
 changes no kernels, launch defaults, production dispatch or numerical tolerances.
 
+Subsequent CUDA work removes token-level hard handling and makes the core a
+soft-only contribution with sequence-hard skips. The dedicated hard forward
+described here remains unimplemented; zero hard outputs are placeholders, not
+an implementation of this plan.
+See [the soft-only split and measurements](SOFT_ONLY_CUDA.md).
+
 The target is sequence-level hard training on sm120, initially short sequences
 around N2048 with R32 and DV64. Keep CUDA O(N^2) forward fused with readout and
 the [asynchronous CPU planner plus event-stream backward](NATIVE_TRAINING_PLANNER.md).

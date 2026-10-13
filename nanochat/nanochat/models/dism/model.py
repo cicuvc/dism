@@ -342,6 +342,8 @@ class DismLM(nn.Module):
         batch, length = input_ids.shape
         if length > self.config.sequence_len or cu_seqlens is None:
             raise ValueError('DISM nanochat adapter requires packed varlen metadata and bounded context')
+        if self.config.hard_granularity != 'sequence':
+            raise ValueError('CUDA DISM supports only sequence-level hard flags')
         with torch.autocast('cuda', dtype=torch.bfloat16):
             x = self.embedding(input_ids.reshape(1, -1))
             if self.training:
@@ -367,18 +369,18 @@ class DismLM(nn.Module):
                     hard, direction = sample_flags(counter, self.hard_probability,
                         batch*length, self.config.n_head, self.config.rng_seed + i*104729)
                 else:
-                    hard = torch.full((1, self.config.n_head, batch*length), self.eval_hard, device=x.device, dtype=torch.bool)
+                    hard = torch.full((batch, self.config.n_head), self.eval_hard, device=x.device, dtype=torch.bool)
                     direction = torch.ones((1, self.config.n_head), device=x.device, dtype=torch.bool)
                 if self.training:
                     from .routing import direction_for_policy
                     direction = direction_for_policy(direction, counter, self.training_step,
                         i-self.config.n_layer//2, self.config.direction_policy,
                         self.config.direction_freeze_step, direction_flip)
-                    if hard_mode is None and self.config.hard_granularity == 'sequence':
+                    if self.config.hard_granularity == 'sequence':
                         # One hard flag per original packed training row and head.
                         row_hard, _ = sample_flags(counter, self.hard_probability,
                             batch, self.config.n_head, self.config.rng_seed+i*104729)
-                        hard = row_hard.unsqueeze(-1).expand(1,self.config.n_head,batch,length).reshape(1,self.config.n_head,batch*length).contiguous()
+                        hard = row_hard.squeeze(0).T.contiguous()
                 if self.training and hard_mode is not None:
                     hard = torch.full_like(hard, hard_mode)
                 if self.config.value_residual:

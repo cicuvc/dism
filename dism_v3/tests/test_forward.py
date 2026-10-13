@@ -26,8 +26,9 @@ def inputs_for(n, mode='mixed', direction='mixed'):
 
 def reference(inputs):
     q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau = inputs
+    soft = torch.zeros_like(iq,dtype=torch.bool)
     return dism_ref(q.double(),k.double(),sq.double(),sk.double(),lq.double(),lk.double(),
-                    iq,ik,direction,hard,v.double(),tau.double()).float()
+                    iq,ik,direction,soft,v.double(),tau.double()).float() * (~hard)[:,None,:,None]
 
 
 @pytest.mark.parametrize('n', [256,512])
@@ -96,7 +97,7 @@ def test_forward_causal_values(prefix):
 
 
 @pytest.mark.parametrize('tau', [0., .1, math.log(cu_flash_dism.summary_key_dim())])
-def test_forward_long_chain(tau):
+def test_forward_skips_even_long_matched_hard_chain(tau):
     inputs = list(inputs_for(512, 'hard'))
     inputs[7].zero_()
     inputs[8].zero_()
@@ -106,11 +107,6 @@ def test_forward_long_chain(tau):
     expected = reference(inputs)
     torch.testing.assert_close(actual, expected, atol=.008, rtol=.025)
     assert (actual-expected).norm() / expected.norm().clamp_min(1e-8) < .01
-    # All-match hard recurrence: W[i,j]=w[j] for j<=i. Includes fallback0.
-    w = torch.zeros(513, dtype=torch.float64, device='cuda')
-    state = torch.full((), -torch.inf, dtype=torch.float64, device='cuda')
-    for j in range(512):
-        state = torch.logaddexp(state, state.new_zeros(())) + tau
-        w[j+1] = state
-    expected_norm = torch.logcumsumexp(w,0)[1:] / math.log(2)
-    torch.testing.assert_close(norm.double(), expected_norm.expand_as(norm), atol=.03, rtol=0)
+    # Label agreement and tau must not turn the placeholder into hard attention.
+    assert torch.count_nonzero(actual) == 0
+    assert torch.count_nonzero(norm) == 0

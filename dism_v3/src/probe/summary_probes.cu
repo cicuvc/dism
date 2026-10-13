@@ -10,7 +10,8 @@ __global__ void key_metadata_probe_kernel(
     decltype(TmaSummarizationKernelArgs::IdxK) input_labels,
     decltype(TmaSummarizationKernelArgs::KLseVec) input_bias,
     int* output_labels, float* output_bias, bool query_lse) {
-    __shared__ LoadSharedMemoryLayouts::VectorRegion::DefaultLayout shared;
+    // Labels are probe-only now; production soft metadata contains only LSE.
+    __shared__ struct { kt::sv_fl<64> klse; kt::sv<int,64> k_idx; } shared;
     load_key_vector_async(shared.k_idx, input_labels, {0, 0, 0, 0});
     if (!query_lse) load_key_vector_async(shared.klse, input_bias, {0, 0, 0, 0});
     kt::load_async_commit_group();
@@ -18,11 +19,14 @@ __global__ void key_metadata_probe_kernel(
     kt::rv<int, 64, kt::ducks::rv_layout::align> labels;
     kt::rv_fl<64, kt::ducks::rv_layout::align> bias;
     kt::warp::rv_maps::zero(bias);
-    load_key_metadata(labels, bias, shared, query_lse);
+    load_key_metadata(bias, shared, query_lse);
 #pragma unroll
     for (int block = 0; block < 4; ++block) {
 #pragma unroll
         for (int half = 0; half < 2; ++half) {
+            int column=2*block+half+16*(kt::warp::laneid()&3);
+            labels.data[block][half].x=shared.k_idx.data[column];
+            labels.data[block][half].y=shared.k_idx.data[column+8];
             int offset = kt::warp::laneid() * 16 + 4 * block + 2 * half;
             output_labels[offset] = labels.data[block][half].x;
             output_labels[offset + 1] = labels.data[block][half].y;

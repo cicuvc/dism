@@ -15,6 +15,7 @@ __device__ __forceinline__ void produce(const ArgsT<FP32Output>& args, SharedT<F
     Scheduler::Task task;
 #pragma unroll 1
     while (scheduler.next(task)) {
+        if (args.hard[task.batch * args.heads + task.head]) continue;
         prefetch.setup();
         auto first = prefetch.waitBuffer(0, shared.tiles.prefetch, shared.metadata.prefetch);
         auto& tiles = first.template get<0>();
@@ -22,17 +23,13 @@ __device__ __forceinline__ void produce(const ArgsT<FP32Output>& args, SharedT<F
         bool query_lse = args.direction[task.batch * args.heads + task.head];
         if (leader) {
             shared.query_lse = query_lse;
-            shared.tau2 = args.tau[task.head] * 1.4426950408889634f;
             kt::tma::expect_bytes(first.getBarrier(), sizeof(QTile) + sizeof(SQTile));
             kt::tma::load_async(tiles.q, args.q, {task.batch, task.head, task.q_start, 0}, first.getBarrier());
             kt::tma::load_async(tiles.sq, args.sq, {task.batch, task.head, task.q_start, 0}, first.getBarrier());
         }
-        kt::warp::load_async(metadata.labels, args.q_label, {task.batch, task.head, 0, task.q_start});
         if (query_lse) {
             kt::warp::load_async(metadata.lse, args.q_lse, {task.batch, task.head, 0, task.q_start});
         }
-        load_async_any(metadata.hard, args.hard +
-            (int64_t(task.batch) * args.heads + task.head) * args.padded + task.q_start);
         kt::warp::load_async_commit_group(first.getBarrier());
         first.submitToNextAndTrigger();
         prefetch.moveNext();
@@ -51,7 +48,6 @@ __device__ __forceinline__ void produce(const ArgsT<FP32Output>& args, SharedT<F
                 kt::tma::load_async(kv.sk, args.sk, {task.batch, tile * WarpKSize, task.head, 0}, packet.getBarrier());
                 kt::tma::load_async(kv.v, args.v, {task.batch, tile * WarpKSize, task.head, 0}, packet.getBarrier());
             }
-            load_key_vector_async(meta.k_idx, args.k_label, {task.batch, task.head, 0, tile * WarpKSize});
             if (!query_lse) {
                 load_key_vector_async(meta.klse, args.k_lse, {task.batch, task.head, 0, tile * WarpKSize});
             }

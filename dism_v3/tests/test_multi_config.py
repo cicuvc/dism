@@ -24,7 +24,7 @@ def inputs(config, n, mode):
     lq,lk = [torch.full((1,n,2),3.,device='cuda') for _ in range(2)]
     iq,ik = [torch.randint(16,(1,2,n),device='cuda',dtype=torch.int32) for _ in range(2)]
     direction = torch.tensor([[False,True]],device='cuda')
-    hard = torch.rand(1,2,n,device='cuda') < dict(soft=0.,mixed=.5,hard=1.)[mode]
+    hard = torch.rand(1,2,device='cuda') < dict(soft=0.,mixed=.5,hard=1.)[mode]
     tau = torch.full((2,),.5,device='cuda')
     return q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau
 
@@ -32,7 +32,7 @@ def inputs(config, n, mode):
 def oracle_args(x):
     q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau=x
     return (q.double(),k.double(),sq.double(),sk.double(),lq.double(),lk.double(),
-            iq,ik,direction,hard,v.double(),tau.double())
+            iq,ik,direction,torch.zeros_like(iq,dtype=torch.bool),v.double(),tau.double())
 
 
 def test_registry():
@@ -55,11 +55,12 @@ def test_core_oracle(config,mode,packed):
     else:
         output,norm,state=forward_core(*x,save_state=True,ctas=1)
     assert output.dtype==torch.bfloat16
-    expected=dism_ref(*oracle_args(x))
+    keep=(~x[10])[:,None,:,None]
+    expected=dism_ref(*oracle_args(x))*keep
     torch.testing.assert_close(output.double(),expected,atol=.008,rtol=.025)
     dout=torch.randn_like(output)
     actual=(backward_varlen(state,dout) if packed else backward_core(state,dout,ctas=1))
-    reference=dism_ref_backward(*oracle_args(x),dout.double())
+    reference=dism_ref_backward(*oracle_args(x),dout.double()*keep)
     for name,value in actual.items():
         assert_gradient(value,reference[name],name)
     for name in ('v','sk_vec','k_vec','k_lse'):

@@ -47,7 +47,7 @@ def test_embedding_autograd(mode,empty):
     for start,n,*_ in layout.table.tolist():
         if n:
             local=[a[:,start:start+n].contiguous() for a in args[:5]]+args[5:]
-            outputs.append(voc_dism(*local,direction=x[9],hard=x[10][:,:,start:start+n].contiguous()))
+            outputs.append(voc_dism(*local,direction=x[9],hard=x[10]))
     expected=torch.cat(outputs,dim=1)
     reference=torch.autograd.grad(expected,args,derivative)
     torch.testing.assert_close(out,expected,atol=.002,rtol=.015)

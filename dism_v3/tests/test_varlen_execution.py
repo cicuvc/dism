@@ -101,7 +101,7 @@ def test_document_permutation():
                                     device='cuda') for s in order]).long()
     changed=[x[:,indices].contiguous() for x in inputs[:7]]
     changed.extend([inputs[7][:,:,indices].contiguous(),inputs[8][:,:,indices].contiguous(),
-                    inputs[9],inputs[10][:,:,indices].contiguous(),inputs[11]])
+                    inputs[9],inputs[10],inputs[11]])
     permuted=make_layout([layout.lengths[s] for s in order])
     out,_,saved=forward_varlen(*changed,layout=permuted,save_state=True)
     gradient=backward_varlen(saved,dout[:,indices].contiguous())

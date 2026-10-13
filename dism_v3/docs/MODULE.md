@@ -15,7 +15,7 @@ attention = DismAttention(
 ).cuda()  # retain FP32 master parameters
 x = torch.randn(2, 256, 256, device="cuda", requires_grad=True)
 with torch.autocast("cuda", dtype=torch.bfloat16):
-    y, _, _ = attention(x, hard_prob=0.5)
+    y, _, _ = attention(x, hard_prob=0.0)  # current CUDA core is soft-only
 y.float().square().mean().backward()
 ```
 
@@ -83,7 +83,7 @@ Pass `hard_prob` explicitly from the optimizer-step schedule; forward has no
 internal step counter. If omitted, training defaults to soft and evaluation
 defaults to hard. Evaluation still samples direction unless explicitly given.
 A CUDA `generator` controls the convenience sampler: one global direction per
-call, plus `[B,H,N]` row decisions from local `triton_rand_bool`. A scalar int64
+call, plus `[B,H]` sequence decisions from local `triton_rand_bool`. A scalar int64
 seed is drawn with Torch using the supplied generator; the Triton kernel writes
 boolean flags directly, avoiding a full-sized float random tensor. Probability
 endpoints consume no row RNG. Masks differ from the previous Torch sampler for
@@ -114,8 +114,16 @@ are different, so the same seed does not promise identical masks across these
 backends or different chunkings. Use explicit hard flags for such comparisons.
 
 For deterministic comparisons pass `direction` (bool `[B,H]`) and `hard`
-(bool `[B,H,N]`); explicit hard flags take precedence over hard_prob. These
+(bool `[B,H]` for CUDA); explicit hard flags take precedence over hard_prob. These
 flags are reused in backward, with no new sampling.
+
+The CUDA core is currently soft-only: hard rows return zero placeholders and
+zero gradients, not hard attention. Until the dedicated path is integrated,
+use explicit all-soft flags for meaningful CUDA output; in particular, the
+unchanged hard-evaluation default is not a complete CUDA evaluation path.
+Packed CUDA accepts `[training_rows,H]` flags for equal-length original rows,
+not per-document flags. Unequal attention-mask-unpadded rows with explicit
+hard flags are rejected. Torch/reference decoding retains its token-mask API.
 
 `cu_seqlens=` selects packed batch-one execution. All boundaries and total N
 must be 256-aligned. The same boundaries are passed to convolution so that
@@ -134,7 +142,7 @@ introduced.
 # x: [1,768,width], documents of length 256 and 512, plus an empty document
 cu = torch.tensor([0, 256, 256, 768], device="cuda", dtype=torch.int32)
 with torch.autocast("cuda", dtype=torch.bfloat16):
-    y, _, _ = attention(x, hard_prob=0.5, cu_seqlens=cu)
+    y, _, _ = attention(x, hard_prob=0.0, cu_seqlens=cu)
 ```
 
 ## FLA forward and decoding

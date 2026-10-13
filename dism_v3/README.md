@@ -70,7 +70,7 @@ eq = (torch.randn(H, V, D, device="cuda") * 0.1).requires_grad_()
 ek = (torch.randn(H, V, D, device="cuda") * 0.1).requires_grad_()
 tau = torch.full((H,), 0.5, device="cuda", requires_grad=True)
 direction = torch.ones(B, H, device="cuda", dtype=torch.bool)
-hard = torch.rand(B, H, N, device="cuda") < 0.5
+hard = torch.zeros(B, H, device="cuda", dtype=torch.bool)  # soft-only CUDA
 
 out = voc_dism(q, k, sq, sk, v, eq, ek, tau,
                direction=direction, hard=hard)  # [B,N,H,DV]
@@ -82,7 +82,14 @@ Q/K use BF16 `[B,N,H,D]`, V uses BF16 `[B,N,H,DV]`, and sq/sk use BF16
 **R ∈ {16,32}**. Vocabularies are `[H,V,D]` or shared `[V,D]`; FP32 master
 parameters are recommended. `tau` is FP32 `[H]` in natural-log units.
 `direction` is bool `[B,H]` (true selects query-LSE normalization), and `hard`
-is bool `[B,H,N]`, shared across all keys of a query row.
+is bool `[B,H]`, one flag per training sequence/head. Token-level masks are
+rejected. CUDA currently computes only soft sequences: hard sequences return
+zero output, zero log2-normalizer and zero gradients as explicit placeholders,
+not hard attention. Do not use this intermediate implementation for hard/mixed
+training or hard evaluation until the dedicated hard path is integrated.
+For packed batch-one inputs, hard is `[training_rows,H]`; rows have equal length
+`T/training_rows`, and every document must stay within one original row.
+See [soft-only CUDA measurements and limitations](docs/SOFT_ONLY_CUDA.md).
 
 Fixed N must be positive and **256-aligned**. The kernels return BF16 outputs,
 use FP32 accumulation, and replay the forward decisions in backward. Labels

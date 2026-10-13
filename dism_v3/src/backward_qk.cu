@@ -27,6 +27,7 @@ __global__ __launch_bounds__(384,1) void dism_backward_qk_kernel(
         Scheduler::Task task;
 #pragma unroll 1
         while (scheduler.next(task)) {
+            if (args.score.hard[task.bh]) continue;
             int k0=task.k0+16*(2*warp+group);
             kt::rt_bf<K,D> keys;
             kt::rt_bf<K,R> soft_keys;
@@ -132,8 +133,7 @@ __global__ __launch_bounds__(384,1) void dism_backward_qk_kernel(
                                 args.debug_g[(int64_t(task.bh)*args.score.n+query)*args.score.n+k0+pos.first]=g;
 #endif
                             tau_sum+=g;
-                            bool hard=args.score.hard[int64_t(task.bh)*args.score.padded+query];
-                            soft[e]=hard?0.f:g;
+                            soft[e]=g;
                             if (query_lse) row_lse[c][e]-=soft[e];
                             if (!query_lse) key_lse[r]-=soft[e];
                         }

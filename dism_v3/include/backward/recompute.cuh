@@ -65,13 +65,10 @@ __device__ __forceinline__ Scalar recompute(
             auto pos = Scalar::layout(r,c,0);
             auto dot = score.tiles[0][c/2].data[r+2*(c&1)];
             int key = k0 + pos.first;
-            int label = args.k_label[offset+key];
 #pragma unroll
             for (int e = 0; e < 2; ++e) {
                 int query = q0 + pos.second + 4*e;
                 float value = (e ? dot.y : dot.x) * LOG2E;
-                if (args.hard[offset+query])
-                    value = args.q_label[offset+query] == label ? args.tau[bh%args.heads]*LOG2E : LOG_ZERO;
                 if (query >= args.n || key >= args.n || key > query) value = LOG_ZERO;
                 if (e) values.data[r][c].value.u1 = value;
                 else values.data[r][c].value.u0 = value;
@@ -133,7 +130,7 @@ inline RecomputeArgs make_recompute_args(const std::vector<at::Tensor>& operands
     check(operands[6],at::kFloat,{batch,heads,padded});
     check(operands[7],at::kInt,{batch,heads,padded});
     check(operands[8],at::kInt,{batch,heads,padded});
-    check(operands[9],at::kByte,{batch,heads,padded});
+    check(operands[9],at::kByte,{batch,heads});
     check(operands[10],at::kByte,{batch,heads});
     check(operands[11],at::kFloat,{heads});
     check(operands[12],at::kFloat,{batch,heads,(n-1)/32,padded});

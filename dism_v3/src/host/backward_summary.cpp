@@ -21,7 +21,7 @@ static std::vector<at::Tensor> backward_summary_impl(std::vector<at::Tensor> ope
     int b=args.score.batch,h=args.score.heads,np=args.score.padded;
     auto options=vertical.options();
     auto key_options=options.dtype(fp32_output?at::kFloat:at::kBFloat16);
-    auto dv=at::empty({b,n,h,DV},key_options),dsk=at::empty({b,n,h,R},key_options);
+    auto dv=at::zeros({b,n,h,DV},key_options),dsk=at::zeros({b,n,h,R},key_options);
     auto dsq=at::zeros({b,n,h,R},options);
     auto a=at::zeros({b,h,(n+SummaryK-1)/SummaryK,np},options),s=at::zeros_like(a);
     args.dv=dv.data_ptr(); args.dsk=dsk.data_ptr(); args.dsq=dsq.data_ptr<float>();

@@ -35,6 +35,7 @@ __global__ __launch_bounds__(384, 1) void wmma_tma_wasp_persistent_summarization
         FixedLengthScheduler::TaskInfo task;
 #pragma unroll 1
         while (scheduler.getNextTask(task)) {
+            if (args.hard_flags[task.Batch * args.Head + task.Head]) continue;
             // TK tile group-load interleaves the two WGs: 0,4,1,5,2,6,3,7.
             int query_block = group + 2 * warp_in_group;
             int q_start = task.QStart + query_block * CONFIG.WarpQSize;
@@ -45,14 +46,10 @@ __global__ __launch_bounds__(384, 1) void wmma_tma_wasp_persistent_summarization
             auto prefetch =
                 prefetch_pipe.waitBuffer(PRODUCER, shared.Tiles.Prefetch, shared.Vectors.Prefetch);
             bool query_lse = shared.direction;
-            float tau2 = shared.tau2;
             auto &vectors = prefetch.template get<1>();
             kt::rt_bf<CONFIG.WarpQSize, CONFIG.KcKeyDim> query;
-            kt::rv<int, CONFIG.WarpQSize, kt::ducks::rv_layout::ortho> query_labels;
             kt::rv_fl<CONFIG.WarpQSize, kt::ducks::rv_layout::ortho> query_bias;
             kt::group<8>::load(query, prefetch.template get<0>().qbuffer);
-            kt::warp::load(query_labels,
-                           vectors.q_idx.template subvec<CONFIG.WarpQSize>(query_block));
             kt::warp::rv_maps::zero(query_bias);
             if (query_lse) {
                 kt::warp::load(query_bias,
@@ -62,12 +59,6 @@ __global__ __launch_bounds__(384, 1) void wmma_tma_wasp_persistent_summarization
             for (int row = 0; row < CONFIG.WarpQSize / 16; ++row) {
                 query_bias.data[row][0].x *= -1.f;
                 query_bias.data[row][0].y *= -1.f;
-            }
-            uint32_t hard_rows = 0;
-#pragma unroll
-            for (int row = 0; row < CONFIG.WarpQSize / 8; ++row) {
-                int index = query_block * CONFIG.WarpQSize + row * 8 + kt::warp::laneid() / 4;
-                hard_rows |= uint32_t(vectors.hard_flags[index] != 0) << row;
             }
             // Keep each compute WG in step before releasing the shared input.
             kt::warpgroup::sync(group + 1);
@@ -87,11 +78,10 @@ __global__ __launch_bounds__(384, 1) void wmma_tma_wasp_persistent_summarization
                     continue;
                 }
                 kt::rt_bf<CONFIG.WarpKSize, CONFIG.KcKeyDim> key;
-                kt::rv<int, CONFIG.WarpKSize, kt::ducks::rv_layout::align> key_labels;
                 kt::rv_fl<CONFIG.WarpKSize, kt::ducks::rv_layout::align> key_bias;
                 kt::rt_fl<CONFIG.WarpQSize, CONFIG.WarpKSize> score;
                 kt::warp::rv_maps::zero(key_bias);
-                load_key_metadata(key_labels, key_bias, packet.template get<1>(), query_lse);
+                load_key_metadata(key_bias, packet.template get<1>(), query_lse);
                 // swap_axis=true: direct RHS LDSM -> HMMA layout.
                 kt::warp::load<true>(key, packet.template get<0>().kbuffer.payload);
                 initialize_score(score, query_bias, key_bias, query_lse);
@@ -101,7 +91,7 @@ __global__ __launch_bounds__(384, 1) void wmma_tma_wasp_persistent_summarization
                 packet.submitToNextAndTrigger();
                 load_pipe.moveNext();
 
-                finish_score(score, query_labels, key_labels, hard_rows, tau2);
+                finish_score(score);
                 auto scan = make_scan(score);
                 auto result = scan.reduce_forward(left, {});
                 left = result.first;

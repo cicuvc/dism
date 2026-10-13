@@ -13,17 +13,15 @@ using Scalar = pscore::AltLayoutSplitScanBuffer<16, WarpKSize, pscore::UnaryElem
 
 // Forward metadata follows this tile's TMA permutation, independently of the
 // summary's64-column tiles. Half-elements are K/8 logical columns apart.
-template <class KeyIndex, class KeyBias, class Shared>
+template <class KeyBias, class Shared>
 __device__ __forceinline__ void load_forward_key_metadata(
-        KeyIndex& labels, KeyBias& bias, const Shared& shared, bool query_lse) {
+        KeyBias& bias, const Shared& shared, bool query_lse) {
     int strip = 2 * (kt::warp::laneid() & 3);
 #pragma unroll
     for (int block = 0; block < WarpKSize / 16; ++block) {
 #pragma unroll
         for (int half = 0; half < 2; ++half) {
             int column = 2 * block + half + strip * Scalar::COL_BLOCKS;
-            labels.data[block][half].x = shared.k_idx.data[column];
-            labels.data[block][half].y = shared.k_idx.data[column + Scalar::COL_BLOCKS];
             if (!query_lse) {
                 bias.data[block][half].x = -shared.klse.data[column];
                 bias.data[block][half].y = -shared.klse.data[column + Scalar::COL_BLOCKS];

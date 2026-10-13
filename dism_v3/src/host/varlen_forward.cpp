@@ -24,10 +24,10 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor> varlen_forward_cuda(
                     "expected ragged horizontal boundary buffer");
         c10::cuda::CUDAGuard guard(operands[0].device());
         auto options=operands[0].options();
-        auto output=at::empty({1,layout.tokens,h,DIM},
+        auto output=at::zeros({1,layout.tokens,h,DIM},
                              options.dtype(FP32Output?at::kFloat:at::kBFloat16));
         // Global [H,T]; aligned document starts preserve scalar TMA alignment.
-        auto normalizer=at::empty({layout.padded*h},options.dtype(at::kFloat));
+        auto normalizer=at::zeros({layout.padded*h},options.dtype(at::kFloat));
         auto vertical=at::full({save_boundaries?layout.vertical*h:0},LOG_ZERO,options.dtype(at::kFloat));
         if (!layout.tokens) return {output,normalizer,vertical};
         TORCH_CHECK(layout.tokens*h<=INT_MAX,"packed metadata coordinate exceeds int32");
@@ -54,7 +54,8 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor> varlen_forward_cuda(
         std::vector<int2> tasks;
         for (int s=0;s<layout.sequences;++s)
             append_tasks(tasks,s,h*(layout.get(s,Length)/QROWS));
-        launch_common(varlen_forward_address<FP32Output>(),args,layout,tasks,shared_bytes<FP32Output>,operands[0].device());
+        launch_common(varlen_forward_address<FP32Output>(),args,layout,tasks,shared_bytes<FP32Output>,operands[0].device(),
+                      384,t/operands[9].size(0));
         return {output,normalizer,vertical};
     };
     #if DISM_ENABLE_FP32

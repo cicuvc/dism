@@ -34,9 +34,14 @@ model = DismForCausalLM(DismConfig()).cuda()  # FP32 master parameters
 optimizer = torch.optim.AdamW(model.optimizer_param_groups(0.01), lr=1e-3)
 ids = torch.randint(0, model.config.vocab_size, (2, 256), device="cuda")
 with torch.autocast("cuda", dtype=torch.bfloat16):
-    result = model(input_ids=ids, labels=ids, hard_prob=0.5, hard_seed=123)
+    result = model(input_ids=ids, labels=ids, hard_prob=0.0, hard_seed=123)
 result.loss.backward()
 ```
+
+The current CUDA core is soft-only: hard rows return zero placeholders, not
+hard attention. Hard/mixed CUDA training and uncached hard CUDA evaluation are
+incomplete until the dedicated path is integrated. Cached Torch inference is
+unchanged. See [the module contract](MODULE.md) for compact sequence flags.
 
 Pass the optimizer-step hard_prob schedule externally. One hard_seed is forwarded
 to all layers, which salt it by their layer_idx. Change the base seed per step if

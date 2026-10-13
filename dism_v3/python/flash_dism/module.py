@@ -268,7 +268,12 @@ class DismAttention(nn.Module):
             x = index_first_axis(x.reshape(-1, self.width), indices).unsqueeze(0)
             hard = options['hard']
             if hard is not None:
-                options['hard'] = hard.transpose(1, 2).reshape(-1, self.heads)[indices].T.unsqueeze(0).contiguous()
+                if hard.shape != (batch, self.heads):
+                    raise ValueError("CUDA hard must be bool [B,H], not a token mask")
+                lengths = cu_seqlens[1:] - cu_seqlens[:-1]
+                if not bool((lengths == lengths[0]).all()):
+                    raise NotImplementedError("compact hard rows require equal unpadded training-row lengths")
+                options['hard'] = hard.contiguous()
             direction = options['direction']
             if direction is not None:
                 if direction.shape != (batch, self.heads) or not torch.equal(direction, direction[:1].expand_as(direction)):
@@ -286,7 +291,8 @@ class DismAttention(nn.Module):
         """Default: soft training, hard evaluation; explicit flags override sampling.
 
         direction: bool [B,H] (True selects k-to-qemb, the query-LSE path).
-        hard: bool [B,H,N]. Pass both for reproducible comparisons. A supplied
+        hard: bool [training_rows,H]; CUDA skips hard rows until the dedicated
+        hard path is integrated. Pass both flags for replay. A supplied
         generator must target the same device as x. No stateful annealing here.
         cu_seqlens: int32 packed boundaries, with batch=1 and 256 alignment.
         max_seqlen: optional upper bound for fused convolution launch sizing.
@@ -328,13 +334,13 @@ class DismAttention(nn.Module):
             if not 0.0 <= probability <= 1.0:
                 raise ValueError("hard_prob must be in [0,1]")
             if probability in (0.0, 1.0):
-                hard = torch.full((batch, self.heads, length), bool(probability), device=x.device)
+                hard = torch.full((batch, self.heads), bool(probability), device=x.device)
             else:
                 seed = hard_seed
                 if seed is None:
                     seed = torch.randint(0, torch.iinfo(torch.int64).max, (),
                                          device=x.device, dtype=torch.int64, generator=generator)
-                hard = triton_rand_bool((batch, self.heads, length), probability,
+                hard = triton_rand_bool((batch, self.heads), probability,
                                        device=x.device, seed=seed)
         if direction is None:
             direction = torch.randint(2, (), device=x.device, generator=generator,

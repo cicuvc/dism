@@ -40,18 +40,14 @@ template<bool FP32Output> struct SharedT {
     union Metadata {
         struct Prefetch {
             kt::sv_fl<QROWS> lse;
-            kt::sv<int, QROWS> labels;
-            uint8_t hard[QROWS];
         } prefetch[1];
         struct KeyValue {
             kt::sv_fl<WarpKSize> klse;
-            kt::sv<int, WarpKSize> k_idx;
         } kv[STAGES];
     } metadata;
     // Necessary WG communication only. All128 writers/readers participate.
     struct Mail { float2 value[4][32]; } mail[2];
     bool query_lse;
-    float tau2;
     // Warp-private output-layout staging; no cross-warp communication.
     OutputTile<FP32Output> output[8];
 };

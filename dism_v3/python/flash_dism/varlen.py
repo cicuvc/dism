@@ -54,6 +54,9 @@ def forward_varlen(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,
     repeating the cu_seqlens host synchronization. Returned normalizer is
     [1,H,T]; internal statistics use the same head-major layout.
     fp32_output=True selects the separately compiled FP32 output instance.
+    hard is bool [training_rows,H], with equal-length original training rows
+    covering T. Documents cannot cross those row boundaries. Hard rows return
+    zero output/norm and zero gradients; no hard attention is computed here.
     """
     if q.is_cuda and torch.cuda.is_current_stream_capturing():
         raise RuntimeError('varlen metadata uploads do not support CUDA Graph capture yet')

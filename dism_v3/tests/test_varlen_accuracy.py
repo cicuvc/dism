@@ -35,7 +35,7 @@ def real_case(seed,mode,tau_max):
     qfk,kfq,lk,lq,_,_,ik,iq=EmbInterpFunction.apply(
         q.transpose(1,2).contiguous(),k.transpose(1,2).contiguous(),eq,ek,1.)
     direction=torch.tensor([[False,True,False,True]],device='cuda')
-    hard=torch.rand(1,h,t,device='cuda')<dict(soft=0.,mixed=.5,hard=1.)[mode]
+    hard=torch.rand(1,h,device='cuda')<dict(soft=0.,mixed=.5,hard=1.)[mode]
     tau=torch.full((h,),math.log(64) if tau_max else 2.,device='cuda')
     qv=torch.where(direction[:,None,:,None],q,kfq.transpose(1,2)).contiguous()
     kv=torch.where(direction[:,None,:,None],qfk.transpose(1,2),k).contiguous()
@@ -52,9 +52,11 @@ def packed_oracle(layout,inputs,dout):
             continue
         local=[x[:,start:start+n].double() for x in (qv,kv,sq,sk,lq,lk)]
         args=(*local,iq[:,:,start:start+n],ik[:,:,start:start+n],direction,
-              hard[:,:,start:start+n],v[:,start:start+n].double(),tau.double())
-        ref_output.append(dism_ref(*args))
-        gradients=dism_ref_backward(*args,dout[:,start:start+n].double())
+              torch.zeros_like(iq[:,:,start:start+n],dtype=torch.bool),
+              v[:,start:start+n].double(),tau.double())
+        keep=(~hard)[:,None,:,None]
+        ref_output.append(dism_ref(*args)*keep)
+        gradients=dism_ref_backward(*args,dout[:,start:start+n].double()*keep)
         for key in expected:
             expected[key].append(gradients[key])
     return torch.cat(ref_output,dim=1),{

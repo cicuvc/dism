@@ -11,6 +11,8 @@ __global__ __launch_bounds__(384,1) void varlen_backward_summary_kernel(
         const __grid_constant__ dism_varlen::BackwardArgs packed) {
     const auto& args=packed.common;
     const auto task=dism_varlen::backward_task(packed);
+    // CTA-uniform exit before constructing any barriers or starting a producer.
+    if (args.score.hard[(task.begin / packed.hard_row_tokens) * args.score.heads + task.head]) return;
     extern __shared__ __align__(1024) unsigned char storage[];
     kt::shared_allocator<1024> allocator(reinterpret_cast<int*>(storage));
     int group=kt::warpgroup::groupid(),warp=kt::warpgroup::warpid();

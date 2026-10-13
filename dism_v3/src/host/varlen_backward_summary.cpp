@@ -19,8 +19,8 @@ std::vector<at::Tensor> varlen_backward_summary_cuda(std::vector<at::Tensor> ope
     c10::cuda::CUDAGuard guard(operands[0].device());
     auto options=normalizer.options();
     auto private_options=options.dtype(fp32_output?at::kFloat:at::kBFloat16);
-    auto dv=at::empty({1,layout.tokens,h,DV},private_options);
-    auto dsk=at::empty({1,layout.tokens,h,R},private_options);
+    auto dv=at::zeros({1,layout.tokens,h,DV},private_options);
+    auto dsk=at::zeros({1,layout.tokens,h,R},private_options);
     auto dsq=at::zeros({1,layout.tokens,h,R},options);
     auto a=at::zeros({layout.backward*h},options),b=at::zeros_like(a);
     if (!layout.tokens) return {dv,dsq,dsk,a,b};
@@ -32,12 +32,12 @@ std::vector<at::Tensor> varlen_backward_summary_cuda(std::vector<at::Tensor> ope
     args.summary_a=a.data_ptr<float>(); args.summary_b=b.data_ptr<float>();
 #if DISM_ENABLE_FP32
     if (fp32_output)
-        launch_backward(varlen_backward_summary_address<true>(),args,layout,operands[0].device());
+        launch_backward(varlen_backward_summary_address<true>(),args,layout,operands[0].device(),layout.tokens/operands[9].size(0));
     else
 #else
     TORCH_CHECK(!fp32_output,"FP32 output instances are disabled in this build");
 #endif
-        launch_backward(varlen_backward_summary_address<false>(),args,layout,operands[0].device());
+        launch_backward(varlen_backward_summary_address<false>(),args,layout,operands[0].device(),layout.tokens/operands[9].size(0));
     return {dv,dsq,dsk,a,b};
 }
 

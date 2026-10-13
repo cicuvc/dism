@@ -113,7 +113,7 @@ def make_inputs(n, mode, direction_mode):
     q, k = [(.1 * torch.randn(b, n, h, d, device='cuda')).bfloat16() for _ in range(2)]
     lq, lk = [torch.randn(b, n, h, device='cuda') * .2 + 2 for _ in range(2)]
     iq, ik = [torch.randint(0, 7, (b, h, n), device='cuda', dtype=torch.int32) for _ in range(2)]
-    hard = torch.rand(b, h, n, device='cuda') < {'soft': 0., 'mixed': .5, 'hard': 1.}[mode]
+    hard = torch.rand(b, h, device='cuda') < {'soft': 0., 'mixed': .5, 'hard': 1.}[mode]
     direction = torch.rand(b, h, device='cuda') < .5
     if direction_mode != 'mixed':
         direction.fill_(direction_mode == 'query')
@@ -163,8 +163,8 @@ def summary_oracle(inputs, padded):
     score = torch.einsum('bnhd,bmhd->bhnm', q.double(), k.double())
     bias = torch.where(direction[:, :, None, None],
                        lq.transpose(1, 2)[:, :, :, None], lk.transpose(1, 2)[:, :, None, :])
-    hard_score = torch.where(iq[..., None] == ik[..., None, :], 0., -torch.inf)
-    score = torch.where(hard[..., None], hard_score, score - bias) + tau[None, :, None, None]
+    score = score - bias + tau[None, :, None, None]
+    score.masked_fill_(hard[..., None, None], -torch.inf)
     score *= math.log2(math.e)
     causal = torch.ones(n, n, device='cuda', dtype=torch.bool).tril()
     score.masked_fill_(~causal, -torch.inf)
