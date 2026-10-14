@@ -26,6 +26,8 @@ def category(name,shapes):
         return 'transfers_and_memset'
     if name in ('fwd_short_conv_silu','bwd_short_conv_silu','bwd_mma_gemm'):
         return 'shortconv_projection'
+    if 'causal_conv1d_' in name:
+        return 'FLA_shortconv_without_linear'
     if name in ('_linear_cross_entropy_fwd','_cross_entropy_dlogits','_dhidden_gemm',
                 '_dweight_gemm_accumulate','_mean_loss_reduce'):
         return 'linear_cross_entropy'

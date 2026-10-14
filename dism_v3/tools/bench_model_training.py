@@ -114,6 +114,9 @@ def main():
     ap.add_argument('--eager', action='store_true')
     ap.add_argument('--training-probes', action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument('--hard-mode', choices=['scheduled', 'soft', 'hard'], default='scheduled')
+    ap.add_argument('--conv-impl', choices=['checkpoint', 'linear_fla'], default='checkpoint',
+                    help='explicit scratch-only conversion, including optimizer moments')
+    ap.add_argument('--validate-conv', action='store_true', help='compare both frontends to an FP32 convolution oracle')
     ap.add_argument('--profile', action='store_true')
     ap.add_argument('--nsys', action='store_true', help='one warmed cudaProfilerApi capture with NVTX phases')
     ap.add_argument('--profile-only', action='store_true', help='skip latency/throughput phases after warmup')
@@ -190,6 +193,21 @@ def main():
                              map_location='cpu', weights_only=True)
     if state['model_fingerprint'] != spec.fingerprint():
         raise ValueError('checkpoint model fingerprint mismatch')
+    source_schema = meta['optimizer_schema']
+    source_fingerprint = optimizer_schema_fingerprint(source_schema)
+    if source_fingerprint != meta['optimizer_schema_fingerprint'] or source_fingerprint != state['optimizer_schema_fingerprint']:
+        raise ValueError('checkpoint optimizer schema mismatch')
+    conversion = None
+    validation = None
+    if args.validate_conv:
+        from bench_conv_frontend import validate_convolution
+        validation = validate_convolution(model_state)
+        print('convolution validation', json.dumps(validation), flush=True)
+    expected_schema = source_schema
+    if args.conv_impl == 'linear_fla':
+        from bench_conv_frontend import convert
+        spec, model_state, optim_state, expected_schema, conversion = convert(
+            spec, model_state, optim_state, source_schema)
     if state['grad_scaler'] is not None:
         raise ValueError('benchmark currently requires the BF16/no-scaler baseline')
     batch_keys = ('inputs','targets','cu_seqlens','segment_ids')
@@ -214,8 +232,12 @@ def main():
     optimizer = model.setup_pretraining_optimizer(PretrainOptimizerConfig(
         **{k:u[k] for k in ('unembedding_lr','embedding_lr','matrix_lr','scalar_lr','weight_decay')}))
     fingerprint = optimizer_schema_fingerprint(optimizer_schema(model,optimizer))
-    if fingerprint != meta['optimizer_schema_fingerprint'] or fingerprint != state['optimizer_schema_fingerprint']:
+    if fingerprint != optimizer_schema_fingerprint(expected_schema):
         raise ValueError('optimizer schema mismatch')
+    actual_conv_backends = sorted({m.conv.backend for m in model.modules()
+                                  if type(m).__name__ == 'LinearShortConvSiLU'})
+    if conversion is not None and actual_conv_backends != ['cuda']:
+        raise RuntimeError(f'expected CUDA convolution, got {actual_conv_backends}')
     optimizer.load_state_dict(copy.deepcopy(optim_state))
     if args.training_probes:
         handles, probe_buffer = register_residual_rms_probe(model)
@@ -300,6 +322,8 @@ def main():
                   checkpoint_step=args.step,checkpoint_rng_counter=int(model.rng_counter.item()),
                   checkpoint_hard_probability=float(model.hard_probability.item()),
                   legacy_cuda=legacy_info,
+                  convolution_conversion=conversion, convolution_validation=validation,
+                  convolution_backends=actual_conv_backends,
                   tokens_per_microbatch=tokens,accumulation=accum,document_lengths=lengths,
                   optimizer_groups=[{k:v for k,v in g.items() if k!='params'} for g in optimizer.param_groups],
                   method='Scratch checkpoint model+optimizer replay of resident prefetched batches; '

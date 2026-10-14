@@ -188,6 +188,11 @@ for the optimized implementation and current measurements.
 
 ## 72M full-model training replay
 
+The initial measurements below use the selected checkpoint's default **fused**
+convolution frontend. They do not represent runs configured with `linear_fla`,
+which the user normally uses for training. See the later linear/FLA comparison
+before using the original shortconv bottleneck ranking to prioritize work.
+
 Measured 2026-10-14 on RTX5090/Ultra9 285K, Torch2.13.0+cu130, driver615.71.09.
 GPU power limit was **450W** during all new comparisons (not the historical
 500W operator baseline); no power/clocks/affinity system defaults were changed.
@@ -453,3 +458,110 @@ of `--nsys`. Export Nsight SQLite with `nsys stats` or `nsys export`, then use:
 
 The same analyzer accepts a PyTorch `.trace.json`. Choose fresh output names;
 the original reports above are intentionally retained for inspection.
+
+### Existing linear + FLA frontend comparison
+
+The same72M checkpoint and four resident batches were replayed with the existing
+`conv_impl="linear_fla", conv_backend="cuda"` implementation. This is a scratch
+benchmark conversion, **not a checkpoint migration or training restart**.
+`tools/bench_conv_frontend.py` maps fused `[lag, channel]` filters to FLA
+`[channel, 1, tap]`, reversing the lag axis, and applies the identical permutation
+to Adam first/second moments. Projection weights, tied Q/K aliases, other
+parameters, group ordering/hyperparameters, counters and RNG restore semantics
+are retained. Source model/optimizer fingerprints are checked before conversion;
+the rebuilt optimizer must exactly match the name-mapped schema. Backend fallback
+is rejected. Original checkpoints are never written.
+
+Numerical check: a real first-layer Q convolution from the checkpoint, seeded
+inputs and packed lengths256/512/256, compared both BF16 frontends to an FP32
+linear/depthwise-convolution/SiLU oracle. Fused forward/dX/dW/dConv relative L2
+errors were .350/.425/.423/.343%; linear/FLA errors were .351/.385/.418/.348%,
+with all cosines above .99999. This is an operator diagnostic, not a full-model
+gradient equivalence claim. Whole-model first replay losses were2.80590 fused
+and2.80616 linear/FLA, with gradient norms .2319/.2320. Different intermediate
+rounding can change hard labels; bitwise equality is not expected. All measured
+steps remained finite and all plan handles were released. Three CPU conversion
+tests cover filter orientation, moment/step/group preservation and rejection of
+unsupported conversion inputs. No production kernel or tolerance was changed.
+
+All times below sum four B16/N2048 microbatches; sustained windows are three
+sets of ten optimizer steps, with the same probes and scratch AdamW updates.
+22-worker runs pin workers2–23 and service threads0–1.450W GPU power limit.
+
+| Frontend / planner | Forward, ms | Backward, ms | Optimizer/probes, ms | Sustained step, ms | tokens/s | Peak allocated, GiB |
+|---|---:|---:|---:|---:|---:|---:|
+|Fused /22 pinned, fresh control|311.7|763.2|13.4|1089.5|120303|16.42|
+|Linear/FLA /22 pinned|381.1|562.3|13.3|961.2|136361|17.50|
+|Linear/FLA /16 unbound default|355.5|574.6|13.2|938.2|139700|17.44|
+
+The matched22-worker comparison reduces sustained step time by11.8%, increasing
+throughput13.3%, with about1.08GiB additional peak allocation. Window means span
+1085.9–1092.0ms fused and954.9–968.6ms linear/FLA. The16-worker linear/FLA run spans
+932.0–941.4ms: the earlier affinity choice is not automatically best after
+changing the frontend. Do not change the default worker configuration from this
+limited comparison. Explicit planner waits in the separate diagnostic step were
+.085ms fused22, .086ms linear/FLA22 and3.13ms linear/FLA16. The16-worker CPU planning
+sum remains397.9ms, mostly hidden by forward computation.
+
+To separate frontend gains from the hard-backward change, the same scratch
+linear/FLA conversion was also measured with the SHA-verified old CUDA core and
+current interpolation. With unrestricted service affinity, old-core forward/
+backward/optimizer totals were313.0/607.0/13.2ms and sustained step932.8ms
+(928.4–936.7),140519 tokens/s. With service CPUs0–1, the old core measured934.6ms
+(932.3–936.8). It has no CPU planner, so no worker pool is created. Corresponding
+hybrid values are938.2ms unbound and961.2ms pinned. Thus **linear/FLA's substantial
+frontend improvement must not be attributed to the event backward**: a stable
+end-to-end core-path gain is still not demonstrated, even with the frontend
+normally used for training. The default unbound difference is only0.6%, within
+the observed window/run variability; the pinned hybrid is2.8% slower in this
+control. No production dispatch was reverted or retuned.
+
+The existing linear/FLA path reuses the shared DISM/GDN Q/K projection in hybrid
+layers; the fused path shares weights but repeats projection computation. Thus
+this comparison includes that existing reuse, not just a kernel implementation
+swap. The isolated frontend's memory and intermediate-rounding tradeoffs remain.
+
+The linear/FLA PyTorch trace contains **no** `fwd_short_conv_silu`,
+`bwd_short_conv_silu` or `bwd_mma_gemm` launches. FLA depthwise convolution totals
+17.52ms/step (4.51 forward,13.01 backward); the linear projection GEMMs are counted
+separately, not included in that17.52ms. Non-FFN GEMMs increase from25.96 to51.84ms
+and include more than just these projections. CE remains246.27ms, FFN GEMMs141.02ms,
+GDN recurrence/preparation51.83ms, vocabulary interpolation/glue38.18ms and hard
+event backward13.54ms. The previous271ms fused-shortconv category is no longer
+the dominant training path to optimize.
+
+Forward latency increases despite lower GPU work. The linear/FLA trace has1086
+`aten::_local_scalar_dense` calls and1118 stream synchronizations, versus113 and145
+in the earlier fused trace. The extra973 scalar reads equal
+`7 * (34+30+32+43)` documents. In the installed FLA implementation,
+`prepare_sequence_ids` calls `prepare_position_ids`, whose no-CPU-metadata branch
+uses one `torch.arange(n)` per GPU length scalar. Trace nesting places834 of the
+extra reads inside the six hybrid-layer compiled regions and139 in the outer
+forward scopes, consistent with per-boundary-object sequence-ID construction.
+Reusing packed metadata is therefore a concrete follow-up target; this task does
+not change FLA or production callers. CPU sync durations include queued GPU work
+and are **not** directly recoverable overhead.
+
+PyTorch instrumentation is materially intrusive on this frontend: captured step
+1085.27ms versus unprofiled961.22ms. Its union of GPU kernels/copies/memsets is
+824.77ms with260.50ms of no recorded activity; do not present those gaps as the
+unprofiled idle budget. Use warmed window timing for throughput.
+
+A separate default16-worker Nsight capture is retained as
+`build/model72m_linfla16_stages_20261014.nsys-rep`, with matching SQLite, CSV,
+run JSON/log and `model72m_linfla16_nsys_analysis_20261014.json`. Its instrumented
+step is1046.35ms, GPU activity union815.78ms and no-activity time230.57ms;
+the longest gap is1.20ms, with no long planner-tail bubbles in this capture.
+Planner native-plan/pack wall-time scopes sum422.88ms, mostly overlapping GPU
+work. CE kernels total239.30ms and depthwise convolution17.72ms. Nsight is also
+intrusive here; neither its step duration nor summed idle is the unprofiled
+938.24ms throughput result.
+
+Artifacts: `build/model72m_fused22_control_20261014.json`,
+`build/model72m_linfla{16,22}_20261014.json`,
+`build/model72m_linfla{16,22}_legacy_20261014.json`,
+`build/model72m_linfla22_20261014.trace.json` and
+`build/model72m_linfla22_torch_analysis_20261014.json`, plus matching logs.
+To reproduce, add `--conv-impl linear_fla --validate-conv` to the full-model
+command above. Conversion and numerical diagnostics are recorded in the JSON;
+neither flag changes the production model defaults.

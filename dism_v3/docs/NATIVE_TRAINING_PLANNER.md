@@ -529,6 +529,13 @@ Planner tail waits, padded metadata traffic and the larger convolution/CE
 costs remain visible despite the reduced DISM GPU work. These results supersede
 the earlier statement that full-model throughput had not yet been measured;
 they are bounded resident-batch replay, not live dataloader training throughput.
+Those initial numbers use the fused convolution frontend. The user's usual
+linear/FLA frontend was subsequently compared with explicit in-memory weight
+and Adam-moment layout conversion: default hybrid938.2ms versus old-core932.8ms,
+with current interpolation on both sides. No stable core-path gain is established
+there either. Shortconv is no longer the dominant GPU category; CE, metadata
+traffic and frontend scalar-read synchronization deserve separate attribution.
+See the linear/FLA comparison in the same report for numerical checks and limits.
 
 Validation on RTX5090 (sm120a), conda `blkw`, 2026-10-14:
 
