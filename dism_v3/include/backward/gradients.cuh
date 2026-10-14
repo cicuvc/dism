@@ -16,10 +16,10 @@ __device__ __forceinline__ float sigmoid2(float x) {
     return fmaf(.5f,t,.5f);
 }
 
-template<int Channels, int Output, bool FP32Output>
+template<int Channels, int Output, bool FP32Output, class ScoreArgs, class KernelArgs, class SharedStorage>
 __device__ __forceinline__ void store_key_gradient(
-        const kt::rt_fl<K,Channels>& accum,void* dest,const RecomputeArgs& a,int bh,int k0,
-        const Args& args, Shared& shared) {
+        const kt::rt_fl<K,Channels>& accum,void* dest,const ScoreArgs& a,int bh,int k0,
+        const KernelArgs& args, SharedStorage& shared) {
     if constexpr (!FP32Output) {
         // query_gradient's final consumer rendezvous finished every transpose
         // reader. This warp may now reuse its private slot for output layout.
@@ -55,11 +55,11 @@ __device__ __forceinline__ void store_key_gradient(
     }
 }
 
-template<int Channels, bool PackedLSE=false>
+template<int Channels, bool PackedLSE=false, class ScoreArgs, class KernelArgs, class SharedStorage>
 __device__ __forceinline__ void query_gradient(
         const kt::rt_bf<K,Q>& coefficient,kt::st_bf<128,Channels>& keys,
-        kt::st_bf<K,Q> (&scratch)[8],const RecomputeArgs& a,int bh,int q0,
-        const Args& args, Shared& shared,
+        kt::st_bf<K,Q> (&scratch)[8],const ScoreArgs& a,int bh,int q0,
+        const KernelArgs& args, SharedStorage& shared,
         float* row_lse_dest=nullptr,const float (*row_lse)[Q]=nullptr,
         int packed_lse_offset=0) {
     // Restore logical query columns before the shared transpose. This is the
