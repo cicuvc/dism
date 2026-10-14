@@ -21,7 +21,7 @@ def voc_dism(q,k,sq,sk,v,q_vocab,k_vocab,rtau,*,direction,hard,ctas=0,beta=1.0,h
             raise ValueError('compiled vocabulary entry requires ctas=0')
         from .compiler import voc_forward
         return voc_forward(q,k,sq,sk,v,q_vocab,k_vocab,rtau,
-                            torch.as_tensor(beta,dtype=torch.float32,device=q.device),
+                            beta,
                             direction,hard,None)[0]
     from .emb_kernel import interp_embeddings
     query,key,eq,ek=cu_flash_dism.prepare_embedding(

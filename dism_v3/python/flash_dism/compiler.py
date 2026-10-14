@@ -92,8 +92,7 @@ def _prepare_pack_fake(boundaries, tokens, maximum):
 
 # Version the internal operator identity: saved interpolants changed from
 # BHND to BNHD, so old Inductor disk-cache output contracts must not be reused.
-@torch.library.custom_op('flash_dism::voc_forward_hybrid_v1', mutates_args=())
-def _voc_forward(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.Tensor,
+def _voc_forward_impl(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.Tensor,
                 v: torch.Tensor, eq: torch.Tensor, ek: torch.Tensor, tau: torch.Tensor,
                 beta: torch.Tensor, direction: torch.Tensor, hard: torch.Tensor,
                 boundaries: Optional[torch.Tensor], layout: Optional[torch.Tensor],
@@ -123,6 +122,26 @@ def _voc_forward(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.T
             state['vertical'], state['operands'][12], norm, output, cu.hold_training_plan(ticket)]
 
 
+@torch.library.custom_op('flash_dism::voc_forward_hybrid_v1', mutates_args=())
+def _voc_forward(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.Tensor,
+                 v: torch.Tensor, eq: torch.Tensor, ek: torch.Tensor, tau: torch.Tensor,
+                 beta: torch.Tensor, direction: torch.Tensor, hard: torch.Tensor,
+                 boundaries: Optional[torch.Tensor], layout: Optional[torch.Tensor],
+                 need_backward: bool) -> list[torch.Tensor]:
+    # Compatibility for explicit tensor-beta callers, not the model default.
+    return _voc_forward_impl(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward)
+
+
+@torch.library.custom_op('flash_dism::voc_forward_host_beta_v1', mutates_args=())
+def _voc_forward_host(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.Tensor,
+                      v: torch.Tensor, eq: torch.Tensor, ek: torch.Tensor, tau: torch.Tensor,
+                      beta: float, direction: torch.Tensor, hard: torch.Tensor,
+                      boundaries: Optional[torch.Tensor], layout: Optional[torch.Tensor],
+                      need_backward: bool) -> list[torch.Tensor]:
+    return _voc_forward_impl(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward)
+
+
+@_voc_forward_host.register_fake
 @_voc_forward.register_fake
 def _forward_fake(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundaries, layout, need_backward):
     b, n, h, d = q.shape
@@ -141,8 +160,7 @@ def _forward_fake(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundarie
             torch.empty((1,), dtype=torch.int64, device='cpu')]
 
 
-@torch.library.custom_op('flash_dism::voc_backward_hybrid_v1', mutates_args=())
-def voc_backward(inputs: list[torch.Tensor], saved: list[torch.Tensor],
+def _voc_backward_impl(inputs: list[torch.Tensor], saved: list[torch.Tensor],
                  boundaries: Optional[torch.Tensor], dout: torch.Tensor,
                  layout: Optional[torch.Tensor] = None) -> list[torch.Tensor]:
     q, k, sq, sk, v, eq, ek, tau, beta, direction, hard = inputs
@@ -181,6 +199,25 @@ def voc_backward(inputs: list[torch.Tensor], saved: list[torch.Tensor],
     return [grad.contiguous() for grad in gradients]
 
 
+@torch.library.custom_op('flash_dism::voc_backward_hybrid_v1', mutates_args=())
+def voc_backward(inputs: list[torch.Tensor], saved: list[torch.Tensor],
+                 boundaries: Optional[torch.Tensor], dout: torch.Tensor,
+                 layout: Optional[torch.Tensor] = None) -> list[torch.Tensor]:
+    return _voc_backward_impl(inputs, saved, boundaries, dout, layout)
+
+
+@torch.library.custom_op('flash_dism::voc_backward_host_beta_v1', mutates_args=())
+def _voc_backward_host(inputs: list[torch.Tensor], beta: float, saved: list[torch.Tensor],
+                       boundaries: Optional[torch.Tensor], dout: torch.Tensor,
+                       layout: Optional[torch.Tensor]) -> list[torch.Tensor]:
+    return _voc_backward_impl([*inputs[:8], beta, *inputs[8:]], saved, boundaries, dout, layout)
+
+
+@_voc_backward_host.register_fake
+def _backward_host_fake(inputs, beta, saved, boundaries, dout, layout):
+    return [t.new_empty(t.shape) for t in inputs[:8]]
+
+
 @voc_backward.register_fake
 def _backward_fake(inputs, saved, boundaries, dout, layout=None):
     return [t.new_empty(t.shape) for t in inputs[:8]]
@@ -208,9 +245,31 @@ def _backward(ctx, grads):
 _voc_forward.register_autograd(_backward, setup_context=_setup)
 
 
+def _setup_host(ctx, inputs, output):
+    ctx.beta = inputs[8]  # Immutable forward-time host value, not a live schedule buffer.
+    ctx.packed = inputs[11] is not None
+    ctx.has_layout = inputs[12] is not None
+    ctx.save_for_backward(*inputs[:8], *inputs[9:11], *output,
+                          *([inputs[11]] if ctx.packed else []),
+                          *([inputs[12]] if ctx.has_layout else []))
+    ctx.mark_non_differentiable(*output[1:])
+
+
+def _backward_host(ctx, grads):
+    saved = ctx.saved_tensors
+    gradients = _voc_backward_host(list(saved[:10]), ctx.beta, list(saved[10:22]),
+                                   saved[22] if ctx.packed else None, grads[0],
+                                   saved[22 + int(ctx.packed)] if ctx.has_layout else None)
+    return (*gradients, None, None, None, None, None, None)[:len(ctx.needs_input_grad)]
+
+
+_voc_forward_host.register_autograd(_backward_host, setup_context=_setup_host)
+
+
 def voc_forward(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundaries, layout=None):
     need_backward = torch.is_grad_enabled() and any(x.requires_grad for x in (q,k,sq,sk,v,eq,ek,tau))
-    return _voc_forward(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward)
+    entry = _voc_forward if isinstance(beta, torch.Tensor) else _voc_forward_host
+    return entry(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward)
 
 
 @torch.library.custom_op('flash_dism::core_forward_hybrid_v1', mutates_args=())

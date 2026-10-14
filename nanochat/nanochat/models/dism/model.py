@@ -147,10 +147,8 @@ class DismLM(nn.Module):
         self.register_buffer('training_step', torch.zeros((), dtype=torch.int64))
         self.register_buffer('rng_counter', torch.zeros((), dtype=torch.int64))
         self.register_buffer('hard_probability', torch.zeros((), dtype=torch.float32))
-        # Non-persistent: annealed externally, never part of state_dict/checkpoints.
-        self.register_buffer('vocab_temperature',
-                             torch.tensor(float(getattr(config, 'vocab_temperature', 1.0))),
-                             persistent=False)
+        # Host schedule value, reconstructed from config + restored training step.
+        self.vocab_temperature = float(getattr(config, 'vocab_temperature', 1.0))
 
     def _tie_vocabularies(self):
         first_hybrid=None
@@ -231,14 +229,14 @@ class DismLM(nn.Module):
         self.training_step.zero_()
         self.rng_counter.zero_()
         self.hard_probability.zero_()
-        # Non-persistent buffers are not restored by load_state_dict(assign=True)
-        # after to_empty(); reset the vocabulary temperature to its config value.
+        # Temperature is host-only and absent from state_dict. Initialization
+        # restores its config value; the training loop reapplies the step schedule.
         default_beta = float(getattr(self.config, 'vocab_temperature', 1.0))
-        self.vocab_temperature.fill_(default_beta)
+        self.vocab_temperature = default_beta
         for layer in self.layers:
             attn = layer.attn
             if hasattr(attn, 'vocab_temperature'):
-                attn.vocab_temperature.fill_(default_beta)
+                attn.vocab_temperature = default_beta
         if getattr(self.config, 'value_residual', False):
             gate_bias = float(getattr(self.config, 'value_residual_gate_bias', 2.0))
             for module in self.modules():
@@ -276,7 +274,7 @@ class DismLM(nn.Module):
         # Cosine vocabulary-temperature schedule (start==end keeps it constant).
         beta_start = float(getattr(self.config, 'vocab_temperature_start', 1.0))
         beta_end = float(getattr(self.config, 'vocab_temperature_end', 1.0))
-        self.vocab_temperature.fill_(beta_start + 0.5 * (beta_end - beta_start) * (1.0 - math.cos(math.pi * progress)))
+        self.vocab_temperature = beta_start + 0.5 * (beta_end - beta_start) * (1.0 - math.cos(math.pi * progress))
 
     @torch.no_grad()
     def set_vocab_temperature(self, value):
@@ -284,7 +282,7 @@ class DismLM(nn.Module):
         value = float(value)
         if not math.isfinite(value) or value <= 0:
             raise ValueError('vocab_temperature must be finite and positive')
-        self.vocab_temperature.fill_(value)
+        self.vocab_temperature = value
 
     def get_device(self):
         return self.embedding.weight.device

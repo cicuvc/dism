@@ -150,7 +150,7 @@ def voc_dism_varlen(q,k,sq,sk,v,q_vocab,k_vocab,rtau,cu_seqlens=None,*,direction
             raise ValueError('provide cu_seqlens or layout')
         from .compiler import voc_forward
         return voc_forward(q,k,sq,sk,v,q_vocab,k_vocab,rtau,
-                            torch.as_tensor(beta,dtype=torch.float32,device=q.device),direction,hard,
+                            beta,direction,hard,
                             cu_seqlens,None if layout is None else layout.table.flatten())[0]
     from .emb_kernel import interp_embeddings
     if layout is None:

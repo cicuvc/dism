@@ -161,9 +161,8 @@ class DismAttention(nn.Module):
         self.soft_k_l2_norm = bool(soft_k_l2_norm)
         if not math.isfinite(vocab_temperature) or vocab_temperature <= 0:
             raise ValueError("vocab_temperature must be finite and positive")
-        # Non-persistent: not part of state_dict, so existing checkpoints load.
-        self.register_buffer('vocab_temperature', torch.tensor(float(vocab_temperature)),
-                             persistent=False)
+        # Host schedule value, not a parameter or device buffer.
+        self.vocab_temperature = float(vocab_temperature)
 
         self.width, self.heads = width, heads
         if layer_idx is not None and (isinstance(layer_idx, bool) or not isinstance(layer_idx, int)
