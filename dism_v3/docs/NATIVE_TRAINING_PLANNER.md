@@ -1,8 +1,9 @@
 # Native parallel hard-backward planning
 
-Implemented on 2026-10-14 after prototype commit `38946ce`. This is an explicit
-planning API and a consumer in the diagnostic Triton backward, not a production
-model/autograd dispatch change. The original head-shared tau is unchanged.
+Implemented on 2026-10-14 after prototype commit `38946ce`. The original
+planning API and diagnostics are now also consumed by an explicit eager
+autograd adapter; see [async integration](#eager-asynchronous-training-integration).
+The default model dispatcher and original head-shared tau are unchanged.
 
 ## Selected training integration direction (2026-10-14)
 
@@ -14,9 +15,9 @@ existing path, and document boundaries do not resample the sequence hard flag.
 
 The [hard forward optimization plan](HARD_FORWARD_PLAN.md) retains this O(N^2)
 architecture with thread-owned diagonal segments for summary and an integer
-scan in the existing scan-buffer layout for readout. That specialization is
-planned, not yet implemented, and introduces no dependency on CPU planner
-completion.
+scan in the existing scan-buffer layout for readout. The initial implementation
+uses the existing direct-rolled scan layout for both summary and readout and
+introduces no dependency on CPU planner completion.
 
 Once labels and the invocation's tau/hard metadata are available, enqueue
 D2H and CPU planning alongside the CUDA forward and subsequent GPU work.
@@ -29,9 +30,9 @@ This decision selects the integration architecture, not a measured guarantee
 that all planning/communication is hidden. Remaining integration validation
 must measure per-layer slack, bounded multi-layer worker throughput, pinned
 and device memory lifetimes, checkpoint replay ownership, and backward waits.
-The current commit supplies the planner consumer, kernels, diagnostics and
-tests; it does not yet install a production asynchronous coordinator or change
-model/autograd dispatch, RNG replay, checkpoints or live training.
+The initial planner/kernel commits did not install a coordinator. The explicit
+eager adapter below now validates invocation ownership and backward waits;
+model dispatch, RNG replay, checkpoints and live training remain unchanged.
 
 ## Implementation
 
@@ -466,6 +467,123 @@ labels, the longest observed stream has 964 events/61 chunks: both sides
 need not be constant. Physical chunk counts also include reset boundaries,
 which break the actual recurrence dependency. B/H increase the number of
 streams, while document boundaries limit individual stream lengths.
+
+## Eager asynchronous training integration
+
+`flash_dism.hard_training.AsyncHardPlanner` and the public
+`dism_core(..., hard_planner=planner)` / `voc_dism(..., hard_planner=planner)`
+provide an explicit complete eager training route. Fixed and packed paths use
+the same coordinator and chunk-parallel kernels. The default model/nanochat and
+`compiler.py` custom-op dispatcher remain unchanged and soft-only. This is not
+a claim of end-to-end compiled training integration or speedup.
+
+One planner per device owns a single coordinator thread, the existing bounded
+native worker pool (default 16), and separate D2H/H2D streams. Forward snapshots
+labels, head tau and row/head flags on the producer stream, queues pinned D2H,
+and proceeds with soft CUDA plus integer hard forward. Only the background
+coordinator host-waits the D2H event, prepares the native plan, buckets streams
+and uploads metadata. Backward first queues soft CUDA work, then waits for the
+CPU future and inserts GPU dependencies for both bulk metadata and bucket
+uploads. All vector contributions accumulate in FP32 before the autograd BF16
+boundary. Hard Q/K/LSE/vocabulary derivatives remain actual zero tensors.
+The soft backward retains its original soft-only output/normalizer, not the
+sum with hard output. Tau derivatives come from the event-local analytic terms.
+
+Packed labels are rearranged into original equal-length row/head/token order
+before D2H; planner documents use row-local offsets, while event rows still
+address the original flattened BNHD vectors. Documents never cross training
+rows; empty documents are omitted. Each invocation retains its own pinned
+buffers, GPU plan and upload events, including checkpoint recomputation and
+retained-graph backward. No mutable-label cache or global plan-ID registry is
+used. Source in-place mutation after forward is caught by saved-tensor version
+checks. Cross-stream consumers record metadata allocation lifetimes.
+
+`max_inflight` (default 32) bounds live tickets, including already-prepared
+plans held by graphs. Saturation raises immediately: blocking in forward could
+deadlock before backward releases a slot. This is a count bound, **not a byte
+budget**: C64 repeated-label metadata is large. Size it for live layers and
+microbatches/checkpoint replays, and retain no unnecessary output graphs.
+Dropping a graph before planning completes does not cancel the running job;
+the job retains its slot/buffers until completion. `close()` drains CPU jobs;
+existing tickets remain valid. Exceptions are propagated at backward and the
+coordinator remains usable after a failed invocation. No RNG, checkpoint,
+annealing, optimizer or dataloader state is touched.
+
+Native frontend core, hard-forward, operand/embedding preparation and layout
+construction now release the GIL around ATen/CUDA work, reacquiring it only
+to construct Python return containers. The first integrated memcheck run
+exposed a lock inversion: main thread held the GIL while waiting for the CUDA
+allocator, and the upload thread held the allocator lock while a sanitizer
+callback requested the GIL. GDB stacks are retained in
+`build/hard_training_allocator_deadlock_20261014.log`; that stalled run was
+terminated, not counted as a sanitizer pass. The GIL fix changes no kernel
+math, launch parameters or precision. An eight-live-plan allocation-overlap
+regression covers the concurrent native/frontend path.
+
+The Triton implementations now live in `python/flash_dism/kernels/`; tools
+retain compatibility imports and the independent symbolic fixture. Their math
+and launch settings are unchanged. Nonblocking bucket uploads retain pinned
+sources and add their own event/lifetime dependency. Existing synchronous
+preplanned graph tests remain supported; the **async training adapter rejects
+CUDA Graph capture**, and introduces an explicit graph break under Dynamo.
+Fullgraph/AOT state transport, module/nanochat opt-in, sustained multilayer CPU
+throughput and a byte-bounded memory strategy remain follow-up work.
+
+RTX 5090, B16/H6/N2048/D32/R32/DV64, all hard, tau=.5, C64, 16 workers.
+Q/K width D32 is only used by the skipped soft branch in this handoff fixture;
+these are not full 72M-model step measurements.
+Two measured repetitions after one warmup per condition; synthetic uniform
+512-way random or identical labels. Packed documents are256/512/256/1024 per
+row. Single outstanding invocation; no model/vocabulary/optimizer timing.
+
+| Layout / labels | CPU prepare (ms) | D2H (ms) | H2D window (ms) | Metadata (MB) | Exposed host wait, 0 / 50 ms slack |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fixed / random | 16.99 | .080 | 2.51 | 105.81 | 18.21 / .004 |
+| Fixed / identical | 65.20 | .077 | 11.98 | 533.94 | 73.54 / 24.83 |
+| Packed / random | 15.21 | .077 | 1.86 | 78.55 | 16.19 / .005 |
+| Packed / identical | 55.04 | .079 | 11.69 | 522.52 | 63.06 / 13.28 |
+
+CPU/copy columns use the zero-slack condition. H2D is an event window covering
+bulk plus bucket uploads and intervening host bucketing/launch gaps, **not pure
+PCIe bandwidth**. Exposed host wait measures `future.result()` only; any final
+GPU event dependency is additional. Slack is an artificial host sleep, not
+measured overlap with other model layers. With 50 ms slack random-label full
+backward wall time is1.31/1.27 ms fixed/packed; identical-label wall time remains
+33.08/20.83 ms. Forward host return is approximately .95–1.37 ms. These numbers
+do not establish sustained throughput or hide the padded C64 metadata cost.
+
+Resource inspection of the packaged BF16 kernels reproduces the prior results:
+short widths16/32/64 use56/138/249 registers, summary99, propagation88, all
+without spills. Long C64 readout still uses254 registers and **12 spills**.
+All inspected kernels have zero CALLs and zero shared atomics. No tolerance or
+oracle changes accompany integration. Reports are ignored under
+`build/hard_training_async_final_20261014.{json,log}` and `build/hard_async_cubins/`.
+
+Final selected regression: **317 passed**, including26 integration tests.
+Coverage includes fixed/packed all-soft/all-hard/mixed reference gradients,
+unchanged default compiler custom ops, zero hard vocabulary gradients,
+reentrant/non-reentrant checkpoint replay, retained graphs, source mutation,
+document-row rejection, bounded tickets, early graph discard, injected planner
+failure/recovery, cross-stream backward and multiple live plans. Existing
+gradient/forward acceptance thresholds remain unchanged; this is not a
+universal guarantee of shared-tau sign preservation on trained labels.
+Memcheck:15 integration cases, zero errors. Unfiltered synccheck and racecheck:
+three focused fixed/packed long-stream and cross-stream cases each, zero
+errors/hazards/warnings, no suppressions or ARRIVES exceptions. The latter
+cases select all-hard rows; they do not supersede the known soft-forward
+racecheck limitations documented in SOFT_ONLY_CUDA.md. Logs are
+`build/hard_training_all_final_20261014.log` and
+`build/hard_training_{memcheck,synccheck,racecheck}_final_20261014.log`.
+
+Reproduce the handoff experiment (artificial slack explicitly labelled):
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MAX_JOBS=2 \
+PYTHONPATH=$PWD/dism_v3/python:$PWD/nanochat \
+  /home/cicuvc/miniconda3/envs/blkw/bin/python \
+  dism_v3/tools/bench_hard_training_async.py --repeats 2 \
+  --output dism_v3/build/hard_training_async_new.json
+```
 
 ## Reproduction
 

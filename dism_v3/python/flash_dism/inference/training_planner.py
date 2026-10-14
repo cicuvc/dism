@@ -1,4 +1,4 @@
-"""Explicit CPU hard-backward planning. No model or autograd dispatch changes.
+"""Explicit CPU hard-backward planning, shared by diagnostics and eager training.
 
 Input labels must already be CPU-readable (wait for D2H completion first).
 Native workers plan independent documents/heads, compute tau derivatives and

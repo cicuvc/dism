@@ -119,12 +119,13 @@ def dism_core_varlen(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,
     return _VarlenCore.apply(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,layout,_lse_preabsorbed)
 
 
-def voc_dism_varlen(q,k,sq,sk,v,q_vocab,k_vocab,rtau,cu_seqlens=None,*,direction,hard,layout=None,beta=1.0):
+def voc_dism_varlen(q,k,sq,sk,v,q_vocab,k_vocab,rtau,cu_seqlens=None,*,direction,hard,layout=None,beta=1.0,hard_planner=None):
     """Existing Triton embedding interpolation followed by native varlen core.
 
     Vocabulary activation and sq/sk activation belong to the caller. Direction
     remains [1,H], not one independent direction per document. Hard flags are
-    explicit [1,H,T], as in the current fixed-length v3 API. beta is the
+    [training_rows,H], inherited by documents within each equal-length row.
+    hard_planner opts into complete eager hard/soft execution. beta is the
     vocabulary-softmax temperature (1.0 reproduces the unscaled score).
     """
     from .emb_kernel import interp_embeddings
@@ -144,5 +145,10 @@ def voc_dism_varlen(q,k,sq,sk,v,q_vocab,k_vocab,rtau,cu_seqlens=None,*,direction
     qfk,kfq,lk,lq,ik,iq=interp_embeddings(
         query,key,eq,ek,beta,rtau.detach())
     qv,kv=cu.select_embedding(q,k,qfk,kfq,direction)
+    if hard_planner is not None:
+        from .hard_training import dism_core_hybrid
+        return dism_core_hybrid(qv,kv,sq,sk,v,lq.transpose(1,2),lk.transpose(1,2),iq,ik,
+                                direction,hard,rtau,planner=hard_planner,layout=layout,
+                                _lse_preabsorbed=True)
     return dism_core_varlen(qv,kv,sq,sk,v,lq.transpose(1,2),lk.transpose(1,2),iq,ik,
                            direction,hard,rtau,layout=layout,_lse_preabsorbed=True)

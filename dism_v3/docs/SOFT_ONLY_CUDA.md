@@ -5,7 +5,10 @@ This is an intentionally incomplete split of soft and hard execution: the
 CUDA training core computes soft sequences and skips hard sequences. The
 [dedicated hard forward](HARD_FORWARD_PLAN.md) now has a complete standalone
 summary/chunk/LUT/readout entry, but it is not integrated into this training
-dispatcher. Event-stream hard backward is also not dispatched by this core.
+default dispatcher. Event-stream hard backward is also not dispatched by this
+low-level core. An explicit `hard_planner=AsyncHardPlanner(...)` on public
+`dism_core`/`voc_dism` now adds complete eager hard forward/backward; see
+[async integration](NATIVE_TRAINING_PLANNER.md#eager-asynchronous-training-integration).
 
 ## Breaking interface and output contract
 
@@ -23,7 +26,7 @@ Skipped positions return zero output, zero log2-normalizer and zero vector/LSE
 gradients; they contribute nothing to head-shared dtau. These are placeholders,
 not hard-attention results. Saved forward checkpoints use the existing finite
 LOG_ZERO sentinel; reverse summaries are zero. Hard/mixed CUDA training and
-hard CUDA evaluation are not meaningful until the dedicated path is integrated.
+hard CUDA evaluation through the default soft-only dispatcher are not meaningful.
 The independent hard inference/reference operators are unchanged.
 
 The low-level optional caller-owned vertical buffer is not written for skipped

@@ -133,6 +133,10 @@ static V prepare(const V& x,bool packed,bool absorbed=false) {
 }
 
 static py::tuple core_forward(V raw,std::optional<T> table,int64_t ctas,bool save,bool fp32,bool absorbed) {
+    // Async planner uploads can enter the CUDA allocator concurrently. Never
+    // hold the GIL across ATen/CUDA work: allocator/profiler callbacks may need
+    // it while holding the allocator lock (also exercised by sanitizer).
+    py::gil_scoped_release release;
     at::NoGradGuard no_grad;
     precision(fp32);
     TORCH_CHECK(!table || ctas==0,"ctas is only supported for fixed execution");
@@ -156,6 +160,7 @@ static py::tuple core_forward(V raw,std::optional<T> table,int64_t ctas,bool sav
             x[9],x[10],x[11],x[12],n,ctas,save?std::optional<T>(vertical):std::nullopt,fp32);
     }
     auto lse2=norm.view({b,h,n});
+    py::gil_scoped_acquire acquire;
     py::dict state;
     if (save) {
         state["operands"]=x; state["vertical"]=vertical; state["output"]=out;
@@ -166,6 +171,7 @@ static py::tuple core_forward(V raw,std::optional<T> table,int64_t ctas,bool sav
 
 static py::tuple core_backward(V x,T vertical,T output,T normalizer,T dout,
                               std::optional<T> table,int64_t ctas,bool fp32,bool diagnostics) {
+    py::gil_scoped_release release;
     at::NoGradGuard no_grad;
     precision(fp32);
     TORCH_CHECK(x.size()==13 && x[0].dim()==(table?3:4),"invalid saved operands");
@@ -180,25 +186,30 @@ static py::tuple core_backward(V x,T vertical,T output,T normalizer,T dout,
     V first=table?backend.vb1(x,vertical,input,normalizer,delta,*table,fp32):
         backend.b1(x,vertical,input,normalizer,delta,n,ctas,fp32);
     T boundary=table?backend.vb2(first[3],first[4],*table,h):backend.b2(first[3],first[4]);
-    py::dict details;
-    if (diagnostics) {
-        details["delta"]=delta; details["summary_a"]=first[3]; details["summary_b"]=first[4];
-        details["boundary"]=boundary;
-    }
+    T diagnostic_a=diagnostics?first[3]:T(), diagnostic_b=diagnostics?first[4]:T();
     first[3]=T(); first[4]=T();
     V last=table?backend.vb3(x,vertical,input,normalizer,delta,boundary,*table,fp32):
         backend.b3(x,vertical,input,normalizer,delta,boundary,n,ctas,fp32);
+    auto q_lse=last[2].view({b,h,n}).transpose(1,2);
+    auto k_lse=last[3].view({b,h,n}).transpose(1,2);
+    py::gil_scoped_acquire acquire;
+    py::dict details;
+    if (diagnostics) {
+        details["delta"]=delta; details["summary_a"]=diagnostic_a; details["summary_b"]=diagnostic_b;
+        details["boundary"]=boundary;
+    }
     py::dict gradients;
     gradients["q_vec"]=last[0]; gradients["k_vec"]=last[1]; gradients["rtau"]=last[4];
     gradients["v"]=first[0]; gradients["sq_vec"]=first[1]; gradients["sk_vec"]=first[2];
     // Public gradients are BNH views of native BHN storage. Interpolation
     // transposes them back without copying; do not materialize this view.
-    gradients["q_lse"]=last[2].view({b,h,n}).transpose(1,2);
-    gradients["k_lse"]=last[3].view({b,h,n}).transpose(1,2);
+    gradients["q_lse"]=q_lse;
+    gradients["k_lse"]=k_lse;
     return py::make_tuple(gradients,details);
 }
 
 static py::tuple make_layout(T cu,int64_t total) {
+    py::gil_scoped_release release;
     TORCH_CHECK(cu.dim()==1 && cu.scalar_type()==at::kInt && cu.is_contiguous() && cu.numel()>0,
                 "cu_seqlens must be contiguous int32 [sequences+1]");
     auto cpu=cu.cpu(); const int* offsets=cpu.data_ptr<int>();
@@ -216,6 +227,7 @@ static py::tuple make_layout(T cu,int64_t total) {
         f+=(n?(n-1)/32:0)*n; v+=(n?(n-1)/16:0)*n; r+=(n+31)/32*n;
         lengths.push_back(n);
     }
+    py::gil_scoped_acquire acquire;
     return py::make_tuple(table,lengths,total,total,f,v,r);
 }
 
@@ -243,13 +255,19 @@ void bind_frontend(py::module_& m) {
     });
     m.def("summary_chunk",[](T a,T b,int64_t n){return backends[0].chunk(a,b,n);});
     m.def("hard_summary",[](T q,T k,T hard,std::optional<T> table,int64_t ctas) {
+        py::gil_scoped_release release;
         return backends[0].hard_summary(q,k,hard,table,ctas);
     });
     m.def("hard_chunk",[](T summary,std::optional<T> table,int64_t heads) {
+        py::gil_scoped_release release;
         return backends[0].hard_chunk(summary,table,heads);
     });
-    m.def("hard_log_weights",[](T tau,int64_t n) { return backends[0].hard_log_weights(tau,n); });
+    m.def("hard_log_weights",[](T tau,int64_t n) {
+        py::gil_scoped_release release;
+        return backends[0].hard_log_weights(tau,n);
+    });
     m.def("hard_readout",[](V x,T boundary,T lut,std::optional<T> table,int64_t ctas) {
+        py::gil_scoped_release release;
         TORCH_CHECK(x.size()==6 && x[0].dim()==4 && x[2].dim()==4,"invalid hard readout operands");
         for (const auto& backend:backends)
             if (backend.r==x[0].size(3) && backend.dv==x[2].size(3))
@@ -260,6 +278,7 @@ void bind_frontend(py::module_& m) {
     m.def("core_backward",&core_backward);
     m.def("make_varlen_layout",&make_layout);
     m.def("prepare_operands",[](V x,bool packed,bool absorbed){
+        py::gil_scoped_release release;
         at::NoGradGuard guard;return prepare(x,packed,absorbed);
     },py::arg("operands"),py::arg("packed"),py::arg("absorbed")=false);
     m.def("summary_forward",[](T q,T k,T lq,T lk,T iq,T ik,T direction,T hard,T tau,int64_t ctas) {
@@ -281,6 +300,7 @@ void bind_frontend(py::module_& m) {
             hard.to(at::kByte).contiguous(),direction.to(at::kByte).contiguous(),tau.contiguous(),n,ctas);
     });
     m.def("prepare_embedding",[](T q,T k,T sq,T sk,T v,T eq,T ek,T tau,T direction,T hard,bool materialize) {
+        py::gil_scoped_release release;
         // ATen autograd must stay enabled here: vocabulary casts/expansion and
         // later operand selection are part of the differentiable embedding path.
         TORCH_CHECK(q.dim()==4 && q.is_cuda(),"q must be CUDA [B,N,H,D]");
@@ -311,6 +331,7 @@ void bind_frontend(py::module_& m) {
       py::arg("eq"),py::arg("ek"),py::arg("tau"),py::arg("direction"),py::arg("hard"),
       py::arg("materialize")=true);
     m.def("select_embedding",[](T q,T k,T qfk,T kfq,T direction) {
+        py::gil_scoped_release release;
         auto choose=direction.unsqueeze(1).unsqueeze(-1);
         return Pair{at::where(choose,q,kfq).contiguous(),
                     at::where(choose,qfk,k).contiguous()};
