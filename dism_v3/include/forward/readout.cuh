@@ -60,10 +60,10 @@ __device__ __forceinline__ void readout(
     }
 }
 
-template<bool PackedStatistics=false, bool FP32Output>
-__device__ __forceinline__ void store_output(const ArgsT<FP32Output>& args, const Scheduler::Task& task,
+template<bool PackedStatistics=false, class Args, class Task, class Shared>
+__device__ __forceinline__ void store_output(const Args& args, const Task& task,
         int q_start, kt::rt_fl<16,DIM>& accum, const float (&maximum)[2],
-        const float (&denominator)[2], SharedT<FP32Output>& shared, int64_t statistics_offset=0) {
+        const float (&denominator)[2], Shared& shared, int64_t statistics_offset=0) {
     int lane = kt::warp::laneid();
 #pragma unroll
     for (int r = 0; r < 2; ++r) {

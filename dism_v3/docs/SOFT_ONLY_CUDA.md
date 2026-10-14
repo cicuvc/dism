@@ -3,8 +3,9 @@
 Implemented and measured on 2026-10-14 after planning commit `69eaa5f`.
 This is an intentionally incomplete split of soft and hard execution: the
 CUDA training core computes soft sequences and skips hard sequences. The
-[dedicated hard forward](HARD_FORWARD_PLAN.md) is not implemented, and the
-event-stream hard backward is not dispatched by this core.
+[dedicated hard forward](HARD_FORWARD_PLAN.md) now has a complete standalone
+summary/chunk/LUT/readout entry, but it is not integrated into this training
+dispatcher. Event-stream hard backward is also not dispatched by this core.
 
 ## Breaking interface and output contract
 

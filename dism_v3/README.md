@@ -83,13 +83,19 @@ Q/K use BF16 `[B,N,H,D]`, V uses BF16 `[B,N,H,DV]`, and sq/sk use BF16
 parameters are recommended. `tau` is FP32 `[H]` in natural-log units.
 `direction` is bool `[B,H]` (true selects query-LSE normalization), and `hard`
 is bool `[B,H]`, one flag per training sequence/head. Token-level masks are
-rejected. CUDA currently computes only soft sequences: hard sequences return
+rejected. The default training CUDA entry computes only soft sequences: hard sequences return
 zero output, zero log2-normalizer and zero gradients as explicit placeholders,
 not hard attention. Do not use this intermediate implementation for hard/mixed
 training or hard evaluation until the dedicated hard path is integrated.
 For packed batch-one inputs, hard is `[training_rows,H]`; rows have equal length
 `T/training_rows`, and every document must stay within one original row.
 See [soft-only CUDA measurements and limitations](docs/SOFT_ONLY_CUDA.md).
+
+A complete explicit hard-only forward is available separately as
+`flash_dism.hard_forward.forward_hard(sq, sk, v, idx_q, idx_k, hard, tau)`;
+packed input accepts `layout=VarlenLayout(...)`. It returns output and log2
+normalizer, but has no training autograd/backward registration. See the
+[hard forward contract, validation and timings](docs/HARD_FORWARD_PLAN.md#complete-standalone-hard-forward).
 
 Fixed N must be positive and **256-aligned**. The kernels return BF16 outputs,
 use FP32 accumulation, and replay the forward decisions in backward. Labels
