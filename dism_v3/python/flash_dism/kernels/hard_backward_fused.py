@@ -353,6 +353,8 @@ class CompactFusedHardPrefillBackward(FusedHardPrefillBackward):
             raise ValueError('multi-chunk stream offsets must be strictly increasing')
         result.multi_streams, result.multi_chunks = int(spans.size), int(offsets[-1])
         result.streams = result.single_blocks + result.multi_streams
+        # Shared diagnostics contract with the classic consumer.
+        result.single_count, result.multi_count = result.single_blocks, result.multi_streams
         result.bucket_hosts, result.bucket_devices = [], []
         def upload(array):
             host = torch.from_numpy(np.ascontiguousarray(array))

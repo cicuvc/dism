@@ -83,7 +83,7 @@ def planner_diagnostics(records):
 def planner_nvtx():
     """Extra host timeline labels, only while capturing; no planner math changes."""
     from flash_dism.hard_training import AsyncHardPlanner
-    from flash_dism.inference.training_planner import NativeTrainingPlanner, HostTrainingPlan
+    from flash_dism.inference.training_planner import NativeTrainingPlanner, HostTrainingPlan, HostCompactPlan
     patches=[]
     def wrap(cls,name,label):
         original=getattr(cls,name)
@@ -97,6 +97,7 @@ def planner_nvtx():
     wrap(AsyncHardPlanner,'_prepare','planner/coordinator_D2H_wait_prepare_upload')
     wrap(NativeTrainingPlanner,'prepare','planner/native_plan_pack')
     wrap(HostTrainingPlan,'upload','planner/bulk_H2D')
+    wrap(HostCompactPlan,'upload','planner/compact_bulk_H2D')
     wrap(HardPlanTicket,'backward','planner/wait_and_event_backward')
     try:
         yield
@@ -125,7 +126,7 @@ def main():
     ap.add_argument('--profile-only', action='store_true', help='skip latency/throughput phases after warmup')
     ap.add_argument('--legacy-cuda', type=Path, help='SHA-verified local baseline artifact; compiled benchmark only')
     ap.add_argument('--planner-workers', type=int, default=16, help='process-local planner worker setting')
-    ap.add_argument('--hard-backward-policy', choices=['event','ready','quadratic'], default='event')
+    ap.add_argument('--hard-backward-policy', choices=['event','ready','quadratic'], default='ready')
     ap.add_argument('--planner-cpus', default='', help='one fixed CPU per native worker, e.g. 2-7,8-17')
     ap.add_argument('--service-cpus', default='', help='CPU set for main/autograd/coordinator; benchmark only')
     ap.add_argument('--output', type=Path, required=True)
@@ -290,18 +291,28 @@ def main():
             if measure:
                 events[-1][2].record()
                 host.append((events[-1][0],(time.perf_counter()-t)*1000))
+        from nanochat.document_loss import DocumentLossAccumulator
+        document_step = DocumentLossAccumulator(accum, model.get_device()) if getattr(model, 'document_balanced_loss', False) else None
         for micro in range(accum):
             x,y,bounds,segments = batches[cursor % len(batches)]
             cursor += 1
             t = begin('forward')
             with mark(f'microbatch_{micro}/forward'):
-                loss = fn(x,y,cu_seqlens=bounds,segment_ids=segments,hard_mode=hard_mode)
+                options = {'loss_reduction': 'document_sum'} if document_step is not None else {}
+                result = fn(x,y,cu_seqlens=bounds,segment_ids=segments,hard_mode=hard_mode, **options)
+                if document_step is not None:
+                    loss, count = result
+                    document_step.add(loss, count)
+                else:
+                    loss = result
             end(t)
             t = begin('backward')
             with mark(f'microbatch_{micro}/backward'):
                 (loss/accum).backward()
             end(t)
         t = begin('optimizer_and_probes')
+        if document_step is not None:
+            loss = document_step.finalize(model.parameters())
         with mark('step/gradient_norm'):
             norm = torch.nn.utils.clip_grad_norm_(model.parameters(),float('inf')).item()
         if not math.isfinite(norm):
@@ -319,6 +330,8 @@ def main():
         return value,norm,events,host
 
     report = dict(arguments={k:str(v) if isinstance(v,Path) else v for k,v in vars(args).items()},
+                  loss_normalization=('global_valid_document_mean_v1' if getattr(model, 'document_balanced_loss', False)
+                                      else 'legacy_microbatch_mean'),
                   git_head=command('git','rev-parse','HEAD'),git_status=command('git','status','--short'),
                   gpu_before=gpu_status(),torch=torch.__version__,extension=cu.__file__,
                   extension_sha256=hashlib.sha256(Path(cu.__file__).read_bytes()).hexdigest(),

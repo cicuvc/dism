@@ -611,6 +611,13 @@ grad_accum_steps = total_batch_size // world_tokens_per_fwdbwd
 print0(f"Tokens / micro-batch / rank: {args.device_batch_size} x {args.max_seq_len} = {tokens_per_fwdbwd:,}")
 print0(f"Tokens / micro-batch: {world_tokens_per_fwdbwd:,}")
 print0(f"Total batch size {total_batch_size:,} => gradient accumulation steps: {grad_accum_steps}")
+loss_normalization = ('global_valid_document_mean_v1'
+                      if getattr(orig_model, 'document_balanced_loss', False)
+                      else 'legacy_microbatch_mean')
+print0(f"Loss normalization: {loss_normalization}")
+if resuming and loss_normalization != meta_data.get('loss_normalization', 'legacy_microbatch_mean'):
+    print0('Loss objective changed from the checkpoint run: model/optimizer/RNG/data '
+           'state is restored unchanged; subsequent steps use the normalization above.')
 
 
 def capture_rank_training_state():
@@ -763,6 +770,7 @@ while True:
                 "device_batch_size": args.device_batch_size,
                 "max_seq_len": args.max_seq_len,
                 "total_batch_size": total_batch_size,
+                "loss_normalization": loss_normalization,
                 # JSON-safe cursor for degraded legacy fallback. Exact resume uses
                 # the per-rank binary state, which also contains the token buffer.
                 "dataloader_state_dict": train_loader.fallback_state_dict(),
@@ -790,21 +798,34 @@ while True:
     t0 = time.time()
     if hasattr(orig_model, 'set_training_step'):
         orig_model.set_training_step(step)
+    document_step = None
+    if getattr(orig_model, 'document_balanced_loss', False):
+        from nanochat.document_loss import DocumentLossAccumulator
+        document_step = DocumentLossAccumulator(grad_accum_steps, device)
     for micro_step in range(grad_accum_steps):
         if args.dual_path_loss:
             from nanochat.dual_loss import dual_loss_backward
             alpha = float(orig_model.hard_probability.item())
             train_loss, path_losses = dual_loss_backward(model, orig_model, x, y, cu_seqlens,
-                segment_ids, alpha, grad_accum_steps, scaler)
+                segment_ids, alpha, grad_accum_steps, scaler, document_step=document_step)
         else:
-            loss = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids)
+            if document_step is not None:
+                loss, count = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids,
+                                    loss_reduction='document_sum')
+                document_step.add(loss, count)
+            else:
+                loss = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids)
             train_loss = loss.detach() # for logging
-            loss = loss / grad_accum_steps # each .backward() is a grad sum => normalize loss here
+            # Document loss is a numerator, NOT a local document mean. This
+            # temporary scale is undone in finalize with the global denominator.
+            loss = loss / grad_accum_steps
             if scaler is not None:
                 scaler.scale(loss).backward()
             else:
                 loss.backward()
         x, y, cu_seqlens, segment_ids, dataloader_state_dict = next(train_loader) # prefetch while GPU is busy
+    if document_step is not None:
+        train_loss = document_step.finalize(orig_model.parameters())
     # step the optimizer
     lrm = get_lr_multiplier(step)
     muon_momentum = get_muon_momentum(step)

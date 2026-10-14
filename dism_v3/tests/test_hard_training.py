@@ -53,7 +53,7 @@ def oracle(xs, layout):
 @pytest.mark.parametrize('pattern', ['random', 'repeat'])
 def test_autograd_reference(packed, mode, pattern):
     xs, layout = inputs(packed, mode, pattern)
-    with AsyncHardPlanner(workers=2) as planner:
+    with AsyncHardPlanner(backward_policy='event', workers=2) as planner:
         out = dism_core(*xs, layout=layout, hard_planner=planner)
         do = (torch.randn_like(out)*.2).contiguous()
         active = [xs[i] for i in (0, 1, 2, 3, 4, 5, 6, 11)]
@@ -74,7 +74,7 @@ def test_autograd_reference(packed, mode, pattern):
 def test_submit_snapshot_bound_and_background_wait():
     xs, _ = inputs(mode='hard')
     iq, ik, hard, tau = xs[7], xs[8], xs[10], xs[11]
-    with AsyncHardPlanner(workers=2, max_inflight=1) as planner:
+    with AsyncHardPlanner(backward_policy='event', workers=2, max_inflight=1) as planner:
         gate = threading.Event()
         original = planner.native.prepare
         def delayed(*args, **kwargs):
@@ -109,7 +109,7 @@ def test_submit_snapshot_bound_and_background_wait():
 @pytest.mark.parametrize('reentrant', [True, False])
 def test_checkpoint_and_retained_graph(reentrant):
     xs, layout = inputs(mode='hard')
-    with AsyncHardPlanner(workers=2) as planner:
+    with AsyncHardPlanner(backward_policy='event', workers=2) as planner:
         call = lambda *args: dism_core(*args, hard_planner=planner)
         baseline = call(*xs)
         expected = torch.autograd.grad(baseline.sum(), xs[2], retain_graph=True)[0]
@@ -122,7 +122,7 @@ def test_checkpoint_and_retained_graph(reentrant):
 
 def test_cross_stream_backward_and_early_discard():
     xs, _ = inputs(mode='hard')
-    with AsyncHardPlanner(workers=2) as planner:
+    with AsyncHardPlanner(backward_policy='event', workers=2) as planner:
         forward_stream, backward_stream = torch.cuda.Stream(), torch.cuda.Stream()
         forward_stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(forward_stream):
@@ -139,7 +139,7 @@ def test_cross_stream_backward_and_early_discard():
 
 def test_forward_does_not_wait_for_planner_and_failure_recovers():
     xs, _ = inputs(mode='hard')
-    with AsyncHardPlanner(workers=2) as planner:
+    with AsyncHardPlanner(backward_policy='event', workers=2) as planner:
         gate = threading.Event()
         original = planner.native.prepare
         def delayed(*args, **kwargs):
@@ -161,7 +161,7 @@ def test_forward_does_not_wait_for_planner_and_failure_recovers():
 
 def test_saved_input_mutation_is_rejected():
     xs, _ = inputs(mode='hard')
-    with AsyncHardPlanner(workers=2) as planner:
+    with AsyncHardPlanner(backward_policy='event', workers=2) as planner:
         out = dism_core(*xs, hard_planner=planner)
         xs[7].fill_(5)
         with pytest.raises(RuntimeError, match='modified by an inplace operation'):
@@ -171,7 +171,7 @@ def test_saved_input_mutation_is_rejected():
 def test_packed_document_cannot_cross_training_row():
     xs, _ = inputs(packed=True)
     bad = VarlenLayout.from_cu_seqlens(torch.tensor([0, 768, 1024], dtype=torch.int32), 1024)
-    with AsyncHardPlanner(workers=2) as planner:
+    with AsyncHardPlanner(backward_policy='event', workers=2) as planner:
         with pytest.raises((ValueError, RuntimeError), match='cross'):
             dism_core(*xs, layout=bad, hard_planner=planner)
 
@@ -181,7 +181,7 @@ def test_multiple_live_plans_overlap_native_allocations():
     # allocate checkpoints. Particularly important with sanitizer callbacks:
     # the native entry must release the GIL before taking allocator locks.
     xs, _ = inputs(mode='mixed')
-    with AsyncHardPlanner(workers=2, max_inflight=8) as planner:
+    with AsyncHardPlanner(backward_policy='event', workers=2, max_inflight=8) as planner:
         outputs = [dism_core(*xs, hard_planner=planner) for _ in range(8)]
         sum(x.float().square().mean() for x in outputs).backward()
         assert all(xs[i].grad.isfinite().all() for i in (0, 1, 2, 3, 4, 11))
@@ -191,7 +191,7 @@ def test_multiple_live_plans_overlap_native_allocations():
 def test_vocabulary_hard_zero_gradients(packed):
     xs, layout = inputs(packed, 'hard')
     eq, ek = [(torch.randn(2, 32, 32, device='cuda')*.2).bfloat16().requires_grad_() for _ in range(2)]
-    with AsyncHardPlanner(workers=2) as planner:
+    with AsyncHardPlanner(backward_policy='event', workers=2) as planner:
         out = voc_dism(*xs[:5], eq, ek, xs[-1], direction=xs[9], hard=xs[10],
                        layout=layout, hard_planner=planner)
         grads = torch.autograd.grad(out.sum(), [xs[0], xs[1], eq, ek, xs[2]])
@@ -221,7 +221,7 @@ def test_async_hard_long_stream_safety(packed):
     # Small unfiltered sanitizer target: exercise all three long-stream stages
     # without spending sanitizer time on the independent dense oracle kernels.
     xs, layout = inputs(packed, 'hard', 'repeat')
-    with AsyncHardPlanner(workers=2) as planner:
+    with AsyncHardPlanner(backward_policy='event', workers=2) as planner:
         out = dism_core(*xs, layout=layout, hard_planner=planner)
         out.float().square().sum().backward()
         assert out.isfinite().all()

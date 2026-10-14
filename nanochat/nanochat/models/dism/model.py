@@ -10,19 +10,31 @@ from flash_dism import DismConfig as FlashConfig
 from flash_dism.modeling_dism import DismBlock
 from flash_dism.kernels.conv1d import CausalShortConv1d
 from flash_dism.kernels.linear_rmsnorm_rope import FusedLinearRMSNormRoPE
-from .conv import LinearShortConvSiLU
-from flash_dism.kernels.fused_cross_entropy import fused_cross_entropy, fused_cross_entropy_unreduced
+from .conv import LinearShortConvSiLU, packed_conv_sequence_ids
+from flash_dism.kernels.fused_cross_entropy import fused_cross_entropy_unreduced
+from flash_dism.kernels.fused_ce_chunked import fused_ce_chunked, fused_ce_chunked_sum
+
+
+def packed_document_ce(hidden, weight, targets, cu_seqlens, max_seqlen, softcap,
+                       reduction='mean'):
+    """Targets are already shifted; boundaries define loss documents, not hard rows."""
+    entry = fused_ce_chunked_sum if reduction == 'document_sum' else fused_ce_chunked
+    return entry(hidden, weight.to(torch.bfloat16), targets.reshape(1, -1),
+                 ignore_index=-1, softcap=softcap,
+                 cu_seqlens=cu_seqlens.to(device=hidden.device).contiguous(),
+                 max_seqlen=max_seqlen)
 
 
 @torch.compiler.disable
-def _gdn_value_first(attn, x, cu_seqlens, max_seqlen):
+def _gdn_value_first(attn, x, cu_seqlens, max_seqlen, conv_seq_idx=None):
     """Value vector of the first GDN mixer, reused by later layers (value residual)."""
-    return attn.gdn_v_conv(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen).unflatten(
+    options = {'seq_idx': conv_seq_idx} if getattr(attn.gdn_v_conv, 'supports_seq_idx', False) else {}
+    return attn.gdn_v_conv(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, **options).unflatten(
         -1, (attn.heads, attn.value_dim))
 
 
 def _replace_convs_with_linear_fla(model, backend):
-    """Swap the fused Triton short conv for torch Linear + FLA ShortConvolution."""
+    """Install the checkpoint-compatible linear + depthwise frontend."""
     for parent in model.modules():
         for name, child in list(parent.named_children()):
             if isinstance(child, CausalShortConv1d):
@@ -64,6 +76,7 @@ class DismLM(nn.Module):
     aligned_segment_ends = True
     exact_optimizer_hyperparameters = True
     dynamic_compile = True
+    document_balanced_loss = True
 
     def __init__(self, config, *, attention_type='hybrid'):
         super().__init__()
@@ -346,6 +359,9 @@ class DismLM(nn.Module):
             raise ValueError('CUDA DISM supports only sequence-level hard flags')
         with torch.autocast('cuda', dtype=torch.bfloat16):
             x = self.embedding(input_ids.reshape(1, -1))
+            conv_seq_idx = (packed_conv_sequence_ids(cu_seqlens, batch*length, x.device)
+                            if self.config.conv_impl == 'linear_fla' and self.config.conv_backend == 'cuda'
+                            else None)
             if self.training:
                 # Copy before mutation: saved random identity belongs to this
                 # microbatch, not a mutable counter read during backward.
@@ -358,12 +374,15 @@ class DismLM(nn.Module):
             for i, layer in enumerate(self.layers):
                 if getattr(layer.attn,"is_pure_gdn",False):
                     if self.config.value_residual and v_first is None:
-                        v_first = _gdn_value_first(layer.attn, x, cu_seqlens, self.config.sequence_len)
-                        x=layer(x,cu_seqlens=cu_seqlens,max_seqlen=self.config.sequence_len,use_cache=False)
+                        v_first = _gdn_value_first(layer.attn, x, cu_seqlens, self.config.sequence_len, conv_seq_idx)
+                        x=layer(x,cu_seqlens=cu_seqlens,max_seqlen=self.config.sequence_len,use_cache=False,
+                                conv_seq_idx=conv_seq_idx)
                     elif self.config.value_residual:
-                        x=layer(x,cu_seqlens=cu_seqlens,max_seqlen=self.config.sequence_len,use_cache=False,v_first=v_first)
+                        x=layer(x,cu_seqlens=cu_seqlens,max_seqlen=self.config.sequence_len,use_cache=False,v_first=v_first,
+                                conv_seq_idx=conv_seq_idx)
                     else:
-                        x=layer(x,cu_seqlens=cu_seqlens,max_seqlen=self.config.sequence_len,use_cache=False)
+                        x=layer(x,cu_seqlens=cu_seqlens,max_seqlen=self.config.sequence_len,use_cache=False,
+                                conv_seq_idx=conv_seq_idx)
                     continue
                 if self.training:
                     hard, direction = sample_flags(counter, self.hard_probability,
@@ -386,29 +405,28 @@ class DismLM(nn.Module):
                 if self.config.value_residual:
                     x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
                               hard=hard, direction=direction, use_cache=False, v_first=v_first,
-                              vocab_temperature=self.vocab_temperature)
+                              vocab_temperature=self.vocab_temperature, conv_seq_idx=conv_seq_idx)
                 else:
                     x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
                               hard=hard, direction=direction, use_cache=False,
-                              vocab_temperature=self.vocab_temperature)
+                              vocab_temperature=self.vocab_temperature, conv_seq_idx=conv_seq_idx)
             x = self.norm(x).to(torch.bfloat16)
             if targets is not None and loss_reduction == 'reinforce':
                 # Optionally-sampled DISM path: differentiable mean NLL plus a
                 # detached per-token NLL used as the score-function reward/baseline.
                 with torch.autocast('cuda', enabled=False):
-                    direct = fused_cross_entropy(x, self.lm_head.weight.to(torch.bfloat16),
-                                                 targets.reshape(1, -1), ignore_index=-1,
-                                                 softcap=self.config.softcap)
+                    direct = packed_document_ce(x, self.lm_head.weight, targets,
+                        cu_seqlens, self.config.sequence_len, self.config.softcap)
                     with torch.no_grad():
                         tokens = fused_cross_entropy_unreduced(
                             x, self.lm_head.weight.to(torch.bfloat16), targets.reshape(1, -1),
                             ignore_index=-1, softcap=self.config.softcap).flatten()
                     return direct, tokens
-            if targets is not None and loss_reduction == 'mean':
+            if targets is not None and loss_reduction in ('mean', 'document_sum'):
                 # nanochat targets are ALREADY shifted, unlike HF labels.
                 with torch.autocast('cuda', enabled=False):
-                    return fused_cross_entropy(x, self.lm_head.weight.to(torch.bfloat16), targets.reshape(1, -1),
-                                               ignore_index=-1, softcap=self.config.softcap)
+                    return packed_document_ce(x, self.lm_head.weight, targets,
+                        cu_seqlens, self.config.sequence_len, self.config.softcap, loss_reduction)
             if targets is not None and loss_reduction == 'none' and not torch.is_grad_enabled():
                 # BPB needs unreduced token losses, not document means. The
                 # fused training kernel already computes these without logits.

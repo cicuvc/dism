@@ -85,7 +85,9 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
     ``argmax(softmax(q @ q_vocab.T))``; likewise for ``k``. Returns
     ``{layer_index: {"q": stats, "k": stats}}`` with ``counts`` a CPU list of
     vocab-size selection frequencies plus entropy (normalized), max_share and
-    coverage.
+    coverage. Traversal follows the all-hard model evaluation path, including
+    the first GDN value reused by later value-residual layers. Hard flags refer
+    to the original packed rows, not tokens or document boundaries.
     """
     if not hasattr(model, "layers"):
         return {}
@@ -99,14 +101,29 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
     try:
         with torch.autocast("cuda", dtype=torch.bfloat16):
             hidden = model.embedding(input_ids.reshape(1, -1))
+            conv_seq_idx = None
+            if config.conv_impl == 'linear_fla' and config.conv_backend == 'cuda':
+                from nanochat.models.dism.conv import packed_conv_sequence_ids
+                conv_seq_idx = packed_conv_sequence_ids(cu_seqlens, hidden.shape[1], device)
+            v_first = None
+            value_residual = getattr(config, "value_residual", False)
             for index, layer in enumerate(model.layers):
                 attn = layer.attn
                 if getattr(attn, "is_pure_gdn", False):
-                    hidden = layer(hidden, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, use_cache=False)
+                    if value_residual and v_first is None:
+                        from nanochat.models.dism.model import _gdn_value_first
+                        v_first = _gdn_value_first(attn, hidden, cu_seqlens, max_seqlen, conv_seq_idx)
+                        hidden = layer(hidden, cu_seqlens=cu_seqlens,
+                                       max_seqlen=max_seqlen, use_cache=False, conv_seq_idx=conv_seq_idx)
+                    else:
+                        hidden = layer(hidden, cu_seqlens=cu_seqlens,
+                                       max_seqlen=max_seqlen, use_cache=False,
+                                       v_first=v_first if value_residual else None, conv_seq_idx=conv_seq_idx)
                     continue
                 length = hidden.shape[1]
-                q = attn.q_conv(hidden, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen)
-                k = attn.k_conv(hidden, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen)
+                conv_options = {'seq_idx': conv_seq_idx} if getattr(attn.q_conv, 'supports_seq_idx', False) else {}
+                q = attn.q_conv(hidden, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, **conv_options)
+                k = attn.k_conv(hidden, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, **conv_options)
                 q = q.reshape(1, length, heads, attn.head_dim).float()
                 k = k.reshape(1, length, heads, attn.head_dim).float()
                 if getattr(attn, "vocab_transvq", False):
@@ -148,10 +165,12 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                         "max_share": max_sum / length,
                     }
                 results[index] = stats
-                hard = torch.ones((1, heads, length), dtype=torch.bool, device=device)
+                hard = torch.ones((input_ids.shape[0], heads), dtype=torch.bool, device=device)
                 direction = torch.ones((1, heads), dtype=torch.bool, device=device)
                 hidden = layer(hidden, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen,
-                               hard=hard, direction=direction, use_cache=False)
+                               hard=hard, direction=direction, use_cache=False,
+                               v_first=v_first if value_residual else None,
+                               vocab_temperature=model.vocab_temperature, conv_seq_idx=conv_seq_idx)
     finally:
         model.train(was_training)
     return results

@@ -44,9 +44,10 @@ dtypes (contract, see ``docs/FUSED_CE_TASK.md``):
   partial added into an FP32 buffer is *not* the same as an FP32 GEMM output;
   the FP32 ``logits_dtype`` mode is the way to obtain the unrounded partials.
 
-The loss is returned normalised (document mean, or valid-token mean) and the
-unnormalised numerator plus the matching count are returned alongside it so a
-caller can renormalise across accumulation microbatches and ranks.
+``fused_ce_chunked`` returns a normalized scalar. ``fused_ce_chunked_sum``
+returns a differentiable unnormalized numerator plus a non-differentiable
+count for optimizer-step normalization across microbatches and ranks.
+``fused_ce_chunked_stats`` is the separate forward-only diagnostics interface.
 """
 
 import torch
@@ -664,24 +665,26 @@ class ChunkedCrossEntropyFunction(torch.autograd.Function):
     def forward(
         ctx, hidden_states, weight, labels, ignore_index=-1, softcap=None,
         cu_seqlens=None, max_seqlen=None, chunk_rows=None, logits_dtype=None,
+        normalize=True,
     ):
         state = chunked_ce_forward(
             hidden_states, weight, labels, ignore_index, softcap, cu_seqlens,
-            max_seqlen, chunk_rows, logits_dtype)
+            max_seqlen, chunk_rows, logits_dtype, normalize)
         ctx.save_for_backward(state.dhidden, state.dweight)
         ctx.hidden_dtype = hidden_states.dtype
         ctx.weight_dtype = weight.dtype
         ctx.hidden_shape = hidden_states.shape
-        return state.loss
+        ctx.mark_non_differentiable(state.count)
+        return state.loss, state.count
 
     @staticmethod
     @torch.amp.custom_bwd(device_type="cuda")
-    def backward(ctx, dloss):
+    def backward(ctx, dloss, dcount):
         dhidden, dweight = ctx.saved_tensors
         state = ChunkedCEState(None, None, None, dhidden, dweight, None)
         dhidden_grad, dweight_grad = chunked_ce_backward(
             state, dloss.contiguous(), ctx.hidden_dtype, ctx.weight_dtype)
-        return (dhidden_grad.reshape(ctx.hidden_shape), dweight_grad) + (None,) * 7
+        return (dhidden_grad.reshape(ctx.hidden_shape), dweight_grad) + (None,) * 8
 
 
 def fused_ce_chunked(
@@ -691,4 +694,20 @@ def fused_ce_chunked(
     """Fused linear + CE with optional softcap and ``cu_seqlens`` balancing."""
     return ChunkedCrossEntropyFunction.apply(
         hidden_states, weight, labels, ignore_index, softcap, cu_seqlens,
-        max_seqlen, chunk_rows, logits_dtype)
+        max_seqlen, chunk_rows, logits_dtype, True)[0]
+
+
+def fused_ce_chunked_sum(
+    hidden_states, weight, labels, ignore_index=-1, softcap=None,
+    cu_seqlens=None, max_seqlen=None, chunk_rows=None, logits_dtype=None,
+):
+    """Differentiable numerator and non-differentiable valid count.
+
+    With cu_seqlens: sum of per-document valid-token means and number of
+    nonempty-valid documents. Without: token loss sum and valid-token count.
+    Divide accumulated gradients by the total count over the optimizer step,
+    not by each microbatch's count. Ignored-only/empty documents count as zero.
+    """
+    return ChunkedCrossEntropyFunction.apply(
+        hidden_states, weight, labels, ignore_index, softcap, cu_seqlens,
+        max_seqlen, chunk_rows, logits_dtype, False)

@@ -1,5 +1,182 @@
 # sm120 training performance baseline
 
+## Direct CUDA shortconv and GPU sequence IDs (2026-10-15)
+
+The user stopped the fresh 72M run after logged step484 (no checkpoint yet),
+requested removal of the FLA shortconv wrapper's host metadata construction,
+and then explicitly authorized a fresh restart after validation.
+
+`linear_fla/cuda` already selected Tri Dao's CUDA kernels through FLA. The new
+frontend calls those same CUDA forward/backward kernels directly through local
+functional custom ops. The installed upstream autograd.Function could not be
+traced fullgraph because its custom op mutates a noncontiguous `out=` tensor;
+the local wrapper supplies fake/autograd registrations without modifying FLA,
+causal_conv1d, CUDA kernel math or launch settings. Parameter names, shapes,
+ordering, initialization RNG, tied projection aliases and optimizer schema
+remain unchanged. The historical config name is retained for compatibility.
+
+The model constructs one int32 `[1,T]` document map with GPU searchsorted per
+forward and passes it through every DISM/GDN frontend, including first-layer
+value residual and diagnostic traversal. Right-sided search handles empty
+documents; no stale-pointer cache is used. Hard flags remain packed-row/head
+flags, independent of these convolution document IDs. Standalone convolution
+calls can build their own GPU map when not supplied. This removes the FLA
+per-document GPU-scalar arange loop, not all metadata work: native DISM exact
+layout validation and FLA GDN preparation still have host synchronization.
+
+Validation: **139 tests passed**, covering direct CUDA versus old FLA CUDA
+FP32/BF16 outputs and gradients, exact eager whole-model forward equality,
+document isolation, empty documents, in-place boundary replacement, actual
+fullgraph Inductor output/gradient checks, shared metadata identity across all
+19 convolutions in a four-layer value-residual model, diagnostics and checkpoint
+resume. Compiled shortconv profiling has no `aten::item` or
+`aten::_local_scalar_dense`. Logs: `build/cuda_shortconv_extended_tests.log`.
+The initial unsupported fullgraph attempt is retained in
+`build/cuda_shortconv_tests.log`; it is not counted as passing.
+Focused memcheck, racecheck and synccheck each pass7 tests with zero errors
+and zero racecheck warnings (`build/cuda_shortconv_{memcheck,racecheck,synccheck}.log`).
+These cover the direct convolution and eager metadata, not a new sanitizer
+campaign for the full DISM pipeline; its documented limitations remain.
+The generated arange/searchsorted/sub metadata kernels inspected in the local
+Inductor cache use12 or17 registers, zero shared/local/stack storage, no CALL
+and no LDL/STL instructions (`build/shortconv_sequence_ids_sass.log`).
+The full-model trace contains4 such launches totaling8.77 microseconds per step.
+
+Paired unprofiled 72M replay: checkpoint19074, same four resident saved batches,
+B16/N2048, four accumulation microbatches, true direction, 16 unbound planner
+workers, compact/ready, document-balanced CE, value residual and RMS diagnostics.
+Four warmups, two phase samples, two eight-step throughput windows. Scratch
+optimizer updates only; no checkpoint or dataloader state writes.
+
+| Measurement | Before | Direct CUDA + shared IDs |
+| --- | ---: | ---: |
+| Forward event window mean | 359.31 ms | 274.00 ms |
+| Backward event window mean | 371.39 ms | 376.92 ms |
+| Normalization/optimizer/probes mean | 14.11 ms | 14.17 ms |
+| Sustained step, window1 / window2 | 755.00 / 754.93 ms | 670.08 / 689.07 ms |
+| Sustained mean | 754.97 ms | 679.58 ms |
+| Throughput | 173.6k tokens/s | about192.9k tokens/s |
+
+This is about10.0% lower step time /11.1% higher throughput. The shortened
+forward leaves less planner overlap: diagnostic routes changed20 event/4
+quadratic to16 event/8 quadratic. Whole compiled-model execution is not claimed
+bitwise identical: first replay loss2.75736 versus2.75703, gradient norm.2663
+versus.2667. Primitive convolution outputs and eager whole-model outputs are
+exact; kernel/gradient tolerances have not been relaxed.
+
+The new PyTorch trace records113 scalar reads and145 stream synchronizations,
+versus1086/1118 in the earlier documented FLA-wrapper trace. The old trace is
+historical, not a fresh paired profiler capture. The new instrumented step is
+740.37ms, with591.04ms GPU activity union and149.33ms without recorded GPU
+activity; these are profiling diagnostics, not uninstrumented idle estimates
+or occupancy. Artifacts: `build/conv_metadata_{before,after}.{json,log}`,
+`build/conv_metadata_after.trace.json`, and its `.breakdown.json`.
+The warmed CUDA/NVTX/OSRT Nsight capture is retained as
+`build/conv_metadata_after_nsys2025.nsys-rep` (Nsight2025.5.2, CPU sampling off),
+with its matching JSON/log. The system-default Nsight2023 invocation did not
+produce a capture and is not used as evidence.
+
+## Live-run diagnostic repair (2026-10-15)
+
+The first new 72M/2.5B document-balanced run completed training step0, then
+failed in `probe_qk_vocab_usage`: the optional histogram traversal still passed
+the removed token-level hard mask. The resident-batch benchmark does not exercise
+this histogram callback. No checkpoint was published; its logs and source
+snapshot remain in `dism-fwedu-valres-72m-2500m-docbal-20261015` on the run disk.
+
+The probe now passes `[original_packed_rows,H]` hard flags and propagates the
+first GDN value through subsequent value-residual layers, following model eval
+semantics. It also forwards the model vocabulary temperature. This changes
+diagnostic traversal only, not training kernel math or optimizer state.
+Nine new GPU tests cover fused/linear_fla, value residual on/off, train/eval mode,
+multiple documents per row, and exception restoration. Every layer input/output
+matches real all-hard model evaluation exactly; selection counts, model state,
+RNG and existing gradients are checked. Together with checkpoint resume tests:
+**16 passed** (`build/metrics_probe_regression.log`). No new kernel sanitizer
+campaign was needed for this Python-only diagnostic change.
+
+The user authorized a fresh retry in the independent sibling directory
+`dism-fwedu-valres-72m-2500m-docbal-20261015-r2`; no failed-run state is silently
+resumed, and historical checkpoints remain untouched.
+
+## Default compact/ready/document-balanced integration (2026-10-15)
+
+The production nanochat DISM/SWA adapters now use chunked CE with the actual
+packed document boundaries. `mean` is the local valid-document mean;
+`document_sum` returns a differentiable sum of document means plus a detached
+valid-document count. The base training loop and resident-batch benchmark use
+the latter and normalize across the **whole optimizer step**, including all
+accumulation microbatches and distributed ranks. Empty/ignored-only documents
+are excluded; partially ignored documents divide by their valid-token count.
+Unreduced token-NLL/BPB validation stays unchanged. Targets are not shifted again.
+The separate HF model's loss API is outside this nanochat integration.
+
+The temporary microbatch backward scale is 1/A (A = accumulation steps).
+After all backwards, gradients are SUM-reduced across ranks and multiplied by
+A/global_valid_documents before AMP unscaling and clipping. Each rank then
+holds the same normalized global gradient. This is important because the DISM
+adapter uses ordinary AdamW, which performs no collective reduction itself.
+There is no additional batch prefetch or optimizer/checkpoint-schema migration.
+Logged loss now uses global numerator/count instead of the final microbatch's
+loss. Historical scalar loss values using that older logging rule are not a
+like-for-like comparison. Checkpoints record the normalization convention;
+resuming older token-mean training warns about the intentional objective change.
+
+The hard runtime defaults to compact metadata plus ready selection, retaining
+classic/event comparison switches. The benchmark's NVTX annotations and stream
+counts support both layouts. No CUDA/Triton kernel math or launch configuration
+changes accompany this promotion; earlier numerical/spill limitations remain.
+
+Validation: 64 CE/normalization/async/ready tests plus 18 CE subtests, 21 actual
+model/compiler/resume tests, and 176 extended operator/compact/varlen/registry
+tests passed. A final 15-case CPU normalization suite includes six added explicit
+dual-path cases: **267 distinct regression cases** total. Two-process Gloo
+tests cover unequal rank counts, an empty-valid rank, rank-local unused parameters
+and normalization before clipping. Multi-GPU NCCL performance is not measured on
+the single 5090. All original numerical tolerances remain unchanged.
+Compact async default plus unnormalized CE accumulation smoke passed memcheck,
+synccheck and racecheck: zero errors and zero racecheck warnings. These two
+focused cases do not supersede historical soft-pipeline sanitizer limitations.
+
+Ignored logs: `build/default_training_{initial,integration,extended}_tests.log`,
+`build/default_document_loss_final.log`,
+`build/default_training_defaults_final_tests.log`, and
+`build/default_training_{memcheck,racecheck,synccheck}.log`.
+
+### 72M default-path replay
+
+Checkpoint19074, 72,035,808 parameters, B16/N2048, four accumulation
+microbatches (131072 packed tokens/step), linear_fla,16 unbound planner workers,
+compact + ready, document-balanced chunked CE and fused tanh value residual.
+Four warmup steps, two phase samples, two eight-step throughput windows;
+resident saved batches only, scratch optimizer updates, no checkpoint writes,
+loader advancement or live training restart. Hidden-RMS probes remain enabled.
+
+| Measurement | Result |
+| --- | ---: |
+| Forward event window, mean | 359.03 ms |
+| Backward event window, mean | 371.80 ms |
+| Normalization/optimizer/probes window, mean | 13.87 ms |
+| Phase wall, two steps | 743.37 / 747.60 ms |
+| Sustained wall, two windows | 754.95 / 752.32 ms per step |
+| Sustained throughput | 173616 / 174224 tokens/s |
+| Peak allocated CUDA memory | 18.398 GB |
+
+Diagnostic step:20 event /4 quadratic calls. Prepared plans visible to the
+diagnostic total540.7 MB metadata (not a complete transfer-byte accounting for
+abandoned/unavailable plans). First restored-step global document loss2.75736,
+gradient norm about0.2663. These are finite correctness/throughput observations,
+not a training-convergence result or a controlled speedup against an old loss
+objective. Phase windows include host launch gaps; they are not pure GPU busy time.
+
+The first replay completed timing windows but failed in the final diagnostics:
+the compact consumer lacked classic `single_count`/`multi_count` attributes.
+Those diagnostic aliases and compact-upload NVTX labeling are now supplied,
+and a complete rerun exited successfully. Only the final report is considered
+a completed run: `build/model72m_default_compact_ready_document_final.{json,log}`.
+The existing hidden-RMS-hook Dynamo eight-specialization warning is still present;
+it was not suppressed or counted as fullgraph coverage.
+
 The sections below first preserve the historical single-operator baseline.
 See [full-model training replay](#72m-full-model-training-replay) for the later
 complete hard/soft operator measurement and controlled core-path comparison.

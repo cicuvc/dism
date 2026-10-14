@@ -19,7 +19,7 @@ import cu_flash_dism as cu
 from .hard_forward import forward_hard
 from .inference.training_planner import NativeTrainingPlanner
 from .kernels.hard_backward_scan import HardPrefillBackward
-from .kernels.hard_backward_fused import FusedHardPrefillBackward
+from .kernels.hard_backward_fused import FusedHardPrefillBackward, CompactFusedHardPrefillBackward
 
 
 class _Lease:
@@ -95,10 +95,11 @@ class AsyncHardPlanner:
     CUDA graph capture is intentionally unsupported.
     """
     def __init__(self, *, device='cuda', workers=16, chunk_size=64,
-                 max_inflight=32, mma_precision='bf16', backward_policy='event'):
+                 max_inflight=32, mma_precision='bf16', backward_policy='ready', compact=True):
         if backward_policy not in ('event','ready','quadratic'):
             raise ValueError('backward_policy must be event, ready or quadratic')
         self.backward_policy = backward_policy
+        self.compact = compact
         if chunk_size not in (16, 32, 64) or max_inflight < 1:
             raise ValueError('chunk_size must be 16/32/64 and max_inflight positive')
         if mma_precision not in ('bf16', 'tf32x3'):
@@ -203,17 +204,21 @@ class AsyncHardPlanner:
             start = time.perf_counter()
             labels, hard, tau = hosts
             host = self.native.prepare(labels, tau, hard=hard, documents=documents,
-                                       chunk_size=self.chunk_size)
+                                       chunk_size=self.chunk_size, compact=self.compact)
             if abandoned is not None and abandoned.is_set():
                 return None
             events = tuple(torch.cuda.Event(enable_timing=True) for _ in range(2))
             with torch.cuda.stream(self.h2d_stream):
                 events[0].record()
                 device = host.upload(device=self.device, stream=self.h2d_stream)
-                base = HardPrefillBackward.from_native(device, mma_precision=self.precision)
-                kernel = FusedHardPrefillBackward.from_plan(
-                    base, host.data['offsets'].numpy(), host_lengths=host.data['lengths'].numpy(),
-                    non_blocking=True)
+                if self.compact:
+                    kernel = CompactFusedHardPrefillBackward.from_compact(
+                        device, mma_precision=self.precision, non_blocking=True)
+                else:
+                    base = HardPrefillBackward.from_native(device, mma_precision=self.precision)
+                    kernel = FusedHardPrefillBackward.from_plan(
+                        base, host.data['offsets'].numpy(), host_lengths=host.data['lengths'].numpy(),
+                        non_blocking=True)
                 events[1].record()
             return _Prepared(host, kernel,
                              dict(queue_and_input_ms=(start-submitted)*1000,
@@ -242,7 +247,8 @@ def default_hard_planner(device):
             _runtimes[key] = AsyncHardPlanner(
                 device=device, workers=int(os.environ.get('DISM_PLANNER_WORKERS', '16')),
                 max_inflight=int(os.environ.get('DISM_PLANNER_MAX_INFLIGHT', '32')),
-                backward_policy=os.environ.get('DISM_HARD_BACKWARD', 'event'))
+                backward_policy=os.environ.get('DISM_HARD_BACKWARD', 'ready'),
+                compact=bool(int(os.environ.get('DISM_PLANNER_COMPACT', '1'))))
         return _runtimes[key]
 
 

@@ -1,5 +1,23 @@
 # Native parallel hard-backward planning
 
+## Production default promotion (2026-10-15)
+
+Following the merge below, compact metadata and the `ready` policy are now
+enabled by default in `AsyncHardPlanner` and the lazy production runtime.
+The coordinator passes `compact=True` and builds
+`CompactFusedHardPrefillBackward` on its H2D stream. Its final readiness event
+covers metadata copy, bucket auxiliaries and tau-head construction. The backward
+selector uses event kernels only after that event completes; otherwise it uses
+the existing quadratic fallback. CUDA forward and sequence hard sampling do not
+change. Explicit `compact=False` / `DISM_PLANNER_COMPACT=0` and
+`backward_policy='event'` / `DISM_HARD_BACKWARD=event` retain comparison routes.
+The standalone `NativeTrainingPlanner.prepare` API still defaults to classic
+layout for callers that explicitly consume `HostTrainingPlan.data`.
+
+Nanochat also now uses chunked document-balanced CE, with whole-step/global-rank
+normalization; see [the training contract](../../nanochat/README.md#current-training-defaults-2026-10-15).
+The opt-in wording and timings below describe the earlier merge stage.
+
 ## Merged planner optimization (2026-10-15)
 
 The repaired optimization from `/tmp/dism_planner_opt/planner-opt` is now part

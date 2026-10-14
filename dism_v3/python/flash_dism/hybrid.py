@@ -57,7 +57,7 @@ class DismSwaAttention(DismAttention):
                                      **options).unsqueeze(0)
 
     def _combine_cuda(self, output, x, v, cu_seqlens, max_seqlen, v_first=None,
-                      linear_q=None, linear_k=None):
+                      linear_q=None, linear_k=None, conv_seq_idx=None):
         return output + self._swa_cuda(x, v, cu_seqlens, max_seqlen)
 
     def _combine_torch(self, output, x, cache, previous_extra):

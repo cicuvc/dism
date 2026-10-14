@@ -1,7 +1,10 @@
 # Nonblocking hard backward selection
 
-Opt-in experiment after `fbef43c` (hard quadratic prototype). Production default
-remains the event path until end-to-end measurements justify changing it.
+Initially an opt-in experiment after `fbef43c` (hard quadratic prototype).
+As requested on 2026-10-15, `ready` is now the production default, together with
+compact planner metadata. `DISM_HARD_BACKWARD=event` retains the explicit
+wait-for-plan control, and `DISM_PLANNER_COMPACT=0` selects classic metadata.
+The measurements below predate that default change unless explicitly stated.
 
 Set `DISM_HARD_BACKWARD=ready` before the default planner is first created, or
 use `AsyncHardPlanner(backward_policy='ready')` as the explicit eager override.

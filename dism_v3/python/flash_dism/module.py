@@ -212,7 +212,7 @@ class DismAttention(nn.Module):
         return phase.cos(), phase.sin()
 
     def _combine_cuda(self, output, x, v, cu_seqlens, max_seqlen, v_first=None,
-                      linear_q=None, linear_k=None):
+                      linear_q=None, linear_k=None, conv_seq_idx=None):
         return output
 
     def _activate_readout(self, projected, *, is_key=False):
@@ -295,7 +295,8 @@ class DismAttention(nn.Module):
                 if direction.shape != (batch, self.heads) or not torch.equal(direction, direction[:1].expand_as(direction)):
                     raise ValueError("packed attention_mask path requires the same direction across batch")
                 options['direction'] = direction[:1].contiguous()
-        output = self._forward_cuda(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, v_first=v_first, **options)
+        output = self._forward_cuda(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen,
+                                    v_first=v_first, conv_seq_idx=kwargs.get('conv_seq_idx'), **options)
         if indices is not None:
             from fla.layers.utils import pad_input
             output = pad_input(output.squeeze(0), indices, batch, length)
@@ -303,7 +304,7 @@ class DismAttention(nn.Module):
 
     def _forward_cuda(self, x, hard_prob=None, *, direction=None, hard=None,
                 hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None,
-                v_first=None, vocab_temperature=None):
+                v_first=None, vocab_temperature=None, conv_seq_idx=None):
         """Default: soft training, hard evaluation; explicit flags override sampling.
 
         direction: bool [B,H] (True selects k-to-qemb, the query-LSE path).
@@ -312,6 +313,8 @@ class DismAttention(nn.Module):
         generator must target the same device as x. No stateful annealing here.
         cu_seqlens: int32 packed boundaries, with batch=1 and 256 alignment.
         max_seqlen: optional upper bound for fused convolution launch sizing.
+        conv_seq_idx: optional precomputed int32 [B,N] convolution document IDs,
+        matching cu_seqlens; consumed only by frontends with supports_seq_idx.
         """
         from . import voc_dism, VarlenLayout
 
@@ -363,15 +366,17 @@ class DismAttention(nn.Module):
                                       dtype=torch.int32).bool().expand(batch, self.heads).contiguous()
 
         def project(convolution, channels, linear=None):
+            conv_options = ({'seq_idx': conv_seq_idx}
+                            if getattr(convolution, 'supports_seq_idx', False) else {})
             if linear is not None:
-                values = convolution.depthwise_silu(linear, cu_seqlens=cu_seqlens)
+                values = convolution.depthwise_silu(linear, cu_seqlens=cu_seqlens, **conv_options)
             elif compiling and not getattr(convolution, "bypass_compiled_conv", False):
                 from .compiler import conv_forward
                 dtype = torch.bfloat16 if torch.is_autocast_enabled('cuda') else x.dtype
                 values = conv_forward(x.to(dtype), convolution.weight.to(dtype),
                                       convolution.conv_weight.to(dtype), cu_seqlens, max_seqlen)
             else:
-                values = convolution(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen)
+                values = convolution(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, **conv_options)
             return values.reshape(batch, length, self.heads, channels).contiguous()
 
         # torch Linear + FLA conv: the DISM and GDN branches share the q/k input
@@ -412,7 +417,7 @@ class DismAttention(nn.Module):
             output = voc_dism(q, k, sq, sk, v, eq, ek, tau,
                               direction=direction, hard=hard, layout=layout, beta=beta)
         output = self._combine_cuda(output, x, v, cu_seqlens, max_seqlen, v_first=v_first,
-                                    linear_q=linear_q, linear_k=linear_k)
+                                    linear_q=linear_q, linear_k=linear_k, conv_seq_idx=conv_seq_idx)
         gate = self.g_proj_up(self.g_proj_down(x)).reshape(batch, length, self.heads, self.value_dim)
         if compiling:
             # Let Inductor fuse this expression. FLA's current custom backward

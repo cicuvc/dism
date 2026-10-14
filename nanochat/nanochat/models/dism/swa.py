@@ -2,10 +2,9 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from .model import DismLM
+from .model import DismLM, packed_document_ce
 from flash_dism.hybrid import _compiled_varlen_swa
 from flash_dism.kernels.linear_rmsnorm_rope import FusedLinearRMSNormRoPE
-from flash_dism.kernels.fused_cross_entropy import fused_cross_entropy
 
 
 class SwaBlock(nn.Module):
@@ -85,10 +84,10 @@ class SwaLM(DismLM):
             for layer in self.layers:
                 x = layer(x, cu_seqlens, cos, sin)
             x = self.norm(x).to(torch.bfloat16)
-            if targets is not None and loss_reduction == 'mean':
+            if targets is not None and loss_reduction in ('mean', 'document_sum'):
                 with torch.autocast('cuda', enabled=False):
-                    return fused_cross_entropy(x, self.lm_head.weight.to(torch.bfloat16),
-                                               targets.reshape(1, -1), ignore_index=-1, softcap=c.softcap)
+                    return packed_document_ce(x, self.lm_head.weight, targets,
+                        cu_seqlens, c.sequence_len, c.softcap, loss_reduction)
             logits = self.lm_head(x).float()
             logits = c.softcap * torch.tanh(logits/c.softcap)
             if targets is None:
