@@ -62,8 +62,11 @@ def planner_diagnostics(records):
     original = HardPlanTicket.backward
     def measured(self, *args, **kwargs):
         result = original(self, *args, **kwargs)
-        p = self.future.result()
-        records.append(dict(p.timings, host_wait_ms=self.host_wait_ms,
+        p = self.future.result() if self.future.done() else None
+        if p is None:
+            records.append(dict(route=self.route,host_wait_ms=self.host_wait_ms,plan_unavailable=True))
+            return result
+        records.append(dict(p.timings, route=self.route,host_wait_ms=self.host_wait_ms,
                             native=p.host.timings, statistics=p.host.statistics,
                             single_streams=p.kernel.single_count,
                             multi_streams=p.kernel.multi_count,
@@ -122,6 +125,7 @@ def main():
     ap.add_argument('--profile-only', action='store_true', help='skip latency/throughput phases after warmup')
     ap.add_argument('--legacy-cuda', type=Path, help='SHA-verified local baseline artifact; compiled benchmark only')
     ap.add_argument('--planner-workers', type=int, default=16, help='process-local planner worker setting')
+    ap.add_argument('--hard-backward-policy', choices=['event','ready','quadratic'], default='event')
     ap.add_argument('--planner-cpus', default='', help='one fixed CPU per native worker, e.g. 2-7,8-17')
     ap.add_argument('--service-cpus', default='', help='CPU set for main/autograd/coordinator; benchmark only')
     ap.add_argument('--output', type=Path, required=True)
@@ -141,6 +145,7 @@ def main():
     if args.planner_workers < 1:
         ap.error('planner workers must be positive')
     os.environ['DISM_PLANNER_WORKERS'] = str(args.planner_workers)
+    os.environ['DISM_HARD_BACKWARD'] = args.hard_backward_policy
     allowed=os.sched_getaffinity(0)
     worker_cpus,service_cpus=cpu_list(args.planner_cpus),cpu_list(args.service_cpus)
     if not set(worker_cpus+service_cpus)<=allowed:
@@ -380,8 +385,11 @@ def main():
         step()
     torch.cuda.synchronize()
     for r in records:
-        d2h,h2d=r.pop('events')
-        r.update(d2h_ms=d2h[0].elapsed_time(d2h[1]),h2d_ms=h2d[0].elapsed_time(h2d[1]))
+        events=r.pop('events',None)
+        if events is not None:
+            d2h,h2d=events
+            h2d[1].synchronize()  # diagnostic only, outside timed windows
+            r.update(d2h_ms=d2h[0].elapsed_time(d2h[1]),h2d_ms=h2d[0].elapsed_time(h2d[1]))
     report['planner_diagnostic_step']=records
     save()
     if args.profile:

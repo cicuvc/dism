@@ -38,14 +38,31 @@ class _Prepared:
 
 class HardPlanTicket:
     """Owns this invocation's inputs/metadata, including retained-graph replay."""
-    def __init__(self, future, lease):
+    def __init__(self, future, lease, policy='event', abandoned=None):
         self.future, self._lease = future, lease
         self.host_wait_ms = 0.
+        self.policy = policy
+        self.abandoned = abandoned or threading.Event()
+        self.route = None
 
-    def backward(self, sq, sk, v, dout):
+    def backward(self, sq, sk, v, dout, *, fallback=None):
+        prepared = None
+        if self.policy != 'event':
+            # result() is only inspected after done(): never hide planner errors
+            # behind a fallback. A completed CPU future is not a completed H2D.
+            if self.future.done():
+                prepared = self.future.result()
+            ready = prepared is not None and prepared.h2d_events[1].query()
+            if self.policy == 'quadratic' or not ready:
+                if fallback is None:
+                    raise RuntimeError('nonblocking hard backward requires a fallback')
+                self.abandoned.set()
+                self.route, self.host_wait_ms = 'quadratic', 0.
+                return fallback()
         start = time.perf_counter()
-        prepared = self.future.result()
+        prepared = self.future.result() if prepared is None else prepared
         self.host_wait_ms = (time.perf_counter()-start)*1000
+        self.route = 'event'
         xs = [x.reshape(-1, x.shape[-1]).contiguous() for x in (sq, sk, v, dout)]
         gradients = prepared.kernel.backward(*xs)
         for name, x in zip(('sq_vec', 'sk_vec', 'v'), (sq, sk, v)):
@@ -59,8 +76,10 @@ class HardPlanTicket:
         not an isolated PCIe transfer. host_wait_ms excludes device waits.
         """
         p = self.future.result()
+        if p is None:
+            return dict(route=self.route, host_wait_ms=self.host_wait_ms, abandoned=True)
         p.h2d_events[1].synchronize()
-        return dict(p.timings, host_wait_ms=self.host_wait_ms,
+        return dict(p.timings, route=self.route, host_wait_ms=self.host_wait_ms,
                     d2h_ms=p.d2h_events[0].elapsed_time(p.d2h_events[1]),
                     h2d_ms=p.h2d_events[0].elapsed_time(p.h2d_events[1]),
                     metadata_bytes=p.host.statistics['metadata_bytes'])
@@ -76,7 +95,10 @@ class AsyncHardPlanner:
     CUDA graph capture is intentionally unsupported.
     """
     def __init__(self, *, device='cuda', workers=16, chunk_size=64,
-                 max_inflight=32, mma_precision='bf16'):
+                 max_inflight=32, mma_precision='bf16', backward_policy='event'):
+        if backward_policy not in ('event','ready','quadratic'):
+            raise ValueError('backward_policy must be event, ready or quadratic')
+        self.backward_policy = backward_policy
         if chunk_size not in (16, 32, 64) or max_inflight < 1:
             raise ValueError('chunk_size must be 16/32/64 and max_inflight positive')
         if mma_precision not in ('bf16', 'tf32x3'):
@@ -166,17 +188,24 @@ class AsyncHardPlanner:
                     host.copy_(src, non_blocking=True)
                     src.record_stream(self.d2h_stream)
                 events[1].record()
-            future = self._executor.submit(self._prepare, hosts, documents, events, submitted, lease)
-            return HardPlanTicket(future, lease)
+            abandoned = threading.Event()
+            future = self._executor.submit(self._prepare, hosts, documents, events, submitted, lease, abandoned)
+            return HardPlanTicket(future, lease, self.backward_policy, abandoned)
 
-    def _prepare(self, hosts, documents, d2h_events, submitted, lease):
+    def _prepare(self, hosts, documents, d2h_events, submitted, lease, abandoned=None):
         # The lease is also held by this job if its graph is discarded early.
         with torch.cuda.device(self.device), torch.no_grad():
             d2h_events[1].synchronize()  # background coordinator only
+            # Keep pinned hosts alive through D2H even for abandoned tickets.
+            # Do not Future.cancel(): already-issued copies still own inputs.
+            if abandoned is not None and abandoned.is_set():
+                return None
             start = time.perf_counter()
             labels, hard, tau = hosts
             host = self.native.prepare(labels, tau, hard=hard, documents=documents,
                                        chunk_size=self.chunk_size)
+            if abandoned is not None and abandoned.is_set():
+                return None
             events = tuple(torch.cuda.Event(enable_timing=True) for _ in range(2))
             with torch.cuda.stream(self.h2d_stream):
                 events[0].record()
@@ -212,7 +241,8 @@ def default_hard_planner(device):
         if key not in _runtimes:
             _runtimes[key] = AsyncHardPlanner(
                 device=device, workers=int(os.environ.get('DISM_PLANNER_WORKERS', '16')),
-                max_inflight=int(os.environ.get('DISM_PLANNER_MAX_INFLIGHT', '32')))
+                max_inflight=int(os.environ.get('DISM_PLANNER_MAX_INFLIGHT', '32')),
+                backward_policy=os.environ.get('DISM_HARD_BACKWARD', 'event'))
         return _runtimes[key]
 
 
@@ -271,7 +301,10 @@ class _MixedCore(torch.autograd.Function):
         g, _ = cu.core_backward(saved[:13], saved[13], saved[14], saved[15], dout,
                                 None if ctx.layout is None else ctx.layout.table,
                                 ctx.ctas, False, False)
-        hg = cu.get_training_plan(saved[-1]).backward(*saved[16:19], dout)
+        from .hard_backward import backward_hard_recompute
+        hg = cu.get_training_plan(saved[-1]).backward(*saved[16:19], dout,
+            fallback=lambda: backward_hard_recompute(*saved[16:19],dout,*saved[19:23],
+                                                      layout=ctx.layout,ctas=ctx.ctas))
         for name in ('sq_vec', 'sk_vec', 'v', 'rtau'):
             g[name] = g[name].float()+hg[name]
         return (g['q_vec'], g['k_vec'], g['sq_vec'], g['sk_vec'], g['v'],

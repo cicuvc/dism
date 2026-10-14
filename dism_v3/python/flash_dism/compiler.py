@@ -162,7 +162,12 @@ def voc_backward(inputs: list[torch.Tensor], saved: list[torch.Tensor],
                             layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1]), 0, False, False)
     ticket = cu.get_training_plan(handle)
     if ticket is not None:
-        hg = ticket.backward(sq, sk, v, dout.to(torch.bfloat16).contiguous())
+        from .hard_backward import backward_hard_recompute
+        from .hard_training import layout_from_table
+        do = dout.to(torch.bfloat16).contiguous()
+        hg = ticket.backward(sq, sk, v, do, fallback=lambda: backward_hard_recompute(
+            sq,sk,v,do,iq,ik,hard,tau,layout=layout_from_table(
+                layout.view(-1,7) if layout is not None else _table(boundaries,q.shape[1]),q.shape[1])))
         for name in ('sq_vec', 'sk_vec', 'v', 'rtau'):
             g[name] = g[name].float() + hg[name]
     doq, dok = split_interpolation_gradients(g['q_vec'], g['k_vec'], direction)
@@ -251,7 +256,11 @@ def _core_backward(raw: list[torch.Tensor], saved: list[torch.Tensor], table: Op
                          dout,table,ctas,False,False)
     ticket=cu.get_training_plan(handle)
     if ticket is not None:
-        hg=ticket.backward(raw[2],raw[3],raw[4],dout)
+        from .hard_backward import backward_hard_recompute
+        from .hard_training import layout_from_table
+        hg=ticket.backward(raw[2],raw[3],raw[4],dout,fallback=lambda: backward_hard_recompute(
+            raw[2],raw[3],raw[4],dout,raw[7],raw[8],raw[10],raw[11],
+            layout=layout_from_table(table,raw[0].shape[1]),ctas=ctas))
         for name in ('sq_vec','sk_vec','v','rtau'):
             g[name]=g[name].float()+hg[name]
     return [g[name].to(raw[i].dtype).contiguous() for name,i in

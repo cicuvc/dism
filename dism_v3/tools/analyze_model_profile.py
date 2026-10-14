@@ -29,9 +29,17 @@ def category(name,shapes):
     if 'causal_conv1d_' in name:
         return 'FLA_shortconv_without_linear'
     if name in ('_linear_cross_entropy_fwd','_cross_entropy_dlogits','_dhidden_gemm',
-                '_dweight_gemm_accumulate','_mean_loss_reduce'):
+                '_dweight_gemm_accumulate','_mean_loss_reduce',
+                '_chunk_partial_stats','_chunk_row_stats','_chunk_dlogits',
+                '_accumulate_fp32','_valid_token_count','_token_scale',
+                '_document_valid_counts','_nonzero_count','_document_scale',
+                '_token_nll_sum','_document_nll_mean','_document_mean_sum',
+                '_finalize_loss'):
         return 'linear_cross_entropy'
     if 'dism_r' in name:
+        if any(s in name for s in ('hard_backward_kernel','hard_dlog_weights_kernel',
+                                   'hard_tau_reduce_kernel')):
+            return 'hard_cuda_backward'
         return 'hard_cuda_forward' if 'hard_' in name else 'soft_cuda_core'
     if name in ('_chunk_backward','_chunk_summaries','_summary_scan'):
         return 'hard_event_backward'
@@ -41,10 +49,15 @@ def category(name,shapes):
     if name.startswith(('chunk_','recompute_w_u','prepare_wy','merge_16x16','l2norm_')):
         return 'GDN_recurrence_and_preparation'
     if any(s in name for s in ('cutlass','gemm','splitKreduce')):
+        # The measured 72M model's output vocabulary has 32000 entries.
+        if any(32000 in dim for dim in shapes if isinstance(dim,list)):
+            return 'linear_cross_entropy'
         # 2576 is the real 72M model's FFN intermediate width.
         if any(2576 in dim for dim in shapes if isinstance(dim,list)):
             return 'FFN_GEMMs'
         return 'other_GEMMs_or_shape_unavailable'
+    if any(2576 in dim for dim in shapes if isinstance(dim,list)):
+        return 'FFN_pointwise_and_copies'
     return 'other_pointwise_norm_reductions_optimizer'
 
 
