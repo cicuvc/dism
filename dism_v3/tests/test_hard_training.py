@@ -4,6 +4,7 @@ import threading
 
 import pytest
 import torch
+import cu_flash_dism as cu
 from torch.utils.checkpoint import checkpoint
 
 from flash_dism import dism_core, voc_dism, VarlenLayout
@@ -147,7 +148,7 @@ def test_forward_does_not_wait_for_planner_and_failure_recovers():
         planner.native.prepare = delayed
         try:
             out = dism_core(*xs, hard_planner=planner)
-            assert not out.grad_fn.ticket.future.done()
+            assert not cu.get_training_plan(out.grad_fn.saved_tensors[-1]).future.done()
         finally:
             gate.set()
         with pytest.raises(ValueError, match='injected'):
@@ -199,7 +200,7 @@ def test_vocabulary_hard_zero_gradients(packed):
 
 
 @pytest.mark.parametrize('packed', [False, True])
-def test_default_compiler_custom_op_unchanged(packed):
+def test_default_compiler_custom_op_matches_complete_eager(packed):
     from flash_dism.compiler import voc_forward
     xs, layout = inputs(packed, 'mixed')
     eq, ek = [torch.randn(2, 32, 32, device='cuda').requires_grad_() for _ in range(2)]

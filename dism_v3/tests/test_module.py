@@ -56,7 +56,7 @@ def test_module_gradients(readout, dimension, value, readout_l2_norm):
                           readout_dim=readout, vocab_size=64, readout_l2_norm=readout_l2_norm).cuda()
     x = torch.randn(1, 256, 64, device="cuda", requires_grad=True)
     direction = torch.tensor([[True, False]], device="cuda")
-    hard = torch.rand(1, 2, 256, device="cuda") < .5
+    hard = torch.tensor([[True, False]], device="cuda")
     with torch.autocast("cuda", dtype=torch.bfloat16):
         output, attention, cache = model(x, direction=direction, hard=hard)
     assert attention is None and cache is None
@@ -78,12 +78,12 @@ def test_module_packed_boundaries_and_gradients(readout, dimension, value, reado
                           readout_dim=readout, vocab_size=64, readout_l2_norm=readout_l2_norm).cuda()
     x = torch.randn(1, 768, 64, device="cuda", requires_grad=True)
     direction = torch.tensor([[False, True]], device="cuda")
-    hard = torch.rand(1, 2, 768, device="cuda") < .4
+    hard = torch.tensor([[True, False]], device="cuda")
     boundaries = torch.tensor([0, 256, 256, 768], device="cuda", dtype=torch.int32)
     with torch.autocast("cuda", dtype=torch.bfloat16):
         packed, _, _ = model(x, direction=direction, hard=hard, cu_seqlens=boundaries)
         separate = torch.cat([model(x[:, i:j], direction=direction,
-                                    hard=hard[:, :, i:j])[0] for i, j in ((0, 256), (256, 768))], dim=1)
+                                    hard=hard)[0] for i, j in ((0, 256), (256, 768))], dim=1)
     torch.testing.assert_close(packed, separate, atol=.005, rtol=.02)
     packed.float().square().mean().backward()
     packed_dx = x.grad.clone()
@@ -140,7 +140,7 @@ def test_explicit_hard_seed(packed, tensor_seed, monkeypatch):
                           readout_dim=16, vocab_size=64).cuda()
     x = torch.randn(1, 512, 64, device='cuda')
     seed = torch.tensor(91, device='cuda', dtype=torch.int64) if tensor_seed else 91
-    expected = triton_rand_bool((1, 2, 512), .4, device=x.device, seed=seed)
+    expected = triton_rand_bool((1, 2), .4, device=x.device, seed=seed)
     original = flash_dism.voc_dism
     captured = []
     def capture(*args, **kwargs):

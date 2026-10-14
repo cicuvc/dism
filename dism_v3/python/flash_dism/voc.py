@@ -10,12 +10,19 @@ def voc_dism(q,k,sq,sk,v,q_vocab,k_vocab,rtau,*,direction,hard,ctas=0,beta=1.0,h
     Vocabularies are [H,V,D] or shared [V,D], with caller-owned activation.
     R/D/DV select a compiled configuration automatically.
     Explicit direction [B,H] and hard [B,H] are replayed by forward/backward.
-    Without hard_planner, CUDA computes only soft rows (hard zero placeholders).
-    An explicit AsyncHardPlanner enables complete eager hard/soft training.
+    Hard/soft sequences use their dedicated training paths automatically.
+    An explicit AsyncHardPlanner may override the default per-device runtime.
     beta is the vocabulary-softmax temperature: beta=1 reproduces the unscaled
     ``q_vec @ k_vec - LSE + rtau``; larger beta sharpens the soft match gate
     toward the hard argmax indicator (see docs/SOFT_HARD_RELAXATION.md).
     """
+    if torch.compiler.is_compiling() and hard_planner is None:
+        if ctas:
+            raise ValueError('compiled vocabulary entry requires ctas=0')
+        from .compiler import voc_forward
+        return voc_forward(q,k,sq,sk,v,q_vocab,k_vocab,rtau,
+                            torch.as_tensor(beta,dtype=torch.float32,device=q.device),
+                            direction,hard,None)[0]
     from .emb_kernel import interp_embeddings
     query,key,eq,ek=cu_flash_dism.prepare_embedding(
         q,k,sq,sk,v,q_vocab,k_vocab,rtau,direction,hard)

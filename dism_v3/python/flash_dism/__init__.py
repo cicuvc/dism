@@ -24,8 +24,8 @@ def dism_core(*args, cu_seqlens=None, layout=None, ctas=0, hard_planner=None):
     Supplying cu_seqlens or layout selects packed batch1 execution. All packed
     boundaries (including T) must be multiples of256; no alignment copies.
     ctas is a fixed-path scheduling control, not supported for packed inputs.
-    Pass an explicit AsyncHardPlanner as hard_planner to enable complete eager
-    hard/soft training. Without it, the CUDA core remains soft-only.
+    Complete hard/soft training uses an automatic per-device planner. An explicit
+    AsyncHardPlanner may be supplied as hard_planner to override that runtime.
     """
     if hard_planner is not None:
         from .hard_training import dism_core_hybrid
@@ -46,8 +46,8 @@ def voc_dism(*args, direction, hard, cu_seqlens=None, layout=None, ctas=0, beta=
 
     ``beta`` is the vocabulary-softmax temperature (scalar float or 0-dim tensor);
     ``beta=1.0`` is the original unscaled behavior.
-    hard_planner opts into asynchronous hard backward and dedicated hard forward;
-    the default and compiled module dispatcher remain soft-only.
+    Hard/soft dispatch is automatic, including in the compiled module dispatcher.
+    hard_planner overrides the default per-device asynchronous runtime.
     """
     if cu_seqlens is not None or layout is not None:
         if ctas:

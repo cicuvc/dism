@@ -6,6 +6,7 @@ from pathlib import Path
 import time
 
 import torch
+import cu_flash_dism as cu
 
 from flash_dism import dism_core, VarlenLayout
 from flash_dism.hard_training import AsyncHardPlanner
@@ -62,7 +63,7 @@ def main():
                         start = time.perf_counter()
                         out = dism_core(*vectors, lq, lk, *labels, direction, hard, tau,
                                         layout=layout, hard_planner=planner)
-                        ticket = out.grad_fn.ticket
+                        ticket = cu.get_training_plan(out.grad_fn.saved_tensors[-1])
                         forward_host_ms = (time.perf_counter()-start)*1000
                         time.sleep(slack/1000)  # controlled slack, not measured model computation
                         backward_start = time.perf_counter()

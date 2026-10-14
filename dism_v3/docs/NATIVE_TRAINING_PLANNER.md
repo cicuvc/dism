@@ -468,7 +468,87 @@ need not be constant. Physical chunk counts also include reset boundaries,
 which break the actual recurrence dependency. B/H increase the number of
 streams, while document boundaries limit individual stream lengths.
 
+## Default training operator and module integration
+
+Following the opt-in adapter commit `3b26dbf`, hard/soft dispatch is automatic
+in public `dism_core`, `voc_dism`, `DismAttention` and inherited hybrid modules.
+Soft sequences retain CUDA O(N²) forward/backward. Hard sequences use integer
+CUDA O(N²) forward while CPU planning and metadata upload run asynchronously,
+then chunk-parallel Triton dSQ/dSK/dV/dtau. Sequence-level masks and packed-row
+mapping are unchanged; direction is irrelevant only for hard sequences.
+Native `cu.core_forward`/`core_backward` and low-level `forward_core`/varlen
+helpers remain soft-only components. They are not the public full operator.
+
+The default runtime is created lazily once per process/device, shared across
+layers, and drained at interpreter shutdown. It is not stored on modules and
+adds no parameters, persistent buffers, RNG counters, optimizer entries or
+checkpoint keys. Workers default to16, physical event chunk size64, and live
+plan capacity32. `DISM_PLANNER_WORKERS` and `DISM_PLANNER_MAX_INFLIGHT` may be set
+before the first invocation. Capacity is a ticket count, not a byte budget;
+the C64 padded-metadata cost below still applies. Capacity exhaustion raises
+instead of deadlocking forward. `shutdown_hard_planners()` in `hard_training`
+drains/retires default runtimes; existing graphs retain their own valid plans.
+Normal training requires no manual setup/cleanup or extra forward arguments.
+An explicit `hard_planner=` remains an eager override for controlled experiments.
+
+Eager and AOT paths save a CPU int64[1] opaque handle whose **native tensor
+storage owns the ticket**. Views/detach share ownership; it does not depend on
+Python tensor-wrapper lifetime or a global ID registry. Backward releases it
+with saved tensors, even when callers retain the output/loss; retain_graph
+keeps it intentionally. Dropped graphs, partial failures and checkpoint
+recomputations follow storage ownership. The native accessor verifies the
+DataPtr deleter before accessing its context; cloned/serialized/offloaded
+handles fail explicitly. Hooks which copy all saved tensors are unsupported.
+No raw pointer is encoded in tensor values. During interpreter finalization,
+remaining native handles deliberately avoid calling back into a finalized
+Python runtime; ordinary graph cleanup releases tickets normally.
+
+Core and vocabulary forward/backward custom ops have versioned hybrid names,
+fake tensor contracts and explicit saved-state autograd. They preserve a
+separate soft-only output/normalizer for CUDA backward and merge hard gradients
+before vocabulary gradient assembly/casts. Fullgraph AOT/Inductor works for
+default fixed and packed APIs/modules. No-grad evaluation computes hard/soft
+forward without creating a planner. Packed shape handling, checkpoint RNG
+replay, nanochat's true-direction/sequence-row sampling and GDN graph breaks
+are preserved. CUDA Graph capture of asynchronous training remains unsupported.
+Retained compiled backward uses Torch's `donated_buffer=False` configuration;
+the library does not change this compiler setting globally.
+
+The previous one-layer handoff timings below are not a performance claim for
+the integrated model. In particular, runtime integration does not remove C64
+metadata padding, bound it in bytes, guarantee enough per-layer slack, or make
+CPU throughput sufficient for an arbitrary number of layers/microbatches.
+No live training/checkpoint or dataset state is modified by this integration.
+
+Subsequent checkpoint-based full-model replay is recorded in
+[TRAINING_BENCHMARK.md](TRAINING_BENCHMARK.md#72m-full-model-training-replay).
+At72M/B16/N2048 with four accumulation steps, the default16-worker path took
+about1106–1108ms per step versus1114ms for the old quadratic core with the same
+current interpolation: no substantial end-to-end improvement was established.
+Planner tail waits, padded metadata traffic and the larger convolution/CE
+costs remain visible despite the reduced DISM GPU work. These results supersede
+the earlier statement that full-model throughput had not yet been measured;
+they are bounded resident-batch replay, not live dataloader training throughput.
+
+Validation on RTX5090 (sm120a), conda `blkw`, 2026-10-14:
+
+- 342 operator/model training tests and 109 module/nanochat/resume tests passed.
+  Coverage includes fixed/packed soft/hard/mixed masks, eager and fullgraph
+  AOT/Inductor, checkpoint replay, retained/discarded graphs, handle lifetime,
+  noncontiguous vectors, int64 labels and unchanged module state keys.
+- A seven-case ownership/checkpoint/long-hard-stream subset passed memcheck,
+  synccheck and racecheck separately: zero errors; racecheck also zero warnings.
+  This subset does not reclassify the historical soft-pipeline ARRIVES reports.
+- An expanded CPU/reference decode regression exposed the pre-existing
+  `forward_torch()` unexpected `vocab_temperature` keyword mismatch, also present
+  at `3b26dbf`. It remains unfixed and is outside this CUDA training integration.
+- No device kernel math or launch defaults changed. Previous C64 long-readout
+  spill counts and tau-cancellation limitations still apply; these tests do not
+  establish full-model training throughput or universal dtau sign accuracy.
+
 ## Eager asynchronous training integration
+
+Historical opt-in stage (`3b26dbf`); superseded by the default integration above.
 
 `flash_dism.hard_training.AsyncHardPlanner` and the public
 `dism_core(..., hard_planner=planner)` / `voc_dism(..., hard_planner=planner)`

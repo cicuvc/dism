@@ -70,7 +70,7 @@ eq = (torch.randn(H, V, D, device="cuda") * 0.1).requires_grad_()
 ek = (torch.randn(H, V, D, device="cuda") * 0.1).requires_grad_()
 tau = torch.full((H,), 0.5, device="cuda", requires_grad=True)
 direction = torch.ones(B, H, device="cuda", dtype=torch.bool)
-hard = torch.zeros(B, H, device="cuda", dtype=torch.bool)  # soft-only CUDA
+hard = torch.zeros(B, H, device="cuda", dtype=torch.bool)  # True selects the hard path
 
 out = voc_dism(q, k, sq, sk, v, eq, ek, tau,
                direction=direction, hard=hard)  # [B,N,H,DV]
@@ -83,11 +83,11 @@ Q/K use BF16 `[B,N,H,D]`, V uses BF16 `[B,N,H,DV]`, and sq/sk use BF16
 parameters are recommended. `tau` is FP32 `[H]` in natural-log units.
 `direction` is bool `[B,H]` (true selects query-LSE normalization), and `hard`
 is bool `[B,H]`, one flag per training sequence/head. Token-level masks are
-rejected. The default training CUDA entry computes only soft sequences: hard sequences return
-zero output, zero log2-normalizer and zero gradients as explicit placeholders,
-not hard attention. Do not use this default dispatcher for hard/mixed training
-or hard evaluation. Complete eager training is available through the explicit
-`hard_planner` opt-in below; the default module/compiler dispatcher is unchanged.
+rejected. Public training operators and modules automatically combine soft CUDA
+O(N²) forward/backward with hard integer CUDA O(N²) forward and asynchronous
+CPU-planned, chunk-parallel event backward. No planner argument is required.
+Low-level `forward_core`/`forward_varlen` and their saved-state backward helpers
+remain soft-only building blocks, not the complete training dispatcher.
 For packed batch-one inputs, hard is `[training_rows,H]`; rows have equal length
 `T/training_rows`, and every document must stay within one original row.
 See [soft-only CUDA measurements and limitations](docs/SOFT_ONLY_CUDA.md).
@@ -98,8 +98,11 @@ packed input accepts `layout=VarlenLayout(...)`. It returns output and log2
 normalizer, but has no training autograd/backward registration. See the
 [hard forward contract, validation and timings](docs/HARD_FORWARD_PLAN.md#complete-standalone-hard-forward).
 
-For complete eager hard/soft training, reuse one planner per device outside the
-training loop (no checkpoint/RNG changes):
+The default runtime is lazy and shared per process/device, with no module or
+checkpoint fields. `DismAttention`, the inherited hybrid modules, and default
+`dism_core`/`voc_dism` support eager and fullgraph Inductor training. Existing
+packed compilation still requires dynamic-output-shape capture. Advanced eager
+experiments can override the runtime explicitly:
 
 ```python
 from flash_dism.hard_training import AsyncHardPlanner
@@ -114,8 +117,10 @@ with AsyncHardPlanner(workers=16, chunk_size=64, max_inflight=32) as planner:
 Forward queues label/flag/tau snapshots for D2H, then computes soft CUDA plus
 integer hard CUDA output. A background coordinator performs native CPU planning
 and H2D; backward consumes the plan with chunk-parallel Triton dSQ/dSK/dV/dtau.
-This is an eager opt-in, not yet a `DismAttention`/nanochat or fullgraph/AOT path.
-CUDA Graph capture is rejected. See [async training contracts and measurements](docs/NATIVE_TRAINING_PLANNER.md#eager-asynchronous-training-integration).
+The explicit planner override is eager-only; default compiled operators manage
+their own storage-owned plan handles. CUDA Graph capture of async training is
+rejected. No-grad evaluation computes both forward branches without planning.
+See [complete training contracts](docs/NATIVE_TRAINING_PLANNER.md#default-training-operator-and-module-integration).
 
 Fixed N must be positive and **256-aligned**. The kernels return BF16 outputs,
 use FP32 accumulation, and replay the forward decisions in backward. Labels

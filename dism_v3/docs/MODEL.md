@@ -38,9 +38,10 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
 result.loss.backward()
 ```
 
-The current CUDA core is soft-only: hard rows return zero placeholders, not
-hard attention. Hard/mixed CUDA training and uncached hard CUDA evaluation are
-incomplete until the dedicated path is integrated. Cached Torch inference is
+CUDA training and uncached aligned evaluation now use complete hard/soft
+dispatch automatically. Soft rows use CUDA forward/backward; hard rows use
+integer CUDA forward and asynchronous CPU-planned Triton event backward.
+No-grad evaluation does not plan a backward. Cached Torch inference is
 unchanged. See [the module contract](MODULE.md) for compact sequence flags.
 
 Pass the optimizer-step hard_prob schedule externally. One hard_seed is forwarded

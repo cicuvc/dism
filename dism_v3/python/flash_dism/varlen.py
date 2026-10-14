@@ -110,13 +110,28 @@ class _VarlenCore(torch.autograd.Function):
 def dism_core_varlen(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,
                      cu_seqlens=None,*,layout=None,_lse_preabsorbed=False):
     """Differentiable packed v3 core; first derivatives and runtime R/D/DV dispatch."""
+    if torch.compiler.is_compiling():
+        from .compiler import core_forward, prepare_pack
+        if layout is not None and cu_seqlens is not None:
+            raise ValueError('provide either layout or cu_seqlens, not both')
+        if layout is None:
+            if cu_seqlens is None:
+                raise ValueError('provide cu_seqlens or layout')
+            _, table = prepare_pack(cu_seqlens,q.shape[1],q.shape[1])
+            table = table.view(-1,7)
+        else:
+            table = layout.table
+        return core_forward((q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau),
+                             table=table,absorbed=_lse_preabsorbed)
     if layout is None:
         if cu_seqlens is None:
             raise ValueError('provide cu_seqlens or layout')
         layout=VarlenLayout.from_cu_seqlens(cu_seqlens,q.shape[1])
     elif cu_seqlens is not None:
         raise ValueError('provide either layout or cu_seqlens, not both')
-    return _VarlenCore.apply(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,layout,_lse_preabsorbed)
+    from .hard_training import dism_core_hybrid
+    return dism_core_hybrid(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,
+                            layout=layout,_lse_preabsorbed=_lse_preabsorbed)
 
 
 def voc_dism_varlen(q,k,sq,sk,v,q_vocab,k_vocab,rtau,cu_seqlens=None,*,direction,hard,layout=None,beta=1.0,hard_planner=None):
@@ -125,9 +140,18 @@ def voc_dism_varlen(q,k,sq,sk,v,q_vocab,k_vocab,rtau,cu_seqlens=None,*,direction
     Vocabulary activation and sq/sk activation belong to the caller. Direction
     remains [1,H], not one independent direction per document. Hard flags are
     [training_rows,H], inherited by documents within each equal-length row.
-    hard_planner opts into complete eager hard/soft execution. beta is the
+    hard_planner overrides the automatic eager runtime. beta is the
     vocabulary-softmax temperature (1.0 reproduces the unscaled score).
     """
+    if torch.compiler.is_compiling() and hard_planner is None:
+        if layout is not None and cu_seqlens is not None:
+            raise ValueError('provide either layout or cu_seqlens, not both')
+        if layout is None and cu_seqlens is None:
+            raise ValueError('provide cu_seqlens or layout')
+        from .compiler import voc_forward
+        return voc_forward(q,k,sq,sk,v,q_vocab,k_vocab,rtau,
+                            torch.as_tensor(beta,dtype=torch.float32,device=q.device),direction,hard,
+                            cu_seqlens,None if layout is None else layout.table.flatten())[0]
     from .emb_kernel import interp_embeddings
     if layout is None:
         if cu_seqlens is None:

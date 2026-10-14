@@ -1,5 +1,9 @@
 # sm120 training performance baseline
 
+The sections below first preserve the historical single-operator baseline.
+See [full-model training replay](#72m-full-model-training-replay) for the later
+complete hard/soft operator measurement and controlled core-path comparison.
+
 Measured locally on 2026-10-14, source HEAD `cdbd33c31f9f702d6b6244a253a2e23c10ae0773`.
 This is a **single DISM training operator** benchmark, including vocabulary
 interpolation and its backward. It is not full-model training throughput.
@@ -181,3 +185,271 @@ The production default subsequently changed to atomic split-attention backward
 with autotune. The explicit `--interp-backward baseline` above preserves this
 report's original implementation. See [INTERPOLATION_BACKWARD.md](INTERPOLATION_BACKWARD.md)
 for the optimized implementation and current measurements.
+
+## 72M full-model training replay
+
+Measured 2026-10-14 on RTX5090/Ultra9 285K, Torch2.13.0+cu130, driver615.71.09.
+GPU power limit was **450W** during all new comparisons (not the historical
+500W operator baseline); no power/clocks/affinity system defaults were changed.
+Source is `3b26dbf` plus the working-tree default hybrid integration. The
+benchmark does not modify production kernels, launch defaults or tolerances.
+
+`tools/bench_model_training.py` strictly loads read-only copies of the valres
+checkpoint at19074, including its 72,035,808 parameters, optimizer topology and
+AdamW state, RNG counter76296 and hard probability.95. It replays four real
+checkpoint-owned prefetched batches, each B16/N2048, four microbatches per
+131072-token optimizer step. Document counts are34/30/32/43; their quadratic
+work ratios versus16 full2048-token documents are .76172/.71289/.52930/.40625.
+Direction remains true, with first-half GDN/rear-half GDN+DISM, postnorm and
+value residual unchanged. This is the selected fixed-true baseline, not a
+claim about the random-direction checkpoint or other architectural variants.
+
+Only disposable in-memory model/optimizer copies update. The original RNG,
+weights and optimizer are restored before each measurement phase; counters
+advance normally within a phase, while the final checkpoint annealing values
+stay fixed. No checkpoint is written, dataloader resumed or consumed position
+advanced. Inputs are resident on GPU: data loading, tokenization, W&B, disk IO
+and validation are excluded. Repeated batches intentionally overfit during
+the bounded throughput window; this is not continued training or a convergence
+test. Loss and global gradient norm remain finite, and live plan handles return
+to zero. Outputs, not training artifacts, live under ignored `build/`.
+
+Compilation matches `base_train.py`: dynamic Inductor, duck shapes disabled,
+dynamic output shape capture, GDN graph breaks retained. Three complete warmup
+steps exclude JIT/autotuning. Phase events surround each forward/backward with
+**no intervening synchronization**, preserving overlap; numbers below sum four
+microbatches. Sustained measurements are separate three-window runs of ten
+optimizer steps each, with gradient norm synchronization, AdamW, hidden-RMS and
+update-RMS probes included. Phase events include host launch starvation/waits,
+not just GPU-active kernel time.
+
+### Controlled core-path comparison
+
+The old extension is the already-built local artifact
+`build/lib.linux-x86_64-cpython-312/cu_flash_dism.cpython-312-x86_64-linux-gnu.so`.
+Its SHA256 equals the recorded baseline `e9e7bd68...98a1e` above; the comparison
+helper rejects any other hash. It is explicitly loaded under a separate module
+name, never substituted on PYTHONPATH or copied over the production extension.
+`tools/bench_legacy_training.py` overrides only this benchmark process's
+vocabulary custom-op implementations to use the old full-quadratic CUDA core,
+expanding sequence masks into the legacy input format. Both sides retain
+**current atomic interpolation**, the same surrounding model, temperature
+handling, inputs, checkpoint and optimizer. This isolates core-path changes;
+it is not a reconstruction of every historical training component.
+
+All times milliseconds; forward/backward columns are sums over four microbatches.
+Sustained ranges are the range of ten-step window means, not per-step extremes.
+
+| Path | Forward | Backward | Optimizer/probes | Sustained step | tokens/s |
+|---|---:|---:|---:|---:|---:|
+| Old quadratic CUDA core, current interpolation |285.7|801.8|13.6|1113.5 (1109.0–1119.7)|117707|
+| New hybrid,16 workers |307.4|795.3|13.6|1106.2 (1103.8–1108.7)|118483|
+| New hybrid, independent repeat |303.4|790.2|13.1|1108.5 (1102.3–1112.0)|118247|
+| New hybrid, no hidden/update-RMS probes |299.6|792.2|2.5|1092.7 (1092.2–1093.3)|119952|
+
+**There is no demonstrated substantial end-to-end improvement from the new
+core route at this scale:** the sustained difference is only0.5–0.7%, comparable
+to run variation. The historical last100 training steps averaged1208.7ms
+(108439 tokens/s), but comparing that log to the new1106ms does not isolate this
+change: interpolation, data/probe costs, inputs and GPU power settings differ.
+Peak allocated GPU memory in the phase measurement was16.42GiB hybrid versus
+16.31GiB old core, excluding allocator reservations and pinned host memory.
+
+### Bottleneck attribution
+
+Separate one-step profiler captures provide attribution, **not additive latency
+budgets**: copies and kernels can overlap, and CPU waits include queued GPU work.
+
+- DISM native GPU stages fell from90.7ms (old core) to25.4ms, plus13.6ms for the
+  hard event readout/summarization/passing kernels: about51.7ms less GPU work.
+  The event readout alone is9.3ms, not the complete event backward.
+- At16 workers, the24 plans consumed395–418ms summed CPU wall time per step,
+  with35–47ms exposed `future.result()` wait. In the first measurement,329ms
+  was native planning,79ms packing, and about10ms allocation/release/input work.
+  Waits occur chiefly on the last DISM layer's backward: all six plans were
+  queued FIFO, but backward starts at the last layer. Forward-to-backward slack
+  does not guarantee that every layer's plan is ready.
+- D2H event windows totaled1.9ms. Metadata H2D windows totaled52–60ms including
+  enqueue gaps; the separately profiled H2D device copies totaled41ms. They
+  must not be added to the step time as though all transfers were exposed.
+- Metadata totals1.76GB/step. Only18.1% of padded C64 event slots are occupied,
+  and96.9% of streams fit one chunk. Compact/bucket-sized short-stream storage
+  is a concrete target for reducing packing/PCIe traffic without changing math.
+- Short-convolution/projection kernels total276ms: `bwd_mma_gemm`176ms,
+  `bwd_short_conv_silu`58ms, forward43ms. Code inspection shows the packed grid
+  uses2048 for every document, or2.17 times actual rows on this fixture. The
+  projection backward still iterates channels and issues dweight atomics for
+  fully masked sequence tiles; its dweight atomic mask is only channel-based.
+  The benefit of eliminating these padded tiles is **not yet measured**.
+- Fused vocabulary CE kernels total244ms: forward61ms, dlogits65ms,
+  dhidden79ms, dweight40ms. Their small fixed tiles and long vocabulary loops
+  are a larger remaining GPU target than further event-readout optimization.
+- `float(beta)` in compiled vocabulary backward causes24 scalar-read syncs.
+  Their425.7ms profiler CPU time mostly waits for previously queued GPU work;
+  **it is not425.7ms of recoverable overhead**. Packed-layout and FLA metadata
+  reads create other sync boundaries. Removing/reusing these reads requires a
+  controlled follow-up measurement, not adding their profiler durations.
+- Hidden-RMS hooks hit Dynamo's default8-specialization limit at layer8, so
+  some code falls back to eager. The no-probe control improves only about1.2%
+  here; it is not the dominant source of the795ms backward duration.
+
+The immediate planner priority is metadata footprint and tail scheduling;
+the larger full-model GPU targets are projection/shortconv and CE. No changes
+to those production paths were made in this measurement task. Existing tau
+cancellation/long-stream numerical limitations still apply; no new sanitizer
+or kernel-resource campaign was needed for benchmark-only code.
+
+### CPU utilization and process-local affinity
+
+The285K's PMU topology reports P cores0–7 (`cpu_core/cpus`) and E cores8–23
+(`cpu_atom/cpus`), with no SMT. A12-second `pidstat -t` sample of the unbound
+24-worker run averaged633% process CPU, or6.33 cores out of24. Each planner
+worker averaged21–23%; main/autograd/coordinator averaged43/56/6%. This is
+bursty planner work, not sustained all-core saturation. Native planning/packing
+release the GIL; the worker queue mutex is released before task execution.
+Low average CPU utilization does not exclude a late plan delaying backward.
+
+The benchmark can pin each native worker to one CPU and isolate service threads
+(main/autograd/coordinator) on CPUs0–1. Only this process's threads are affected;
+production defaults and system affinity remain unchanged. Worker TIDs are
+discovered after warming native imports; ambiguous thread discovery fails.
+
+| Configuration | Sustained step, ms | Explicit planner wait, ms/diagnostic step | Worker migrations |
+|---|---:|---:|---:|
+|16 unbound, original/repeat|1106.2 /1108.5|47.2 /35.1|not captured|
+|16 unbound, later control|1122.6|37.7|335|
+|16 pinned2–17, service0–1|1107.8|11.7|0|
+|22 pinned2–23, service0–1|1104.1|0.085|0|
+|24 unbound|1100.8|1.31|not captured|
+
+Affinity runs and the later control use two10-step windows. Migration counters
+cover three phase steps plus20 throughput steps and the intervening restore,
+not just the throughput windows. Pinning eliminates migration, but a large
+stable end-to-end gain is **not established**. Changing worker count and service
+isolation together does not isolate affinity's causal effect. An8-worker
+unbound control was substantially worse:1325.2ms/step and269ms exposed wait.
+
+### Detailed Nsight Systems and PyTorch stage captures
+
+Saved warmed, complete optimizer-step captures (four forward/backward pairs,
+gradient norm, optimizer and probes), using Nsight Systems2025.5.2.266 from
+CUDA13.1. CUDA/NVTX/OSRT tracing works without root; CPU IP/backtrace and context
+switch sampling were disabled because this environment's perf permissions do
+not allow them. Thus these captures do not diagnose CPU cache or branch misses.
+
+Primary artifacts, all retained locally under ignored `build/`:
+
+- `model72m_hybrid16_stages_20261014.nsys-rep`: default16 unbound workers.
+- `model72m_affinity22_stages_20261014.nsys-rep`:22 pinned workers, service0–1.
+- `model72m_affinity22_torch_stages_20261014.trace.json`: PyTorch CPU/CUDA trace,
+  with input shapes and explicit microbatch/stage ranges.
+- Both Nsight reports have matching `.sqlite`, run `.json`/`.log` and exported
+  CUDA kernel/memory/API, NVTX and OSRT CSV tables. The cross-thread analyses are
+  `model72m_{hybrid16,affinity22}_nsys_analysis_20261014.json` and
+  `model72m_affinity22_torch_analysis_20261014.json`.
+
+**Attribution caveat:** built-in NVTX GPU projection is same-thread and misses
+most backward launches from the autograd thread. `tools/analyze_model_profile.py`
+instead maps CUDA correlations to CPU launch timestamps inside the outer
+forward/backward ranges, across threads. It counts only actual kernels/copies/
+memsets, not GPU user annotations. CPU scope duration is not GPU duration:
+gradient-norm CPU scopes span36–45ms waiting for queued backward, while their
+own GPU work is only0.56ms.
+
+The PyTorch capture provides the following mean **GPU kernel duration sums per
+microbatch**, B16/N2048. These are attribution, not additive critical-path time;
+they exclude launch gaps and can overlap other streams. FFN GEMMs are identified
+by the actual2576-wide intermediate tensor shapes, unavailable in Nsight's
+kernel-only summary.
+
+| Component | Forward, ms | Backward, ms |
+|---|---:|---:|
+|Short convolution + projection|10.62|57.23|
+|Linear vocabulary cross entropy|15.19|44.65|
+|FFN GEMMs|12.21|23.06|
+|GDN recurrence/preparation|4.43|8.52|
+|Vocabulary interpolation/glue|2.08|7.54|
+|Soft CUDA core|0.82|3.60|
+|Hard CUDA forward|1.90|—|
+|Hard event backward|—|3.39|
+|Other GEMMs|1.90|4.59|
+|Other pointwise/norm/reductions|15.38|33.32|
+|Total kernel duration|64.51|185.90|
+
+Mean first-to-last-kernel spans are84.49ms forward and187.72ms backward;
+the profiled whole optimizer step is1112.85ms. Use the unprofiled windows above
+for throughput, not this one-step instrumented measurement. Shortconv/projection
+and CE together account for510.8ms of kernel work per optimizer step; complete
+hard event backward accounts for13.6ms. Other pointwise work is also material:
+FP32 add37.7ms, BF16 cast19.7ms, direct copy19.0ms and fused SwiGLU backward17.3ms
+per step. These categories include work outside the DISM core.
+
+Nsight corroborates both the GPU ranking and exposed planner tail:
+
+| Capture | Step scope, ms | GPU activity union, ms | No recorded GPU activity, ms | Longest gap, ms |
+|---|---:|---:|---:|---:|
+|16 unbound|1148.41|1010.18|138.23|17.43|
+|22 pinned + service isolation|1140.02|1033.34|106.69|1.63|
+
+GPU activity union merges kernels, copies and memsets across streams; it is
+**not SM occupancy**. The default capture has gaps at step offsets138.44,
+419.71 and703.43ms lasting17.00,17.43 and9.71ms. Each overlaps
+`planner/wait_and_event_backward` and `planner/native_plan_pack`; GPU activity
+resumes as the coordinator finishes packing and starts H2D. These are directly
+observed planner-tail bubbles, totaling44.14ms. They disappear in the22-worker
+capture, but many small launch/synchronization gaps remain. The two captures'
+GPU active times differ too; do not interpret their step-time difference as an
+isolated affinity speedup. Across these captures, actual D2H copies total1.91–
+1.94ms/step and H2D copies43.63–51.83ms/step, mostly overlapping computation.
+The `planner/bulk_H2D` NVTX scope measures host enqueue time, not copy completion.
+
+No production optimization or default change was made as part of profiling.
+Priority remains padded shortconv/projection work and CE, followed by compact
+planner metadata/tail scheduling. Further event-kernel tuning has much less
+full-model headroom at this fixture.
+
+### Full-model reproduction
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MAX_JOBS=2 TORCHINDUCTOR_COMPILE_THREADS=1 \
+PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat" \
+/home/cicuvc/miniconda3/envs/blkw/bin/python -u dism_v3/tools/bench_model_training.py \
+  --checkpoint-dir /media/cicuvc/c63abdf1-0e56-4153-9228-95df5a2f239b/cicuvc/dism-runs/dism-fwedu-valres-72m-2500m/base_checkpoints/seqtrue72m-fwedu-valres \
+  --warmup 3 --phase-steps 3 --windows 3 --window-steps 10 --profile \
+  --output dism_v3/build/model72m_hybrid_new.json
+```
+
+Use `--legacy-cuda dism_v3/build/lib.linux-x86_64-cpython-312/cu_flash_dism.cpython-312-x86_64-linux-gnu.so`
+for the SHA-checked old-core comparison, `--no-training-probes` for the probe
+control, or `--planner-workers N` for a process-local worker sweep. Every command
+requires a fresh output filename. JSON includes the full model/config, optimizer
+hyperparameters, document lengths, phase samples, window throughput, planner
+diagnostics and optional profiler attribution; Chrome traces are separate files.
+Primary reports: `build/model72m_{hybrid,hybrid_repeat,legacy,hybrid_noprobes}_20261014.json`.
+
+For a bounded Nsight capture, use the same environment and checkpoint arguments
+with `--warmup 3 --profile-only --nsys` (omit `--profile`), prefixed by:
+
+```bash
+/usr/local/cuda-13.1/nsight-systems-2025.5.2/bin/nsys profile \
+  --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \
+  --capture-range=cudaProfilerApi --capture-range-end=stop \
+  --force-overwrite=false --output=dism_v3/build/model72m_new_capture \
+  /home/cicuvc/miniconda3/envs/blkw/bin/python -u dism_v3/tools/bench_model_training.py \
+  --checkpoint-dir /media/cicuvc/c63abdf1-0e56-4153-9228-95df5a2f239b/cicuvc/dism-runs/dism-fwedu-valres-72m-2500m/base_checkpoints/seqtrue72m-fwedu-valres \
+  --warmup 3 --profile-only --nsys \
+  --output dism_v3/build/model72m_new_capture.json
+```
+
+Add `--planner-workers 22 --planner-cpus 2-23 --service-cpus 0-1` for the pinned
+case. For PyTorch, run Python directly with `--profile --profile-only` instead
+of `--nsys`. Export Nsight SQLite with `nsys stats` or `nsys export`, then use:
+
+```bash
+/home/cicuvc/miniconda3/envs/blkw/bin/python dism_v3/tools/analyze_model_profile.py \
+  dism_v3/build/model72m_new_capture.sqlite \
+  --output dism_v3/build/model72m_new_capture_analysis.json
+```
+
+The same analyzer accepts a PyTorch `.trace.json`. Choose fresh output names;
+the original reports above are intentionally retained for inspection.

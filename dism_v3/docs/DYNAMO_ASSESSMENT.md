@@ -1,5 +1,34 @@
 # Dynamo module assessment
 
+## Complete hard/soft training dispatch
+
+The default vocabulary and core custom ops now include the integer hard CUDA
+forward and asynchronous CPU-planned Triton backward. Internal operator names
+are versioned `*_hybrid_v1` so stale disk-cache output contracts are not reused.
+The module interface and checkpoint schema are unchanged. Soft math and launch
+settings are unchanged; hard gradients are merged in FP32 before input casts.
+
+Each forward returns a CPU int64[1] runtime handle as an auxiliary saved tensor.
+Its native Storage/DataPtr owns the Python plan ticket; detach/view preserve
+ownership. There is no global handle-ID registry. AOT passes this tensor to the
+opaque backward, which obtains the same invocation's future and waits only when
+needed. Backward frees ownership with other saved tensors, even if the output
+tensor remains alive; retained graphs intentionally retain it. Abandoned graphs
+also release storage. Checkpoint recomputation creates new independent plans.
+No-grad calls omit planning. Clone/offload/serialization of these opaque handles
+is unsupported and rejected, rather than reconstructing a stale pointer. This
+includes saved-tensor hooks that copy every saved tensor; ordinary checkpoint
+recomputation is supported. Handles are never module buffers/state_dict entries.
+
+Default `dism_core`, `voc_dism` and `DismAttention` work through fullgraph AOT and
+Inductor. An explicit user-supplied planner remains an eager override. As before,
+packed checkpoints require `capture_dynamic_output_shape_ops=True`; dynamic
+document counts follow the marking/duck-shape recipe below. Async training does
+not support CUDA Graph capture (`reduce-overhead`/cudagraph replay). Retained
+compiled backward additionally requires Torch's `donated_buffer=False`, as for
+other AOT operators with donated buffers; this library does not alter that
+global compiler setting. Nanochat's existing GDN graph breaks remain unchanged.
+
 ## Repair and supported compilation recipe
 
 The issues below describe the original c2a9ed9 baseline. They are now fixed

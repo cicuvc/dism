@@ -92,11 +92,14 @@ def _prepare_pack_fake(boundaries, tokens, maximum):
 
 # Version the internal operator identity: saved interpolants changed from
 # BHND to BNHD, so old Inductor disk-cache output contracts must not be reused.
-@torch.library.custom_op('flash_dism::voc_forward_bnhd', mutates_args=())
-def voc_forward(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.Tensor,
+@torch.library.custom_op('flash_dism::voc_forward_hybrid_v1', mutates_args=())
+def _voc_forward(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.Tensor,
                 v: torch.Tensor, eq: torch.Tensor, ek: torch.Tensor, tau: torch.Tensor,
                 beta: torch.Tensor, direction: torch.Tensor, hard: torch.Tensor,
-                boundaries: Optional[torch.Tensor], layout: Optional[torch.Tensor] = None) -> list[torch.Tensor]:
+                boundaries: Optional[torch.Tensor], layout: Optional[torch.Tensor],
+                need_backward: bool) -> list[torch.Tensor]:
+    from .hard_training import default_hard_planner, layout_from_table
+    from .hard_forward import forward_hard
     b = float(beta)
     cu.prepare_embedding(q, k, sq, sk, v, eq, ek, tau, direction, hard, False)
     query, key, qe, ke = prepare_embedding(q, k, eq, ek)
@@ -104,22 +107,28 @@ def voc_forward(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.Te
     # The core score must be beta*raw - LSE_beta; scale the interpolated side.
     qsk, ksk = (qfk, kfq) if b == 1.0 else (qfk * b, kfq * b)
     qv, kv = select_operands(q, k, qsk, ksk, direction)
+    table = layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1])
+    pack = layout_from_table(table, q.shape[1])
+    ticket = (default_hard_planner(q.device).submit(iq, ik, hard, tau, layout=pack)
+              if need_backward and q.shape[1] else None)
     output, norm, state = cu.core_forward(
         (qv, kv, sq, sk, v, lq.transpose(1, 2), lk.transpose(1, 2),
-         iq, ik, direction, hard, tau), layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1]),
+         iq, ik, direction, hard, tau), table,
         0, True, False, True)
+    combined = output + forward_hard(sq.contiguous(),sk.contiguous(),v.contiguous(),iq,ik,
+                                     hard.contiguous(),tau.contiguous(),layout=pack)[0] if q.shape[1] else output.clone()
     # All auxiliary results own newly computed storage; no inputs alias outputs.
     # qfk/kfq are saved UNSCALED so the backward delta uses E_beta with dL/dE.
-    return [output, qfk, kfq, lk, lq, ik, iq,
-            state['vertical'], state['operands'][12], norm]
+    return [combined, qfk, kfq, lk, lq, ik, iq,
+            state['vertical'], state['operands'][12], norm, output, cu.hold_training_plan(ticket)]
 
 
-@voc_forward.register_fake
-def _forward_fake(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundaries, layout=None):
+@_voc_forward.register_fake
+def _forward_fake(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundaries, layout, need_backward):
     b, n, h, d = q.shape
     vector = lambda: q.new_empty((b, n, h, d))
     scalar = lambda dtype: q.new_empty((b, h, n), dtype=dtype)
-    if boundaries is None:
+    if boundaries is None and layout is None:
         vertical = q.new_empty((b, h, (n-1)//16, n), dtype=torch.float32)
         boundary = q.new_empty((b, h, (n-1)//32, n), dtype=torch.float32)
     else:
@@ -128,27 +137,34 @@ def _forward_fake(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundarie
         boundary = q.new_empty((ctx.new_dynamic_size(),), dtype=torch.float32)
     return [torch.empty_like(v), vector(), vector(), scalar(torch.float32),
             scalar(torch.float32), scalar(torch.int32), scalar(torch.int32),
-            vertical, boundary, scalar(torch.float32)]
+            vertical, boundary, scalar(torch.float32), torch.empty_like(v),
+            torch.empty((1,), dtype=torch.int64, device='cpu')]
 
 
-@torch.library.custom_op('flash_dism::voc_backward_bnhd', mutates_args=())
+@torch.library.custom_op('flash_dism::voc_backward_hybrid_v1', mutates_args=())
 def voc_backward(inputs: list[torch.Tensor], saved: list[torch.Tensor],
                  boundaries: Optional[torch.Tensor], dout: torch.Tensor,
                  layout: Optional[torch.Tensor] = None) -> list[torch.Tensor]:
     q, k, sq, sk, v, eq, ek, tau, beta, direction, hard = inputs
     b = float(beta)
-    output, qfk, kfq, lk, lq, ik, iq, vertical, boundary, norm = saved
+    _, qfk, kfq, lk, lq, ik, iq, vertical, boundary, norm, output, handle = saved
     cu.prepare_embedding(q, k, sq, sk, v, eq, ek, tau, direction, hard, False)
     query, key, qe, ke = prepare_embedding(q, k, eq, ek)
     qsk, ksk = (qfk, kfq) if b == 1.0 else (qfk * b, kfq * b)
     qv, kv = select_operands(q, k, qsk, ksk, direction)
     raw = (qv, kv, sq, sk, v, lq.transpose(1, 2), lk.transpose(1, 2), iq, ik, direction, hard, tau)
     # Forward already absorbed tau. Do not allocate zeros or subtract it again.
-    prepared = list(cu.prepare_operands(raw, boundaries is not None, True))
+    packed = boundaries is not None or layout is not None
+    prepared = list(cu.prepare_operands(raw, packed, True))
     prepared.append(boundary)
-    core_norm = norm.flatten() if boundaries is not None else norm
+    core_norm = norm.flatten() if packed else norm
     g, _ = cu.core_backward(prepared, vertical, output, core_norm, dout.to(torch.bfloat16).contiguous(),
                             layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1]), 0, False, False)
+    ticket = cu.get_training_plan(handle)
+    if ticket is not None:
+        hg = ticket.backward(sq, sk, v, dout.to(torch.bfloat16).contiguous())
+        for name in ('sq_vec', 'sk_vec', 'v', 'rtau'):
+            g[name] = g[name].float() + hg[name]
     doq, dok = split_interpolation_gradients(g['q_vec'], g['k_vec'], direction)
     # doq/dok are dL/d(beta*E); the kernel wants dL/dE with out=E, so multiply by beta.
     dq, dk, dqe, dke = emb_bwd_wrapper(query, key, qe, ke, qfk, kfq, lk, lq,
@@ -176,12 +192,94 @@ def _setup(ctx, inputs, output):
 
 def _backward(ctx, grads):
     saved = ctx.saved_tensors
-    gradients = voc_backward(list(saved[:11]), list(saved[11:21]),
-                             saved[21] if ctx.packed else None, grads[0],
-                             saved[21 + int(ctx.packed)] if ctx.has_layout else None)
+    gradients = voc_backward(list(saved[:11]), list(saved[11:23]),
+                             saved[23] if ctx.packed else None, grads[0],
+                             saved[23 + int(ctx.packed)] if ctx.has_layout else None)
     # Dispatcher omits trailing default=None arguments, while setup_context
     # receives defaults restored. Match the actual autograd input arity.
-    return (*gradients, None, None, None, None, None)[:len(ctx.needs_input_grad)]
+    return (*gradients, None, None, None, None, None, None)[:len(ctx.needs_input_grad)]
 
 
-voc_forward.register_autograd(_backward, setup_context=_setup)
+_voc_forward.register_autograd(_backward, setup_context=_setup)
+
+
+def voc_forward(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundaries, layout=None):
+    need_backward = torch.is_grad_enabled() and any(x.requires_grad for x in (q,k,sq,sk,v,eq,ek,tau))
+    return _voc_forward(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward)
+
+
+@torch.library.custom_op('flash_dism::core_forward_hybrid_v1', mutates_args=())
+def _core_forward(raw: list[torch.Tensor], table: Optional[torch.Tensor], ctas: int,
+                  absorbed: bool, need_backward: bool) -> list[torch.Tensor]:
+    from .hard_training import default_hard_planner, layout_from_table
+    from .hard_forward import forward_hard
+    q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau = raw
+    pack = layout_from_table(table,q.shape[1])
+    cu.prepare_operands(raw,table is not None,absorbed)
+    iq_c,ik_c=iq.to(torch.int32).contiguous(),ik.to(torch.int32).contiguous()
+    ticket = (default_hard_planner(q.device).submit(iq_c,ik_c,hard,tau,layout=pack)
+              if need_backward and q.shape[1] else None)
+    out,norm,state = cu.core_forward(raw,table,ctas,True,False,absorbed)
+    combined = out+forward_hard(sq.contiguous(),sk.contiguous(),v.contiguous(),iq_c,ik_c,
+                                hard.contiguous(),tau.contiguous(),layout=pack,ctas=ctas)[0] if q.shape[1] else out.clone()
+    return [combined,state['vertical'],state['operands'][12],out,norm,cu.hold_training_plan(ticket)]
+
+
+@_core_forward.register_fake
+def _core_fake(raw,table,ctas,absorbed,need_backward):
+    q,v=raw[0],raw[4]
+    b,n,h,_=q.shape
+    if table is None:
+        vertical=q.new_empty((b,h,(n-1)//16,n),dtype=torch.float32)
+        boundary=q.new_empty((b,h,(n-1)//32,n),dtype=torch.float32)
+    else:
+        ctx=torch.library.get_ctx()
+        vertical=q.new_empty((ctx.new_dynamic_size(),),dtype=torch.float32)
+        boundary=q.new_empty((ctx.new_dynamic_size(),),dtype=torch.float32)
+    return [torch.empty_like(v),vertical,boundary,torch.empty_like(v),
+            q.new_empty((b,h,n),dtype=torch.float32),torch.empty(1,device='cpu',dtype=torch.int64)]
+
+
+@torch.library.custom_op('flash_dism::core_backward_hybrid_v1', mutates_args=())
+def _core_backward(raw: list[torch.Tensor], saved: list[torch.Tensor], table: Optional[torch.Tensor],
+                   ctas: int, absorbed: bool, dout: torch.Tensor) -> list[torch.Tensor]:
+    _,vertical,boundary,out,norm,handle=saved
+    prepared=list(cu.prepare_operands(raw,table is not None,absorbed))
+    prepared.append(boundary)
+    dout=dout.to(torch.bfloat16).contiguous()
+    g,_=cu.core_backward(prepared,vertical,out,norm.flatten() if table is not None else norm,
+                         dout,table,ctas,False,False)
+    ticket=cu.get_training_plan(handle)
+    if ticket is not None:
+        hg=ticket.backward(raw[2],raw[3],raw[4],dout)
+        for name in ('sq_vec','sk_vec','v','rtau'):
+            g[name]=g[name].float()+hg[name]
+    return [g[name].to(raw[i].dtype).contiguous() for name,i in
+            zip(('q_vec','k_vec','sq_vec','sk_vec','v','q_lse','k_lse','rtau'),(0,1,2,3,4,5,6,11))]
+
+
+@_core_backward.register_fake
+def _core_backward_fake(raw,saved,table,ctas,absorbed,dout):
+    return [torch.empty_like(raw[i]) for i in (0,1,2,3,4,5,6,11)]
+
+
+def _core_setup(ctx,inputs,output):
+    raw,table,ctx.ctas,ctx.absorbed,_=inputs
+    ctx.packed=table is not None
+    ctx.save_for_backward(*raw,*output,*([table] if ctx.packed else []))
+    ctx.mark_non_differentiable(*output[1:])
+
+
+def _core_autograd(ctx,grads):
+    saved=ctx.saved_tensors
+    g=_core_backward(list(saved[:12]),list(saved[12:18]),saved[18] if ctx.packed else None,
+                      ctx.ctas,ctx.absorbed,grads[0])
+    return ([*g[:7],None,None,None,None,g[7]],None,None,None,None)
+
+
+_core_forward.register_autograd(_core_autograd,setup_context=_core_setup)
+
+
+def core_forward(raw,table=None,ctas=0,absorbed=False):
+    need_backward=torch.is_grad_enabled() and any(raw[i].requires_grad for i in (0,1,2,3,4,5,6,11))
+    return _core_forward(list(raw),table,ctas,absorbed,need_backward)[0]

@@ -4,6 +4,7 @@
 #include <torch/csrc/utils/pybind.h>
 #include <pybind11/stl.h>
 #include <climits>
+#include <atomic>
 #include "config_registry.h"
 
 namespace py=pybind11;
@@ -11,6 +12,42 @@ using T=at::Tensor;
 using V=std::vector<T>;
 using Pair=std::tuple<T,T>;
 using Triple=std::tuple<T,T,T>;
+
+// AOT transports a Tensor, but ownership lives in its CPU Storage/DataPtr,
+// not a Python Tensor wrapper or an ID registry. detach/view keep ownership;
+// cloning/serialization intentionally cannot duplicate this runtime resource.
+namespace {
+std::atomic<int64_t> live_plan_handles{0};
+struct PlanHandle { int64_t tag=0; PyObject* ticket; };
+void delete_plan_handle(void* context) {
+    auto* handle=static_cast<PlanHandle*>(context);
+#if PY_VERSION_HEX >= 0x030D0000
+    bool finalizing=Py_IsFinalizing();
+#else
+    bool finalizing=_Py_IsFinalizing();
+#endif
+    if (Py_IsInitialized() && !finalizing) {
+        py::gil_scoped_acquire acquire;
+        Py_DECREF(handle->ticket);
+    }
+    delete handle;
+    --live_plan_handles;
+}
+T hold_plan(py::object ticket) {
+    auto* handle=new PlanHandle{0,ticket.ptr()};
+    Py_INCREF(handle->ticket);
+    ++live_plan_handles;
+    return at::for_blob(&handle->tag,{1}).context(handle,delete_plan_handle)
+        .options(at::TensorOptions().dtype(at::kLong).device(at::kCPU)).make_tensor();
+}
+py::object get_plan(const T& token) {
+    TORCH_CHECK(token.device().is_cpu() && token.scalar_type()==at::kLong &&
+                token.numel()==1 && token.storage().data_ptr().get_deleter()==delete_plan_handle,
+                "invalid DISM plan handle: runtime handles must not be cloned, offloaded or serialized");
+    auto* handle=static_cast<PlanHandle*>(token.storage().data_ptr().get_context());
+    return py::reinterpret_borrow<py::object>(handle->ticket);
+}
+}
 
 #define DECLARE(R,D,DV) namespace dism_r##R##_d##D##_v##DV { \
 Pair summarization_cuda(T,T,T,T,T,T,T,T,T,int64_t,int64_t); \
@@ -232,6 +269,9 @@ static py::tuple make_layout(T cu,int64_t total) {
 }
 
 void bind_frontend(py::module_& m) {
+    m.def("hold_training_plan",&hold_plan);
+    m.def("get_training_plan",&get_plan);
+    m.def("training_plan_handle_count",[](){return live_plan_handles.load();});
     m.def("validate_interpolation",[](T q,T k,T eq,T ek,std::optional<T> tau) {
         TORCH_CHECK(q.is_cuda() && q.dim()==4 && eq.dim()==3,"invalid interpolation ranks/device");
         TORCH_CHECK(q.size(1)>0 && q.size(1)%256==0,"sequence length must be256-token aligned");

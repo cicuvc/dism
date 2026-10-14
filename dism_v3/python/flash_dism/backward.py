@@ -45,4 +45,10 @@ def dism_core(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,*,ctas=0,_
     derivatives only. FP32 atomic gradients cast to BF16 only at the upstream
     BF16 autograd input boundary, not during cross-CTA accumulation.
     """
-    return _Core.apply(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,ctas,_lse_preabsorbed)
+    if torch.compiler.is_compiling():
+        from .compiler import core_forward
+        return core_forward((q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau),
+                             ctas=ctas,absorbed=_lse_preabsorbed)
+    from .hard_training import dism_core_hybrid
+    return dism_core_hybrid(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,
+                            ctas=ctas,_lse_preabsorbed=_lse_preabsorbed)

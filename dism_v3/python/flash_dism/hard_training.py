@@ -1,11 +1,14 @@
-"""Opt-in eager hard/soft training with invocation-owned asynchronous plans.
+"""Hard/soft training with invocation-owned asynchronous plans.
 
-No global plan registry, RNG, checkpoint, or compiled-dispatch changes. Create
-one AsyncHardPlanner per device outside the training loop and reuse it.
+Default public operators share one lazy planner per process/device; callers may
+override it for eager experiments. No global plan registry or checkpoint state.
+Compiled operators transport ownership through native CPU tensor storage.
 """
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import threading
+import atexit
+import os
 import time
 import weakref
 
@@ -190,6 +193,54 @@ class AsyncHardPlanner:
                              d2h_events, events)
 
 
+_runtimes = {}
+_runtime_lock = threading.Lock()
+
+
+def default_hard_planner(device):
+    """Lazy process/device runtime, never a module buffer or checkpoint field."""
+    device = torch.device(device)
+    if device.type != 'cuda':
+        raise ValueError('CUDA device required')
+    if device.index is None:
+        device = torch.device('cuda', torch.cuda.current_device())
+    with torch.cuda.device(device):
+        if torch.cuda.is_current_stream_capturing():
+            raise RuntimeError('DISM asynchronous training does not support CUDA Graph capture')
+    key = (os.getpid(), device.index)
+    with _runtime_lock:
+        if key not in _runtimes:
+            _runtimes[key] = AsyncHardPlanner(
+                device=device, workers=int(os.environ.get('DISM_PLANNER_WORKERS', '16')),
+                max_inflight=int(os.environ.get('DISM_PLANNER_MAX_INFLIGHT', '32')))
+        return _runtimes[key]
+
+
+def shutdown_hard_planners():
+    """Drain default coordinators; already-created graphs keep valid tickets."""
+    with _runtime_lock:
+        current = list(_runtimes.values())
+        _runtimes.clear()
+    for planner in current:
+        planner.close()
+
+
+atexit.register(shutdown_hard_planners)
+
+
+def layout_from_table(table, tokens):
+    """Reconstitute a validated host layout without any GPU metadata readback."""
+    if table is None:
+        return None
+    from .varlen import VarlenLayout
+    table = table.view(-1, 7)
+    lengths = tuple(table[:, 1].tolist())
+    return VarlenLayout(table, lengths, tokens, tokens,
+                        sum(((n-1)//32)*n for n in lengths if n),
+                        sum(((n-1)//16)*n for n in lengths if n),
+                        sum(((n+31)//32)*n for n in lengths))
+
+
 class _MixedCore(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, sq, sk, v, lq, lk, iq, ik, direction, hard, tau,
@@ -198,15 +249,17 @@ class _MixedCore(torch.autograd.Function):
         # Native validation before a background task is launched. Retain the
         # native soft checkpoint separately: hard output must not enter B1 delta.
         cu.prepare_operands(raw, layout is not None, absorbed)
-        ticket = planner.submit(iq, ik, hard, tau, layout=layout)
+        iq_c, ik_c = iq.to(torch.int32).contiguous(), ik.to(torch.int32).contiguous()
+        ticket = planner.submit(iq_c, ik_c, hard, tau, layout=layout)
         out, norm, state = cu.core_forward(raw, None if layout is None else layout.table,
                                             ctas, True, False, absorbed)
-        hard_out, _ = forward_hard(sq, sk, v, iq, ik, hard, tau, layout=layout, ctas=ctas)
+        hard_out, _ = forward_hard(sq.contiguous(), sk.contiguous(), v.contiguous(), iq_c, ik_c,
+                                   hard.contiguous(), tau.contiguous(), layout=layout, ctas=ctas)
         ctx.save_for_backward(*state['operands'], state['vertical'], out,
                               state['normalizer'] if layout is not None else norm,
                               sq, sk, v, iq, ik, hard, tau,
-                              *([] if layout is None else [layout.table]))
-        ctx.ticket, ctx.layout, ctx.ctas = ticket, layout, ctas
+                              *([] if layout is None else [layout.table]), cu.hold_training_plan(ticket))
+        ctx.layout, ctx.ctas = layout, ctas
         return out+hard_out
 
     @staticmethod
@@ -218,7 +271,7 @@ class _MixedCore(torch.autograd.Function):
         g, _ = cu.core_backward(saved[:13], saved[13], saved[14], saved[15], dout,
                                 None if ctx.layout is None else ctx.layout.table,
                                 ctx.ctas, False, False)
-        hg = ctx.ticket.backward(*saved[16:19], dout)
+        hg = cu.get_training_plan(saved[-1]).backward(*saved[16:19], dout)
         for name in ('sq_vec', 'sk_vec', 'v', 'rtau'):
             g[name] = g[name].float()+hg[name]
         return (g['q_vec'], g['k_vec'], g['sq_vec'], g['sk_vec'], g['v'],
@@ -228,14 +281,27 @@ class _MixedCore(torch.autograd.Function):
 
 @torch.compiler.disable
 def dism_core_hybrid(q, k, sq, sk, v, lq, lk, iq, ik, direction, hard, tau,
-                     *, planner, layout=None, ctas=0, _lse_preabsorbed=False):
-    """Complete eager training core, explicit planner ownership; first derivatives.
+                     *, planner=None, layout=None, ctas=0, _lse_preabsorbed=False):
+    """Complete eager training core with automatic/explicit planner ownership.
 
     Soft CUDA + integer hard forward; soft CUDA + event-stream hard backward.
-    Graph break under torch.compile (fullgraph/cudagraph unsupported). Original
-    low-level soft-only APIs and compiled voc custom ops are unchanged.
+    This explicit helper is a graph break; public default core/vocabulary APIs
+    use their opaque compiled operators instead. First derivatives only.
     """
     if layout is not None and ctas:
         raise ValueError('ctas is only supported for fixed-length execution')
+    if not torch.is_grad_enabled() or not any(x.requires_grad for x in (q,k,sq,sk,v,lq,lk,tau)):
+        raw = (q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau)
+        out, _, _ = cu.core_forward(raw, None if layout is None else layout.table,
+                                    ctas, False, False, _lse_preabsorbed)
+        if sq.shape[1] == 0:
+            return out
+        return out + forward_hard(sq.contiguous(),sk.contiguous(),v.contiguous(),
+                                  iq.to(torch.int32).contiguous(),ik.to(torch.int32).contiguous(),
+                                  hard.contiguous(),tau.contiguous(),layout=layout,ctas=ctas)[0]
+    if sq.shape[1] == 0:
+        from .varlen import _VarlenCore
+        return _VarlenCore.apply(q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau,layout,_lse_preabsorbed)
+    planner = default_hard_planner(q.device) if planner is None else planner
     return _MixedCore.apply(q, k, sq, sk, v, lq, lk, iq, ik, direction, hard, tau,
                             planner, layout, ctas, _lse_preabsorbed)

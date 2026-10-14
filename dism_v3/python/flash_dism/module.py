@@ -291,8 +291,8 @@ class DismAttention(nn.Module):
         """Default: soft training, hard evaluation; explicit flags override sampling.
 
         direction: bool [B,H] (True selects k-to-qemb, the query-LSE path).
-        hard: bool [training_rows,H]; CUDA skips hard rows until the dedicated
-        hard path is integrated. Pass both flags for replay. A supplied
+        hard: bool [training_rows,H]; soft uses CUDA forward/backward, hard uses
+        integer CUDA forward and asynchronous event backward. Pass both flags for replay. A supplied
         generator must target the same device as x. No stateful annealing here.
         cu_seqlens: int32 packed boundaries, with batch=1 and 256 alignment.
         max_seqlen: optional upper bound for fused convolution launch sizing.

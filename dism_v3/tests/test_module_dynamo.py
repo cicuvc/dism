@@ -37,7 +37,7 @@ def _check_compiled(hybrid, packed, *, heads=2, first=None, mark=True):
     model = cls(64, heads, head_dim=32, value_dim=32, readout_dim=16,
                 vocab_size=64).cuda().train()
     x = torch.randn(1, 1024, 64, device='cuda', requires_grad=True)
-    hard = torch.rand(1, heads, 1024, device='cuda') < .5
+    hard = (torch.arange(heads, device='cuda') % 2 == 0)[None]
     direction = (torch.arange(heads, device='cuda') % 2 == 0)[None]
     packs = [[0, 512, 1024], [0, 256, 512, 768, 1024],
              [0, 256, 1024], [0, 0, 256, 256, 1024], [0, 1024]] if packed else [None, None]
@@ -103,7 +103,7 @@ def test_opaque_voc_gradient_matches_eager(packed, r, d, dv, shared_vocab):
     beta = torch.ones((), device='cuda')
     inputs = [*vectors, *tables, tau]
     direction = torch.tensor([[True, False]], device='cuda')
-    hard = torch.rand(1, 2, 256, device='cuda') < .5
+    hard = torch.tensor([[True, False]], device='cuda')
     cu = torch.tensor([0, 0, 256], device='cuda', dtype=torch.int32) if packed else None
     expected = voc_dism(*inputs, direction=direction, hard=hard, cu_seqlens=cu)
     actual = voc_forward(*inputs, beta, direction, hard, cu)[0]
@@ -129,7 +129,7 @@ def test_opaque_voc_beta_matches_eager(beta_value, packed):
     beta = torch.tensor(beta_value, device='cuda')
     inputs = [*vectors, *tables, tau]
     direction = torch.tensor([[True, False]], device='cuda')
-    hard = torch.rand(1, 2, 256, device='cuda') < .5
+    hard = torch.tensor([[True, False]], device='cuda')
     cu = torch.tensor([0, 256], device='cuda', dtype=torch.int32) if packed else None
     expected = voc_dism(*inputs, direction=direction, hard=hard, cu_seqlens=cu, beta=beta)
     actual = voc_forward(*inputs, beta, direction, hard, cu)[0]
@@ -152,7 +152,7 @@ def test_prepared_layout_owns_boundary_snapshot():
     inputs = [*vectors, *tables, torch.ones(2, device='cuda', requires_grad=True)]
     beta = torch.ones((), device='cuda')
     direction = torch.tensor([[True, False]], device='cuda')
-    hard = torch.rand(1, 2, 512, device='cuda') < .5
+    hard = torch.tensor([[True, False]], device='cuda')
     # Reuse the same storage with distinct contents, retain both forwards, and
     # run backwards later. Neither pointer identity nor last-used-pack is safe.
     cu = torch.tensor([0, 256, 512], device='cuda', dtype=torch.int32)
@@ -182,7 +182,7 @@ def test_module_empty_tail_equivalence(hybrid):
                 vocab_size=64).cuda().train()
     x = torch.randn(1, 1024, 64, device='cuda', requires_grad=True)
     cu = torch.tensor([0, 256, 1024] + [1024]*12, dtype=torch.int32, device='cuda')
-    hard = torch.rand(1, 2, 1024, device='cuda') < .5
+    hard = torch.tensor([[True, False]], device='cuda')
     direction = torch.tensor([[True, False]], device='cuda')
     params = [x, *model.parameters()]
     outputs, grads = [], []

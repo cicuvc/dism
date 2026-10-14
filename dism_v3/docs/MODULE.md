@@ -15,7 +15,7 @@ attention = DismAttention(
 ).cuda()  # retain FP32 master parameters
 x = torch.randn(2, 256, 256, device="cuda", requires_grad=True)
 with torch.autocast("cuda", dtype=torch.bfloat16):
-    y, _, _ = attention(x, hard_prob=0.0)  # current CUDA core is soft-only
+    y, _, _ = attention(x, hard_prob=0.5)
 y.float().square().mean().backward()
 ```
 
@@ -117,10 +117,13 @@ For deterministic comparisons pass `direction` (bool `[B,H]`) and `hard`
 (bool `[B,H]` for CUDA); explicit hard flags take precedence over hard_prob. These
 flags are reused in backward, with no new sampling.
 
-The CUDA core is currently soft-only: hard rows return zero placeholders and
-zero gradients, not hard attention. Until the dedicated path is integrated,
-use explicit all-soft flags for meaningful CUDA output; in particular, the
-unchanged hard-evaluation default is not a complete CUDA evaluation path.
+The module automatically routes soft rows through CUDA O(N²) forward/backward
+and hard rows through integer CUDA O(N²) forward plus asynchronous CPU planning
+and event-stream backward. Eager and fullgraph Inductor use the same numerical
+paths. No manual planner argument, parameter, persistent buffer or checkpoint
+migration is required. No-grad hard evaluation runs the dedicated CUDA forward
+without starting a planner. The low-level soft-only CUDA helpers remain
+separate building blocks. See [runtime ownership and limits](NATIVE_TRAINING_PLANNER.md#default-training-operator-and-module-integration).
 Packed CUDA accepts `[training_rows,H]` flags for equal-length original rows,
 not per-document flags. Unequal attention-mask-unpadded rows with explicit
 hard flags are rejected. Torch/reference decoding retains its token-mask API.
