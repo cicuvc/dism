@@ -1,5 +1,100 @@
 # Native parallel hard-backward planning
 
+## Merged planner optimization (2026-10-15)
+
+The repaired optimization from `/tmp/dism_planner_opt/planner-opt` is now part
+of this worktree. Default classic-layout preparation uses flat centroid scratch,
+direct event-to-pinned-buffer packing (no intermediate padded ChunkProgram),
+one completion record per worker invocation instead of per-job futures, and
+reuse of identical exponential coefficients between the two scalar passes.
+The classic metadata format, coefficients, launch defaults and gradient math
+are preserved. No worker-count/affinity, hard sampling, checkpoint, RNG,
+optimizer, dataloader or ready/event policy changes accompany this merge.
+
+Compact layout is **opt-in**, not connected to `AsyncHardPlanner` by default:
+
+```python
+from flash_dism.kernels.hard_backward_fused import CompactFusedHardPrefillBackward
+
+host = planner.prepare(labels_cpu, tau_cpu, documents=docs, hard=hard_rows,
+                       chunk_size=64, compact=True)
+uploaded = host.upload(stream=copy_stream)
+consumer = CompactFusedHardPrefillBackward.from_compact(uploaded)
+grads = consumer.backward(sq, sk, value, dout)  # flattened contiguous [B*N*H,D]
+```
+
+Single-chunk streams occupy fixed-width buckets16/32/64; multi-chunk streams
+retain the classic layout and three-stage GPU algorithm. Widths below16 are
+not used because the local Tensor Core contraction requires at least16.
+This reduces metadata padding, not the actual event count. The compact consumer
+currently requires `long_mode='three_stage'` for multi-chunk streams.
+
+Two audit fixes are included, not just the original isolated optimization:
+
+- The last worker decrements the completion count and notifies **under the
+  waiter's mutex**. Previously the waiter could destroy the stack-owned record
+  before the last worker touched its mutex. Queue-allocation failures also
+  drain submitted work before propagating the exception.
+- Compact construction waits for metadata upload before reading tau head IDs.
+  It always records a construction-ready event, including blocking host upload
+  mode; backward waits on both events and records allocation lifetimes on the
+  consuming stream. Delayed three-stream tests cover both `non_blocking` modes
+  and dropping the owner before GPU work completes.
+
+Maintained coverage: `tests/test_compact_training_planner.py`, standalone
+`tests/native/test_planning_workers.cpp`, and
+`tools/check_compact_training_planner.py --cpu|--gpu|--smoke`.
+The checker reconstructs every compact array from the classic plan with exact
+equality, uses unequal ragged document lengths, and asserts GPU gradients
+rather than merely printing differences. Original planner/kernel numerical
+tolerances are unchanged.
+
+The repaired isolated-tree measurements (before merge, W16/B16/H6/N2048/C64,
+three warmups and seven samples) were:
+
+| Labels | Classic / compact CPU total | Classic / compact GPU backward | Metadata MB |
+| --- | ---: | ---: | ---: |
+| iid512 | 11.76 / 9.28 ms | 0.388 / 0.356 ms | 105.69 / 26.73 |
+| iid8 | 31.81 / 25.80 ms | 2.466 / 2.387 ms | 290.63 / 98.49 |
+
+CPU totals exclude D2H/H2D and are not full-ready times. These figures compare
+layouts **after** CPU optimization, not original versus optimized planner.
+No new end-to-end 72M training speedup or compact default integration is claimed.
+Prior tau cancellation and long-C64 spill limitations below remain applicable.
+
+### Post-merge validation
+
+Built the worktree's native prefill extension through its inference `build.py`
+with `MAX_JOBS=2`; only worktree Python/CUDA packages were imported.
+
+- 367 combined native-planner, compact, fused/scan backward, async training and
+  ready-dispatch tests passed; 86 shared-inference prefill tests passed.
+- The final compact-only rerun passed132 tests, including four added R16/DV32
+  and R32/DV64, BF16/TF32x3, per-row/head-tau grouping cases (457 distinct
+  regression cases across these runs). Log: `build/merged_compact_final_tests.log`.
+- 1152 standalone CPU compact cases and 48 GPU cases passed. Four classic
+  storage hashes, including B16/H6/N2048 iid512/iid8, match the pre-merge bytes.
+- Worker stress (100,000 tiny submissions, error draining, concurrent callers)
+  and the full classic plan/pack/recovery C++ harness passed TSan and
+  ASan/UBSan. The latter also used leak detection.
+- Compact bucket plus multi-chunk smoke passed memcheck/synccheck with zero
+  errors and racecheck with zero errors/warnings. This does not supersede
+  historical soft CUDA pipeline sanitizer limitations.
+- Inspected BF16 R32/DV64 compact buckets16/32/64 use56/138/249 registers and
+  zero spills. Summaries/propagation also have zero spills. The C64 long-chunk
+  readout still has254 registers and **12 spills**, not newly spill-free.
+  All inspected variants have zero CALLs and shared atomics.
+
+Raw ignored artifacts: `build/merged_planner_tests.log`,
+`build/merged_planner_inference.log`, `build/merged_compact_{cpu,gpu}.log`,
+`build/merged_compact_{memcheck,racecheck,synccheck}.log`,
+`build/merged_planning_workers_{tsan,asan}.log`,
+`build/merged_native_planner_{tsan,asan}.log`,
+`build/merged_planner_classic_hashes.json`, and
+`build/merged_planner_resources.json`.
+
+## Historical implementation and measurements
+
 Implemented on 2026-10-14 after prototype commit `38946ce`. The original
 planning API and diagnostics are now also consumed by an explicit eager
 autograd adapter; see [async integration](#eager-asynchronous-training-integration).

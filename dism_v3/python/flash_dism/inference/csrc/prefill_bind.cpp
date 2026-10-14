@@ -98,7 +98,42 @@ PYBIND11_MODULE(_dism_prefill,m) {
             d["tau_rows"]=p.tau_rows;
             d["jobs"]=p.jobs.size(); d["streams"]=p.stream_base.back();
             d["chunks"]=p.chunk_base.back(); d["events"]=p.events; d["native_plan_ms"]=p.plan_ms;
+            d["compact"]=p.compact;
+            d["multi_streams"]=p.stream_base.back(); d["multi_chunks"]=p.chunk_base.back();
+            py::list blocks;
+            int64_t single=0;
+            for (int k=0;k<3;++k) { blocks.append(p.bucket_blocks[k]); single+=p.bucket_blocks[k]; }
+            d["bucket_blocks"]=blocks; d["single_blocks"]=single;
             return d;
+        })
+        .def("pack_into_compact",[](const TrainingBatchProgram &p,const std::vector<py::dict> &buckets,
+                                    const py::dict &multi) {
+            if (!p.compact || buckets.size()!=3)
+                throw std::invalid_argument("compact plan and three bucket dicts required");
+            std::vector<std::pair<uintptr_t,uintptr_t>> ranges;
+            std::vector<CompactBucketBuffers> bk(3);
+            for (int k=0;k<3;++k) {
+                int64_t blocks=p.bucket_blocks[k], slots=blocks*compact_widths[k];
+                const auto &d=buckets[k];
+                bk[k].rows=training_buffer<int>(d,"rows",slots,ranges);
+                bk[k].prefixes=training_buffer<float>(d,"prefixes",slots,ranges);
+                bk[k].weights=training_buffer<float>(d,"weights",slots,ranges);
+                bk[k].dlog=training_buffer<float>(d,"dlog",slots,ranges);
+                bk[k].lengths=training_buffer<int>(d,"lengths",blocks,ranges);
+                bk[k].heads=training_buffer<int>(d,"stream_heads",blocks,ranges);
+            }
+            int64_t streams=p.stream_base.back(),chunks=p.chunk_base.back(),slots=chunks*p.width;
+            TrainingBuffers out;
+            out.offsets=training_buffer<int64_t>(multi,"offsets",streams+1,ranges);
+            out.rows=training_buffer<int>(multi,"rows",slots,ranges);
+            out.prefixes=training_buffer<float>(multi,"prefixes",slots,ranges);
+            out.weights=training_buffer<float>(multi,"weights",slots,ranges);
+            out.dlog=training_buffer<float>(multi,"dlog",slots,ranges);
+            out.lengths=training_buffer<int>(multi,"lengths",chunks,ranges);
+            out.resets=training_buffer<int>(multi,"resets",chunks,ranges);
+            out.stream_heads=training_buffer<int>(multi,"stream_heads",streams,ranges);
+            py::gil_scoped_release release;
+            p.pack_into_compact(bk,out);
         })
         .def("pack_into",[](const TrainingBatchProgram &p,const py::dict &buffers) {
             int64_t streams=p.stream_base.back(),chunks=p.chunk_base.back(),slots=chunks*p.width;
@@ -121,7 +156,7 @@ PYBIND11_MODULE(_dism_prefill,m) {
     using Hard=py::array_t<uint8_t,py::array::c_style>;
     py::class_<PlanningWorkers,std::shared_ptr<PlanningWorkers>>(m,"TrainingPlanner")
         .def(py::init<int>(),py::arg("workers")=8)
-        .def("plan",[](std::shared_ptr<PlanningWorkers> pool,Labels labels,Taus tau,Docs docs,Hard hard,int width) {
+        .def("plan",[](std::shared_ptr<PlanningWorkers> pool,Labels labels,Taus tau,Docs docs,Hard hard,int width,bool compact) {
             if (labels.ndim()!=4 || labels.shape(0)!=2 || labels.shape(1)<=0 || labels.shape(2)<=0 || labels.shape(3)<=0
                 || labels.shape(1)>INT_MAX || labels.shape(2)>INT_MAX || labels.shape(3)>INT_MAX)
                 throw std::invalid_argument("labels must be int32 [2,B,H,N]");
@@ -136,7 +171,7 @@ PYBIND11_MODULE(_dism_prefill,m) {
             auto label_ptr=labels.data(); auto tau_ptr=tau.data(); auto docs_ptr=docs.data(); auto hard_ptr=hard.data();
             int64_t count=docs.shape(0);
             py::gil_scoped_release release;
-            return std::make_shared<TrainingBatchProgram>(std::move(pool),label_ptr,b,h,n,tau_ptr,tau_rows,docs_ptr,count,hard_ptr,width);
+            return std::make_shared<TrainingBatchProgram>(std::move(pool),label_ptr,b,h,n,tau_ptr,tau_rows,docs_ptr,count,hard_ptr,width,compact);
         },py::arg("labels").noconvert(),py::arg("tau").noconvert(),py::arg("documents").noconvert(),
-          py::arg("hard").noconvert(),py::arg("chunk_size")=16);
+          py::arg("hard").noconvert(),py::arg("chunk_size")=16,py::arg("compact")=false);
 }

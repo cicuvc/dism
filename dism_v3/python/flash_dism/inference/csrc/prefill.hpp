@@ -2,6 +2,8 @@
 
 // Offline control plane. No Torch/CUDA dependencies and no vector payloads.
 #include "planner.hpp"
+#include <deque>
+#include <functional>
 #include <limits>
 #include <numeric>
 #include <queue>
@@ -79,7 +81,27 @@ inline ChunkProgram chunk_program(const Program &p, int width) {
 class Builder {
     // Index ranges survive flat vector growth; no per-stream heap objects.
     struct Stream { size_t qb, qe, kb, ke; };
-    struct Group { Ids q, k; };
+    struct Range { int b, e; };
+    // Per-recursion-level reusable scratch. Removing a centroid leaves
+    // components of at most half the size, so the recursion depth is O(log n).
+    // Per-component and per-merge lists live in flat index arenas instead of a
+    // heap vector per group; capacity is retained across calls and jobs.
+    struct Scratch {
+        Ids order;                    // component node ids, traversal order
+        Ids node_arena;               // component node lists
+        std::vector<Range> comps;     // component ranges into node_arena
+        Ids qs, ks;                   // component query/key lists (+ merges)
+        std::vector<Range> gq, gk;    // initial component ranges into qs/ks
+        std::vector<Range> wq, wk;    // merge-tree ranges into qs/ks
+        std::vector<int> count, cursor;
+        std::vector<std::pair<int,int>> heap;
+        Ids qp, qd, kp, kd;           // cross() partition scratch
+    };
+    std::deque<Scratch> scratch;
+    Scratch &scratch_at(int depth) {
+        if (size_t(depth)>=scratch.size()) scratch.resize(depth+1);
+        return scratch[depth];
+    }
     dism_decode::Planner sam;
     int n;
     double tau;
@@ -93,8 +115,6 @@ class Builder {
     std::vector<Stream> streams;
     Ids stream_q, stream_k;
     std::vector<double> stream_a, stream_b, stream_da, stream_db;
-    // cross() never recurses: retain its partition capacity within this build.
-    Ids cross_qp, cross_qd, cross_kp, cross_kd;
 
     double logweight(int length) const {
         if (!length) return neg_inf;
@@ -149,18 +169,29 @@ class Builder {
         for (int v: lca_chain) on_path[v]=0;
     }
 
-    static Ids merge(const Ids &a, const Ids &b) {
-        Ids out; out.reserve(a.size()+b.size());
-        std::merge(a.begin(),a.end(),b.begin(),b.end(),std::back_inserter(out));
-        return out;
+    // Append the ascending merge of two ranges of `arena` as a new tail range.
+    // Tail append never moves an existing range's contents, so callers may keep
+    // older ranges live while new merged lists are added after them.
+    static void merge_into(Ids &arena, Range a, Range b, Range &out) {
+        out.b = int(arena.size());
+        arena.resize(arena.size()+(a.e-a.b)+(b.e-b.b));
+        int i=a.b, j=b.b, k=out.b;
+        while (i<a.e && j<b.e) {
+            int va=arena[i], vb=arena[j];
+            if (vb<va) { arena[k++]=vb; ++j; } else { arena[k++]=va; ++i; }
+        }
+        while (i<a.e) arena[k++]=arena[i++];
+        while (j<b.e) arena[k++]=arena[j++];
+        out.e=k;
     }
 
     // mode 0: downward/downward; 1: parent/downward; 2: downward/parent;
     // 3: centroid singleton. Prune zero weights before building event streams.
-    void emit(const Ids &queries, const Ids &keys, int c, int mode) {
-        if (queries.empty() || keys.empty() || keys.front()>queries.back()) return;
+    void emit(const Ids &qs, Range qr, const Ids &ks, Range kr, int c, int mode) {
+        if (qr.b==qr.e || kr.b==kr.e || ks[kr.b]>qs[qr.e-1]) return;
         Stream s{stream_q.size(),0,stream_k.size(),0};
-        for (int i: queries) {
+        for (int t=qr.b;t<qr.e;++t) {
+            int i=qs[t];
             int length = mode==3 ? matched[i] : std::min(matched[i],sam.nodes[c].length);
             if (mode==1) length=std::min(matched[i],lca_len(qnode[i],c));
             double a = mode==2 ? 0. : (gradients ? logweights[length] : logweight(length));
@@ -171,7 +202,8 @@ class Builder {
         }
         s.qe=stream_q.size();
         if (s.qb==s.qe) return;
-        for (int j: keys) {
+        for (int t=kr.b;t<kr.e;++t) {
+            int j=ks[t];
             if (j>stream_q.back()) break;
             int length = mode==2 ? lca_len(endpoint[j],c) : 0;
             double b = mode==2 ? (gradients ? logweights[length] : logweight(length)) : 0.;
@@ -188,20 +220,26 @@ class Builder {
         }
     }
 
-    void cross(const Group &a, const Group &b, int c, int pg) {
-        if (a.q.empty() || b.k.empty() || b.k.front()>a.q.back()) return;
-        if (pg<0) { emit(a.q,b.k,c,0); return; }
-        auto &qp=cross_qp, &qd=cross_qd, &kp=cross_kp, &kd=cross_kd;
+    // `aq` are the queries of the first component and `bk` the keys of the
+    // second; cross() never recurses, so the partition scratch stays in S.
+    void cross(const Ids &aq, Range aqr, const Ids &bk, Range bkr, int c, int pg, Scratch &S) {
+        if (aqr.b==aqr.e || bkr.b==bkr.e || bk[bkr.b]>aq[aqr.e-1]) return;
+        if (pg<0) { emit(aq,aqr,bk,bkr,c,0); return; }
+        auto &qp=S.qp, &qd=S.qd, &kp=S.kp, &kd=S.kd;
         qp.clear(); qd.clear(); kp.clear(); kd.clear();
-        for (int i:a.q) (owner[qnode[i]]==pg ? qp:qd).push_back(i);
-        for (int j:b.k) (owner[endpoint[j]]==pg ? kp:kd).push_back(j);
+        for (int t=aqr.b;t<aqr.e;++t) { int i=aq[t]; (owner[qnode[i]]==pg ? qp:qd).push_back(i); }
+        for (int t=bkr.b;t<bkr.e;++t) { int j=bk[t]; (owner[endpoint[j]]==pg ? kp:kd).push_back(j); }
         if (!qp.empty() && !kp.empty()) throw std::logic_error("split parent component");
-        emit(qd,kd,c,0); emit(qp,kd,c,1); emit(qd,kp,c,2);
+        emit(qd,{0,int(qd.size())},kd,{0,int(kd.size())},c,0);
+        emit(qp,{0,int(qp.size())},kd,{0,int(kd.size())},c,1);
+        emit(qd,{0,int(qd.size())},kp,{0,int(kp.size())},c,2);
     }
 
-    void decompose(int root, const Ids &queries, const Ids &keys) {
-        if (queries.empty() || keys.empty()) return;
-        Ids order{root}; parent[root]=-1;
+    void decompose(int root, const Ids &qs, Range qr, const Ids &ks, Range kr, int depth) {
+        if (qr.b==qr.e || kr.b==kr.e) return;
+        Scratch &S=scratch_at(depth);
+        Ids &order=S.order;
+        order.clear(); order.push_back(root); parent[root]=-1;
         for (size_t i=0;i<order.size();++i) {
             int v=order[i]; size[v]=1;
             for (int w:adj[v]) if (!removed[w] && w!=parent[v]) {
@@ -216,46 +254,75 @@ class Builder {
             if (largest<best) { best=largest; c=v; }
         }
         removed[c]=true;
-        std::vector<Ids> components(1,Ids{c});
+        S.node_arena.clear(); S.comps.clear();
+        S.node_arena.push_back(c); S.comps.push_back(Range{0,1});
         int pg=-1; owner[c]=0;
         for (int neighbor:adj[c]) if (!removed[neighbor]) {
-            int g=int(components.size());
+            int g=int(S.comps.size());
             if (neighbor==sam.nodes[c].link) pg=g;
-            Ids nodes{neighbor}; parent[neighbor]=c;
-            for (size_t i=0;i<nodes.size();++i) {
-                int v=nodes[i]; owner[v]=g;
+            Range r{int(S.node_arena.size()),0};
+            S.node_arena.push_back(neighbor); parent[neighbor]=c;
+            for (int t=r.b;t<int(S.node_arena.size());++t) {
+                int v=S.node_arena[t]; owner[v]=g;
                 for (int w:adj[v]) if (!removed[w] && w!=parent[v]) {
-                    parent[w]=v; nodes.push_back(w);
+                    parent[w]=v; S.node_arena.push_back(w);
                 }
             }
-            components.push_back(std::move(nodes));
+            r.e=int(S.node_arena.size());
+            S.comps.push_back(r);
         }
-        std::vector<Group> groups(components.size());
-        for (int i:queries) groups[owner[qnode[i]]].q.push_back(i);
-        for (int j:keys) groups[owner[endpoint[j]]].k.push_back(j);
-        if (!reference_lca && pg>=0 && (!groups[pg].q.empty() || !groups[pg].k.empty()))
+        // Group queries and keys by owning component through counting sort,
+        // preserving each component's original input order without per-group
+        // vectors. Initial lists sit at the front of qs/ks; merge-tree lists are
+        // appended after them, so the component lists stay valid for recursion.
+        const int nc=int(S.comps.size());
+        S.gq.assign(nc,Range{0,0}); S.gk.assign(nc,Range{0,0});
+        S.qs.clear(); S.ks.clear();
+        S.count.assign(nc+1,0);
+        for (int t=qr.b;t<qr.e;++t) ++S.count[owner[qnode[qs[t]]]+1];
+        for (int g=0;g<nc;++g) S.count[g+1]+=S.count[g];
+        S.qs.resize(S.count[nc]);
+        S.cursor.assign(S.count.begin(),S.count.end());
+        for (int g=0;g<nc;++g) S.gq[g]=Range{S.count[g],S.count[g+1]};
+        for (int t=qr.b;t<qr.e;++t) { int i=qs[t]; S.qs[S.cursor[owner[qnode[i]]]++]=i; }
+        S.count.assign(nc+1,0);
+        for (int t=kr.b;t<kr.e;++t) ++S.count[owner[endpoint[ks[t]]]+1];
+        for (int g=0;g<nc;++g) S.count[g+1]+=S.count[g];
+        S.ks.resize(S.count[nc]);
+        S.cursor.assign(S.count.begin(),S.count.end());
+        for (int g=0;g<nc;++g) S.gk[g]=Range{S.count[g],S.count[g+1]};
+        for (int t=kr.b;t<kr.e;++t) { int j=ks[t]; S.ks[S.cursor[owner[endpoint[j]]]++]=j; }
+        if (!reference_lca && pg>=0 && (S.gq[pg].b!=S.gq[pg].e || S.gk[pg].b!=S.gk[pg].e))
             fill_lca(c);
-        // Keep original component lists for recursion; merged lists die here.
-        // The SAM root has length zero: every cross-component match has
-        // zero weight. Skip constructing groups' merge tree in that case,
-        // but still recurse into its components below.
+        // The SAM root has length zero: every cross-component match has zero
+        // weight. Skip the merge tree there but still recurse below.
         if (sam.nodes[c].length>0) {
-            std::vector<Group> work=groups;
-            using Item=std::pair<int,int>;
-            std::priority_queue<Item,std::vector<Item>,std::greater<Item>> heap;
-            for (int g=0;g<int(groups.size());++g) heap.emplace(int(components[g].size()),g);
+            S.wq.assign(S.gq.begin(),S.gq.end());
+            S.wk.assign(S.gk.begin(),S.gk.end());
+            auto &heap=S.heap; heap.clear(); heap.reserve(nc);
+            for (int g=0;g<nc;++g) heap.push_back({int(S.comps[g].e-S.comps[g].b),g});
+            std::make_heap(heap.begin(),heap.end(),std::greater<std::pair<int,int>>());
             while (heap.size()>1) {
-                auto [wa,a]=heap.top(); heap.pop();
-                auto [wb,b]=heap.top(); heap.pop();
-                cross(work[a],work[b],c,pg); cross(work[b],work[a],c,pg);
-                Group joined{merge(work[a].q,work[b].q),merge(work[a].k,work[b].k)};
-                work[a]=Group{}; work[b]=Group{};
-                heap.emplace(wa+wb,int(work.size())); work.push_back(std::move(joined));
+                std::pop_heap(heap.begin(),heap.end(),std::greater<std::pair<int,int>>());
+                auto [wa,a]=heap.back(); heap.pop_back();
+                std::pop_heap(heap.begin(),heap.end(),std::greater<std::pair<int,int>>());
+                auto [wb,b]=heap.back(); heap.pop_back();
+                cross(S.qs,S.wq[a],S.ks,S.wk[b],c,pg,S);
+                cross(S.qs,S.wq[b],S.ks,S.wk[a],c,pg,S);
+                Range qj,kj;
+                merge_into(S.qs,S.wq[a],S.wq[b],qj);
+                merge_into(S.ks,S.wk[a],S.wk[b],kj);
+                S.wq[a]=Range{0,0}; S.wk[a]=Range{0,0};
+                S.wq[b]=Range{0,0}; S.wk[b]=Range{0,0};
+                int joined=int(S.wq.size());
+                S.wq.push_back(qj); S.wk.push_back(kj);
+                heap.push_back({wa+wb,joined});
+                std::push_heap(heap.begin(),heap.end(),std::greater<std::pair<int,int>>());
             }
         }
-        emit(groups[0].q,groups[0].k,c,3);
-        for (size_t g=1;g<groups.size();++g)
-            decompose(components[g][0],groups[g].q,groups[g].k);
+        emit(S.qs,S.gq[0],S.ks,S.gk[0],c,3);
+        for (int g=1;g<nc;++g)
+            decompose(S.node_arena[S.comps[g].b],S.qs,S.gq[g],S.ks,S.gk[g],depth+1);
     }
 
   public:
@@ -314,22 +381,31 @@ class Builder {
             qnode.push_back(state); matched.push_back(length);
         }
         Ids ids(n); std::iota(ids.begin(),ids.end(),0);
-        decompose(0,ids,ids);
+        decompose(0,ids,{0,n},ids,{0,n},0);
     }
 
     Program finish() const {
         Program out; out.n=n; out.states=int(sam.nodes.size()); out.logden.assign(n,0.);
         if (gradients) out.dlogden.assign(n,0.);
         // Scalar pass. Only causal keys participate in each stream's pivot.
+        // The exponential pair (decay, weight) for a key depends only on the
+        // running pivot, so the two passes walk the identical key sequence and
+        // recompute the identical values. Evaluate each pair once here and hand
+        // it to the coefficient pass; exp is not CSE-able across calls because
+        // it may set errno, so the compiler cannot do this on its own.
+        static thread_local std::vector<double> key_decay, key_weight;
+        key_decay.clear(); key_weight.clear();
         for (const auto &s:streams) {
             size_t cursor=s.kb; double pivot=neg_inf, mass=0., dmass=0.;
             for (size_t qi=s.qb;qi<s.qe;++qi) {
                 int i=stream_q[qi];
                 while (cursor<s.ke && stream_k[cursor]<=i) {
                     double b=stream_b[cursor], next=std::max(pivot,b);
-                    if (gradients) dmass=dmass*std::exp(pivot-next)+std::exp(b-next)*stream_db[cursor];
+                    double decay=std::exp(pivot-next), weight=std::exp(b-next);
+                    if (gradients) dmass=dmass*decay+weight*stream_db[cursor];
                     ++cursor;
-                    mass=mass*std::exp(pivot-next)+std::exp(b-next); pivot=next;
+                    mass=mass*decay+weight; pivot=next;
+                    key_decay.push_back(decay); key_weight.push_back(weight);
                 }
                 if (mass) {
                     double term=stream_a[qi]+pivot+std::log(mass), next=logadd(out.logden[i],term);
@@ -344,16 +420,19 @@ class Builder {
         out.rows.reserve(capacity); out.decay.reserve(capacity); out.weight.reserve(capacity);
         if (gradients) out.dlogweight.reserve(capacity);
         out.offsets.reserve(streams.size()+1);
+        size_t key_cursor=0;
         for (const auto &s:streams) {
             size_t cursor=s.kb; double pivot=neg_inf;
             for (size_t qi=s.qb;qi<s.qe;++qi) {
                 int i=stream_q[qi];
                 while (cursor<s.ke && stream_k[cursor]<=i) {
-                    double b=stream_b[cursor], next=std::max(pivot,b);
+                    double b=stream_b[cursor];
                     if (gradients) out.dlogweight.push_back(stream_db[cursor]);
-                    out.rows.push_back(stream_k[cursor++]);
-                    out.decay.push_back(std::exp(pivot-next)); out.weight.push_back(std::exp(b-next));
-                    pivot=next;
+                    out.rows.push_back(stream_k[cursor]);
+                    out.decay.push_back(key_decay[key_cursor]);
+                    out.weight.push_back(key_weight[key_cursor]);
+                    ++key_cursor; ++cursor;
+                    pivot=std::max(pivot,b);
                 }
                 if (pivot!=neg_inf) {
                     out.rows.push_back(-i-1); out.decay.push_back(1.);

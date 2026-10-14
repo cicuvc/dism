@@ -22,12 +22,21 @@ def _chunk_backward(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, IDS,
                            OFFSETS, ROWS, PREFIX, WEIGHT, DLOG, LENGTH,
                            R: tl.constexpr, DV: tl.constexpr, C: tl.constexpr,
                            BR: tl.constexpr, BD: tl.constexpr, BF16: tl.constexpr,
-                           H=None, G=None, CHUNKS=None, RESET=None, BC: tl.constexpr=0):
-    stream = tl.load(IDS + tl.program_id(0))
-    if CHUNKS is None:
-        chunk = tl.load(OFFSETS + stream)
+                           H=None, G=None, CHUNKS=None, RESET=None, BC: tl.constexpr=0,
+                           LOCAL: tl.constexpr=0):
+    # LOCAL marks a compact bucket arena: the program id is the block index
+    # inside that arena and the arena itself is a padded plan of width C, so
+    # chunk*C addressing and the per-block tau slot both stay valid unchanged.
+    local = tl.program_id(0)
+    if LOCAL:
+        chunk = local
+        stream = local
     else:
-        chunk = tl.load(CHUNKS + tl.program_id(0)).to(tl.int64)
+        stream = tl.load(IDS + local)
+        if CHUNKS is None:
+            chunk = tl.load(OFFSETS + stream)
+        else:
+            chunk = tl.load(CHUNKS + local).to(tl.int64)
     K: tl.constexpr = C if BC == 0 else BC
     t, r, d = tl.arange(0, K), tl.arange(0, BR), tl.arange(0, BD)
     length = tl.load(LENGTH + chunk)
@@ -304,4 +313,134 @@ class FusedHardPrefillBackward(HardPrefillBackward):
             dtau.scatter_add_(0, self.data['stream_heads'].long(), contributions)
         else:
             dtau = (partials[0]+partials[1]).sum()
+        return dict(sq_vec=dsq, sk_vec=dsk, v=dv, rtau=dtau, tau_partials=partials)
+
+
+class CompactFusedHardPrefillBackward(FusedHardPrefillBackward):
+    """Fused consumer for a bucketed compact plan.
+
+    Single-chunk streams come from dense per-width bucket arenas, so no padded
+    single-chunk slots are uploaded; multi-chunk streams use the plan's ordinary
+    padded arrays. Same math and launch shapes as the packed consumer.
+    """
+    @classmethod
+    def from_compact(cls, plan, *, mma_precision='bf16', num_warps=None,
+                     long_mode='three_stage', non_blocking=False):
+        if mma_precision not in ('bf16', 'tf32x3'):
+            raise ValueError('mma_precision must be bf16 or tf32x3')
+        if num_warps not in (None, 2, 4, 8) or long_mode not in ('scan', 'three_stage'):
+            raise ValueError('num_warps must be None/2/4/8 and long_mode scan/three_stage')
+        stats = plan.statistics
+        # Upload may have run on another stream. tau_heads below reads device
+        # metadata immediately, so waiting only in backward would be too late.
+        plan.wait()
+        result = cls.__new__(cls)
+        result.storage, result.ready = plan.storage, plan.ready
+        result.device = plan.storage.device
+        result.n = stats['batch']*stats['heads']*stats['n']
+        result.c = stats['chunk_size']
+        result.precision, result.fused_warps, result.long_mode = mma_precision, num_warps, long_mode
+        result.tau_groups = stats['tau_rows']*stats['heads']
+        result.buckets, result.multi = plan.buckets, plan.multi
+        result.last_kernels = []
+        result.matrix_snapshot_bytes = 0
+        blocks = [int(bucket['lengths'].numel()) for bucket in plan.buckets]
+        result.block_base = np.cumsum([0] + blocks).astype(np.int64)
+        result.single_blocks = int(result.block_base[-1])
+        offsets = np.asarray(plan.host_multi_offsets.numpy(), np.int64)
+        spans = np.diff(offsets)
+        if np.any(spans < 1):
+            raise ValueError('multi-chunk stream offsets must be strictly increasing')
+        result.multi_streams, result.multi_chunks = int(spans.size), int(offsets[-1])
+        result.streams = result.single_blocks + result.multi_streams
+        result.bucket_hosts, result.bucket_devices = [], []
+        def upload(array):
+            host = torch.from_numpy(np.ascontiguousarray(array))
+            if non_blocking:
+                host = host.pin_memory()
+                result.bucket_hosts.append(host)
+            gpu = host.to(result.device, non_blocking=non_blocking)
+            result.bucket_devices.append(gpu)
+            return gpu
+        if result.multi_chunks:
+            result.multi_chunk_ids = upload(np.arange(result.multi_chunks, dtype=np.int32))
+            result.multi_chunk_streams = upload(
+                np.repeat(np.arange(result.multi_streams, dtype=np.int32), spans))
+            result.multi_stream_offsets = upload(np.r_[0, np.cumsum(spans)].astype(np.int64))
+        else:
+            result.multi_chunk_ids = result.multi_chunk_streams = None
+            result.multi_stream_offsets = upload(np.zeros(1, np.int64))
+        heads = [bucket['stream_heads'] for bucket in plan.buckets]
+        heads.append(plan.multi['stream_heads'])
+        result.tau_heads = torch.cat([h.reshape(-1) for h in heads]).to(result.device).long()
+        # cat/long are asynchronous even when host uploads were blocking.
+        result.bucket_ready = torch.cuda.Event()
+        result.bucket_ready.record(torch.cuda.current_stream(result.device))
+        return result
+
+    @torch.no_grad()
+    def backward(self, sq, sk, value, dout):
+        stream = torch.cuda.current_stream(self.device)
+        stream.wait_event(self.ready)
+        self.storage.record_stream(stream)
+        self.tau_heads.record_stream(stream)
+        if self.bucket_ready is not None:
+            stream.wait_event(self.bucket_ready)
+        for tensor in self.bucket_devices:
+            tensor.record_stream(stream)
+        if (sq.ndim != 2 or sq.shape[0] != self.n or sk.shape != sq.shape
+                or value.ndim != 2 or value.shape[0] != self.n or dout.shape != value.shape):
+            raise ValueError('expected SQ/SK [N,R], V/dO [N,DV]')
+        if sq.shape[1] not in (16, 32) or value.shape[1] not in (32, 64):
+            raise ValueError('prototype supports R16/32, DV32/64')
+        for x in (sq, sk, value, dout):
+            if x.device != self.device or not x.is_contiguous() or x.dtype not in (torch.float32, torch.bfloat16):
+                raise ValueError('contiguous BF16/FP32 input on the plan device required')
+        dsq, dsk, dv = [torch.zeros_like(x, dtype=torch.float32) for x in (sq, sk, value)]
+        partials = torch.zeros((2, self.streams), device=self.device, dtype=torch.float32)
+        r, v = sq.shape[1], value.shape[1]
+        bd = v if self.precision == 'bf16' else 64
+        config = (r, v, self.c, max(32, r), bd, self.precision == 'bf16')
+        self.last_kernels = []
+        for i, bucket in enumerate(self.buckets):
+            blocks = int(bucket['lengths'].numel())
+            if not blocks:
+                continue
+            width = bucket['width']
+            warps = self.fused_warps or (2 if width == 16 else 4)
+            lo = int(self.block_base[i])
+            self.last_kernels.append(_chunk_backward[(blocks,)](
+                sq, sk, value, dout, dsq, dsk, dv, partials[0, lo:lo + blocks], None,
+                None, bucket['rows'], bucket['prefixes'], bucket['weights'], bucket['dlog'],
+                bucket['lengths'], r, v, width, max(32, r), bd, self.precision == 'bf16',
+                BC=width, LOCAL=1, num_warps=warps, num_stages=1))
+        base = self.single_blocks
+        if self.multi_chunks:
+            m = self.multi
+            metadata = [m['offsets'], None, m['rows'], m['prefixes'], m['weights'],
+                        m['dlog'], m['lengths'], m['resets']]
+            warps = self.fused_warps or (2 if self.c == 16 else 4)
+            if self.long_mode == 'three_stage':
+                states = torch.empty((2, self.multi_chunks, r, v), device=self.device,
+                                     dtype=torch.float32)
+                alpha = torch.empty(self.multi_chunks, device=self.device, dtype=torch.float32)
+                self.matrix_snapshot_bytes = states.numel()*states.element_size()
+                h, g = states[0], states[1]
+                self.last_kernels.append(_chunk_summaries[(self.multi_chunks,)](
+                    sq, sk, value, dout, h, g, alpha, self.multi_chunk_ids, m['rows'],
+                    m['prefixes'], m['weights'], m['lengths'], m['resets'], *config,
+                    num_warps=warps, num_stages=1))
+                self.last_kernels.append(_summary_scan[(self.multi_streams, 1)](
+                    h, g, alpha, self.multi_stream_offsets, r*v, r*v, num_warps=4))
+                self.last_kernels.append(_chunk_backward[(self.multi_chunks,)](
+                    sq, sk, value, dout, dsq, dsk, dv, partials[0, base:],
+                    self.multi_chunk_streams, m['offsets'], m['rows'], m['prefixes'],
+                    m['weights'], m['dlog'], m['lengths'], *config, H=h, G=g,
+                    CHUNKS=self.multi_chunk_ids, RESET=m['resets'],
+                    num_warps=warps, num_stages=1))
+            else:
+                raise ValueError('compact plans require long_mode three_stage')
+        contributions = partials[0] + partials[1]
+        dtau = torch.zeros(self.tau_groups, device=self.device, dtype=torch.float32)
+        dtau.scatter_add_(0, self.tau_heads, contributions)
         return dict(sq_vec=dsq, sk_vec=dsk, v=dv, rtau=dtau, tau_partials=partials)
