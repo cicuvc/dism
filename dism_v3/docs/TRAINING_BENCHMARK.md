@@ -565,3 +565,379 @@ Artifacts: `build/model72m_fused22_control_20261014.json`,
 To reproduce, add `--conv-impl linear_fla --validate-conv` to the full-model
 command above. Conversion and numerical diagnostics are recorded in the JSON;
 neither flag changes the production model defaults.
+
+### Standalone current linear-CE baseline
+
+`tools/bench_cross_entropy.py` captures the LM-head input of one eager/no-grad
+linear/FLA forward from the same checkpoint's first prefetched batch. It then
+releases the model and measures CE alone: BF16 hidden `[1,32768,384]`, BF16 head
+`[32000,384]`, softcap30, ignore_index=-1. There are3801 ignored labels and28967
+valid tokens across34 documents. No optimizer is constructed, no checkpoint is
+written and no dataloader is resumed. The first-batch CE loss is not the prior
+full-model benchmark's reported fourth-microbatch loss.
+
+RTX5090 at the unchanged450W limit, conda blkw,2026-10-14. Five warmups, five
+samples of ten calls; table reports median CUDA-event intervals. Direct helper
+forward/backward functions are compiled fullgraph to avoid eager diagnostic
+label/boundary synchronizations. The public autograd column separately measures
+the actual compiled loss plus `autograd.grad`, including the BF16 gradient
+boundary. CUDA graphs are disabled. Inputs remain resident and repeatedly
+reused: this is a warm standalone benchmark, not the full-model schedule with
+planner traffic and other kernels. Do not multiply it by four and substitute
+it for the observed full-model CE attribution.
+
+| Existing entry | Forward, ms | Backward, ms | Combined helpers, ms | Public autograd, ms |
+|---|---:|---:|---:|---:|
+|Token mean, current nanochat training path|11.156|27.971|39.497|39.307|
+|`cu_seqlens` document mean|11.540|28.209|40.025|40.995|
+
+Public-autograd sample ranges were39.09–40.69ms and39.75–41.67ms respectively;
+the small difference between paths should not be read as a robust speed ratio.
+Peak additional allocated memory was134.97/135.09MiB above live inputs and saved
+diagnostic tensors, excluding allocator reservations. Backward uses1048 rows
+per dlogits chunk (about64MiB),32 chunks, three launches per chunk. Separate
+token-mean profiling gives11.678ms linear-CE forward, .056ms mean reduction,
+11.031ms dlogits,8.442ms dHidden and7.556ms dWeight per invocation. These kernel
+duration sums are instrumentation-based attribution, not the unprofiled medians.
+
+Both APIs live in `python/flash_dism/kernels/fused_cross_entropy.py`. The varlen
+entry uses the **same** `_linear_cross_entropy_fwd` and three backward kernels.
+It replaces the token reduction with `_document_loss_reduce` and
+`_document_mean_reduce`, and supplies per-token inverse-document-valid-count
+scales to dlogits. It averages over nonempty-valid documents; ignored tokens and
+documents with no valid targets do not contribute. On this fixture token mean
+is2.704145, whereas document mean is2.644696. Therefore passing `cu_seqlens` to
+the current training call is a loss-reweighting change, not a performance-only
+replacement. Per the training objective clarified after this measurement,
+document-balanced is the intended weighting and the existing token-mean
+training call is incorrect. This benchmark does not change that call. A future
+correction must also account for unequal document counts across accumulation
+microbatches/ranks; averaging their document means equally is not the global
+document mean. This is separate from sequence-level hard sampling, whose unit
+remains a packed training row, not a document.
+
+A separate forward-only sensitivity probe varies **only** the benchmark launch's
+BLOCK_M; production source/defaults are untouched. BLOCK_V64, BLOCK_K32,
+four warps and three stages stay fixed. This directly times the row kernel,
+without the final loss reduction:
+
+| Tokens per CTA | Median, ms | Registers/thread | Compiler spills | Dynamic shared bytes |
+|---|---:|---:|---:|---:|
+|16, original|11.718|63|0|10240|
+|32|9.104|86|0|12288|
+|64|5.981|128|0|16384|
+|128|5.953|252|0|24576|
+
+BM64 is about1.96x faster than BM16 in this probe; BM128 adds little speed but
+nearly doubles register use. This supports investigating larger token tiles,
+not automatically promoting a new launch default. All variants retain the500
+serial vocabulary iterations. LSE/NLL max absolute difference from BM16 is0
+for BM32 and1.91e-6 for BM64/128. Cubin disassembly found no CALL/LDL/STL;
+stack/local resources are zero. Reported dynamic shared memory comes from Triton
+metadata, not cuobjdump's1024-byte static shared resource. This probe covers the
+real aligned fixture, not all shapes/tails or an autotuning search. No sanitizer
+campaign was run; no production kernel math, tolerance or launch changed.
+
+The existing CE suite passed10 tests and12 subtests, including ignored labels,
+softcap and packed loss/gradient checks. Both timed public autograd paths also
+matched the direct helpers exactly after the existing BF16 output casts, with
+finite losses and gradients. Generated JSON, cubins, PTX and SASS are retained
+under ignored `build/ce72m_standalone_20261014*`.
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MAX_JOBS=2 TORCHINDUCTOR_COMPILE_THREADS=1 \
+PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat" \
+/home/cicuvc/miniconda3/envs/blkw/bin/python -u dism_v3/tools/bench_cross_entropy.py \
+  --checkpoint-dir /media/cicuvc/c63abdf1-0e56-4153-9228-95df5a2f239b/cicuvc/dism-runs/dism-fwedu-valres-72m-2500m/base_checkpoints/seqtrue72m-fwedu-valres \
+  --warmup 5 --repeats 10 --samples 5 --profile --probe-bm 16 32 64 128 \
+  --output dism_v3/build/ce72m_standalone_new.json
+```
+
+### Stock FLA fused-linear CE comparison
+
+`tools/bench_fla_cross_entropy.py` reuses the exact read-only fixture and timing
+helpers above:32768 tokens, width384, vocabulary32000, BF16, ignore_index=-1,
+five warmups and five samples of ten calls, RTX5090 at450W. It measures the
+installed `fla.modules.fused_linear_cross_entropy.FusedLinearCrossEntropyLoss`,
+not the logits-only `FusedCrossEntropyLoss`. Installed-source paths and hashes
+are recorded in the result. No production kernels, training configuration or
+checkpoint state changed.
+
+The stock FLA fused-linear interface has **no softcap and no per-token/document
+weights**. Its loss reduction is mean/sum, not unreduced. Its forward computes
+dx/dw immediately and saves them; backward only returns/scales them. Consequently
+compare the complete public-autograd pair, not forward/backward columns in
+isolation. FLA's class is compiler-disabled and runs with its natural eager
+boundary, including the valid-token `.item()` and backward upstream-scalar host
+synchronizations. Local public entries are fullgraph compiled as before, without
+CUDA graphs. Local backward-only timing uses the prepared direct helper because
+compiled autograd with donated buffers disallows repeated retained backward.
+Direct local gradients match public gradients exactly after existing BF16 casts.
+
+| Entry | Training forward, ms | Saved-state backward, ms | Complete autograd, ms | Peak extra allocated, MiB |
+|---|---:|---:|---:|---:|
+|Local, no softcap, token mean|10.943|27.890|39.018|134.97|
+|Local, softcap30, token mean|11.206|28.209|40.147|134.97|
+|Local, softcap30, document mean|11.448|28.785|40.162|135.09|
+|Stock FLA,8 chunks/default, no softcap, token mean|16.795|0.359|17.053|571.02|
+|Stock FLA,32 chunks, no softcap, token mean|16.506|0.289|16.843|196.00|
+
+Complete FLA event sample ranges are16.735–17.072ms and16.814–17.238ms; host-wall
+medians17.055/16.845ms. The difference between8/32 chunks is small and their
+ranges overlap, while both are about2.3x faster than the matching no-softcap
+local control. Upstream gradient1/4 (fresh graph each call, as FLA mutates saved
+gradients during scaling) gives17.044/16.941ms. Scaled gradients exactly equal
+the unit-upstream outputs divided by four. This does not test global
+document-count normalization across accumulation/ranks.
+
+FLA's actual chunks have4096/1024 rows, with250/62.5MiB BF16 logits buffers.
+Measured peak allocation exceeds one buffer: eager replacement can transiently
+retain both old/new chunk logits, in addition to gradients and temporaries.
+Memory is peak incremental allocated above resident inputs/diagnostic state,
+not allocator reservation or an end-to-end model-memory claim.
+
+Separate profiling attributes default8-chunk FLA to12.338ms across the three
+GEMM families,2.305ms CE/dlogits,1.206ms LSE, and approximately0.629ms other
+device work (total16.478ms). The32-chunk run gives12.477ms GEMMs,0.790ms
+CE/dlogits,0.696ms LSE and2.239ms other device work (total16.201ms); notably
+FP32 dWeight addition grows from0.408 to1.508ms. These are intrusive device
+duration sums, not a decomposition of the unprofiled median. The route uses
+chunked library GEMMs and overwrites each chunk's logits with dlogits, avoiding
+the local implementation's separate backward logits recomputation. This supports
+investigating GEMM-based chunked CE with softcap/document weights, rather than
+only increasing the current row-kernel BLOCK_M. It is not yet a benchmark of
+that semantically complete implementation.
+
+No-softcap losses are2.730832815 local versus2.730943203 FLA (absolute
+difference1.104e-4). FLA8 dx/dw relative-L2 differences are0.742%/0.564%, with
+cosines0.999973/0.999984; FLA32 gives0.711%/0.574%, cosines0.999975/0.999984.
+All outputs are finite. These are comparisons to the existing local kernel,
+not a new high-precision oracle or a claim of bitwise equivalence: FLA
+materializes BF16 logits and BF16 chunk dWeight matmul outputs before FP32
+addition. No tolerance/default was changed and no new sanitizer campaign was
+run for unmodified installed kernels.
+
+Results and per-kernel attribution are retained in ignored
+`build/ce72m_fla_retry_20261014.json` and matching log. The earlier
+`ce72m_fla_20261014` files record an incomplete harness attempt rejected by
+PyTorch's donated-buffer/retain_graph check; they are not performance results.
+No new Nsight capture was needed for this standalone comparison; earlier
+full-model `.nsys-rep` files remain intact.
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MAX_JOBS=2 TORCHINDUCTOR_COMPILE_THREADS=1 \
+PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat" \
+/home/cicuvc/miniconda3/envs/blkw/bin/python -u dism_v3/tools/bench_fla_cross_entropy.py \
+  --checkpoint-dir /media/cicuvc/c63abdf1-0e56-4153-9228-95df5a2f239b/cicuvc/dism-runs/dism-fwedu-valres-72m-2500m/base_checkpoints/seqtrue72m-fwedu-valres \
+  --warmup 5 --repeats 10 --samples 5 --num-chunks 8 32 --profile \
+  --output dism_v3/build/ce72m_fla_new.json
+```
+
+### Chunked fused linear CE with softcap and document balancing
+
+`python/flash_dism/kernels/fused_ce_chunked.py` is the new, independent entry
+required by `docs/FUSED_CE_TASK.md`; `fused_cross_entropy.py` stays in place as
+the control and none of its launch defaults changed. The route is ported from
+FLA's chunked fused-linear CE (`fla/modules/fused_linear_cross_entropy.py`, MIT
+License, Copyright (c) 2023-2025 Songlin Yang, Yu Zhang, itself adapted from
+Liger-Kernel). No FLA source is vendored and no FLA private helper is imported;
+the inherited ideas are the per-chunk library-GEMM logits, the in-place
+logits->dlogits reuse and the chunked FP32 dWeight accumulation. Ignored rows
+are not short-circuited: their logits are already materialised, so only the loss
+reduction counts them.
+
+Per token chunk the operator (1) computes the chunk logits with one library
+GEMM into one reusable `[chunk_rows, vocab]` buffer, never the full
+`[tokens, vocab]` logits, (2) runs `_chunk_partial_stats` for the capped
+per-(row, vocab-block) max, shifted sum-exp and target logit, (3)
+`_chunk_row_stats` merges those partials into one FP32 LSE and NLL per row, (4)
+`_chunk_dlogits` overwrites the chunk buffer in place with the softcap-corrected
+softmax gradient times the per-token reduction weight, and (5) two library GEMMs
+produce dHidden and a dWeight chunk partial that `_accumulate_fp32` adds into
+one FP32 `[vocab, channels]` accumulator. Softcap uses the same capped logits in
+the LSE, the target logit and the gradient, whose backward factor is
+`1 - tanh(z / c) ** 2`; it is applied inside the chunk kernels, so no extra pass
+and no saved tanh tensor is needed. The upstream gradient is applied to the
+saved gradients at backward time, so any upstream value and repeated backward
+passes stay correct - the FLA in-place rescue of saved gradients is deliberately
+not reproduced.
+
+Counting and reduction stay on the device: a per-token weight array is built
+from `_valid_token_count` (valid-token mean) or from `_document_valid_counts` +
+`_nonzero_count` + `_document_scale` (`1 / (D * n_d)` over documents with at
+least one valid label), and `_token_nll_sum` / `_document_nll_mean` +
+`_document_mean_sum` produce the numerator and the count. No per-chunk `.item()`,
+D2H copy or host-device synchronisation exists in either direction of the
+operator. `chunked_ce_forward` returns `(loss, mean_sum, count)` with `loss =
+mean_sum / count`, i.e. the sum of document means over the number of documents
+that carry at least one valid label; `normalize=False` returns the raw sum of
+document means and the same count so a caller can divide by a globally gathered
+document count instead. With `cu_seqlens=None` the same interface reports the
+valid-token sum and count. Document boundaries are independent of hard sampling,
+which remains packed-row level.
+
+dtypes and rounding, as measured rather than assumed:
+
+| Tensor | dtype | rounding |
+|---|---|---|
+| chunk logits / dlogits | `logits_dtype` (BF16 default, FP32 opt-in) | BF16 output is one rounding of an FP32 GEMM accumulation |
+| dHidden | library GEMM in `logits_dtype`, saved and cast to the input dtype after the upstream multiply | one BF16 rounding of the GEMM output |
+| dWeight chunk partial | library GEMM in `logits_dtype` | a BF16 chunk partial added into an FP32 buffer is *not* an FP32 GEMM output |
+| dWeight accumulator / `mean_sum` / LSE / NLL / weights | FP32 | FP32 accumulation across chunks and reductions |
+| returned gradients | hidden / weight input dtype | one final cast after the upstream multiply |
+
+A BF16 chunk partial into an FP32 accumulator therefore costs one extra BF16
+rounding relative to an FP32 GEMM output; the FP32 `logits_dtype` mode removes
+that rounding (at roughly 3.7x the runtime) and is the way to separate the
+arithmetic from the chunk-buffer rounding.
+
+RTX5090 at the unchanged450W limit, conda blkw,2026-10-14. Same read-only
+fixture and method as the sections above: 32768 tokens, width384,
+vocabulary32000, BF16,34 documents,3801 ignored labels, five warmups and five
+samples of ten calls, CUDA-event and host-wall timing, CUDA graphs disabled,
+complete public autograd as the comparison unit (each call therefore includes
+the chunked forward that prepares dHidden/dWeight). Every row below was
+re-measured in one session, including the legacy control and stock FLA.
+Host-wall medians agreed with the CUDA-event medians to within0.01ms in every
+row (both are kept in the result JSON). The chunked and legacy rows contain no
+host-device synchronisation inside the timed region; the stock FLA row keeps its
+own valid-token `.item()` forward synchronisation, as described above.
+
+| Entry | Complete autograd, ms | Upstream 1/4, ms | Eager autograd, ms | Peak extra allocated, MiB |
+|---|---:|---:|---:|---:|
+|Legacy control, no softcap, token mean|39.21|38.69|38.82|135.0|
+|Legacy control, softcap30, document mean|39.00|39.42|39.38|135.1|
+|Stock FLA,8 chunks, no softcap, token mean|17.27|17.29|n/a|571.0|
+|Stock FLA,32 chunks, no softcap, token mean|16.90|16.93|n/a|196.0|
+|Chunked, no softcap, token mean, chunk1024|16.67|16.42|16.78|159.2|
+|Chunked, softcap30, document mean, chunk1024|16.91|16.96|17.28|159.2|
+|Chunked, no softcap, token mean, chunk2048|17.98|18.10|18.30|342.1|
+|Chunked, softcap30, document mean, chunk2048|18.31|18.36|18.60|342.1|
+|Chunked, no softcap, token mean, chunk4096|17.43|17.56|17.67|353.3|
+|Chunked, softcap30, document mean, chunk4096|17.89|17.76|18.03|353.3|
+
+A second run of the same scan reproduced the chunk1024 rows within0.4ms
+(16.41/17.03ms and 16.32/17.00ms for the two runs of the same command), so the
+chunk-size ordering is a real effect: a1024-row buffer is about64MiB, which
+stays in L2 across the two CE passes (0.85-0.94ms of dlogits work per run
+instead of2.64ms at4096 rows), while the three GEMMs stay at12.5-13.5ms either
+way. Peak extra allocation grows with the chunk and with the number of retained
+chunk partials, and stays below the stock FLA 8-chunk figure. `chunk_rows=None`
+now means the64MiB budget rounded down to a power of two (1024 rows here); no
+production caller was switched to this entry.
+
+Correctness against the existing local control on the same fixture. The numbers
+compare the chunked operator's internal pre-upstream tensors
+(`versus_local_control_internal`) with the control's public gradients, so the
+final input-dtype cast of the returned gradients does not hide the arithmetic;
+the public comparison is reported alongside in the result JSON:
+
+| Case | Loss | dHidden relative L2 / cosine | dWeight relative L2 / cosine |
+|---|---:|---:|---:|
+|Chunked BF16, no softcap, token mean|2.730943 vs2.730833|0.694% /0.999976|0.532% /0.999984|
+|Chunked BF16, softcap30, document mean|2.644690 vs2.644696|0.573% /0.999984|0.537% /0.999985|
+|Chunked FP32 buffer, no softcap, token mean|2.730832 vs2.730833|0.269% /1.000000|0.221% /1.000000|
+|Chunked FP32 buffer, softcap30, document mean|2.644696 vs2.644696|0.247% /1.000000|0.228% /1.000000|
+
+Norm ratios stay within0.04% of1 and every output is finite. The BF16 numbers
+carry one rounding for logits, one for dlogits and one for each GEMM output, and
+land next to the stock FLA figures measured against the same control (dx0.71
+to0.74%, dw0.56 to0.57%). The FP32-buffer rows isolate the remaining error: the
+0.22 to0.27% left is the local control's own BF16 dlogits/dHidden rounding,
+while the small-shape FP32 oracle tests put the fixture's BF16 *input*
+quantization at about0.18% and attribute nothing else to the operator. The loss
+agrees to1.1e-4 (no softcap) and6.4e-6 (softcap30, document mean), and the
+normalizer identities are visible:28967 valid tokens,34 valid documents, sum of
+document means89.919464 = 34 x2.644690. Upstream1/4 reproduces exactly0.25x the
+unit-upstream gradients (max absolute0, relative L20) for every case, because
+the scaling happens after the saved gradients.
+
+Separate device-duration attribution (intrusive profiler, three iterations, not
+a decomposition of the unprofiled medians):
+
+| Chunk1024 case | GEMMs, ms | dlogits, ms | partial stats, ms | row merge, ms | FP32 dWeight add, ms | Device total, ms |
+|---|---:|---:|---:|---:|---:|---:|
+|No softcap, token mean|12.71|0.85|0.57|0.18|1.45|16.00|
+|Softcap30, document mean|13.54|0.94|0.94|0.18|1.66|17.47|
+
+At chunk4096 the same attribution is12.46-12.71ms of GEMMs,2.64ms of dlogits,
+1.50-1.54ms of partial stats,0.14ms of row merge and0.37ms of FP32 dWeight
+addition. The FP32 accumulator read-modify-write is the price of one explicit
+FP32 `[vocab, channels]` accumulator per chunk (about122MiB of traffic per
+chunk); letting the compiler fuse the `add_` chain measured about1ms faster at
+32 chunks but retained one BF16 `[vocab, channels]` partial per chunk, i.e.
+841MiB instead of159MiB of peak extra allocation, so the explicit kernel was
+kept. Chunk sizes are ordinary per-call arguments; the benchmark only passes
+them, never the library defaults.
+
+Kernel hygiene for the three new Triton kernels at the default block sizes:
+`_chunk_partial_stats` 79 registers, 0 spills,128B shared;
+`_chunk_row_stats` 128 registers, 0 spills,128B shared; `_chunk_dlogits` 95
+registers, 0 spills,0B shared. Cubin SASS contains no `CALL`, `LDL` or `STL`
+instruction in any of them. `compute-sanitizer` memcheck (0 errors),
+synccheck (0 errors) and racecheck (0 hazards) all ran clean over a scenario
+that covers softcap, document balancing, zero-length and single-token
+documents, fully ignored documents, chunk sizes3/7/23/64 and both reduction
+modes. The sanitizer scenario is small: it does not cover the full-fixture
+shapes, the multi-chunk tail or the compiled path, and no FP32-atomic,
+shared-memory-atomic or long-running-soak check was added, because the operator
+uses neither atomics nor a shared FP32 atomicAdd.
+
+`test_fused_ce_chunked.py` passes15 tests and18 subtests: FP32 explicit
+references for both reductions with chunk sizes3/7/64, empty and single-token
+documents, softcap30/1.0/0.25, exactly saturated and partly saturated logits,
+documents crossing chunk boundaries with a fully ignored document, the
+microbatch split with unequal document counts (the naive average of microbatch
+document means is shown to differ, the reported sum/count pair is shown to
+match a single whole-batch call), upstream1/0.37/0.25 linearity, repeated
+backward over one graph, all-ignored zero gradients with no NaN, BF16 and
+FP32-buffer tolerances, `torch.compile` fullgraph equality with eager, int32
+labels and the validation contract. The existing `test_fused_cross_entropy.py`
+still passes its10 tests and12 subtests unchanged.
+
+Limits and integration notes. The BF16 default loses about0.5 to0.7% of gradient
+relative L2 against an FP32-internal implementation; that is inherent to a
+BF16 logits/dlogits chunk buffer and is quantified above rather than hidden. The
+document-balanced loss is exact for the local packed rows, but the returned
+loss is normalised by the *local* valid-document count. Accumulating losses
+across microbatches or ranks must not average those per-microbatch means:
+
+```
+L_step = sum over ranks and microbatches of (sum of document means)
+         / (total number of documents with at least one valid label)
+```
+
+`chunked_ce_forward(..., normalize=False)` plus `mean_sum`/`count` is exactly
+the pair needed for that reduction, and for a single-pass gradient the
+microbatch loss can be pre-scaled by `1 / total_valid_documents` before
+backward, because the per-token weight then only carries `1 / n_d`. The current
+training loop was deliberately not modified: the distributed gradient average
+happens in the optimizer, so any switch to document-balanced weighting has to
+be checked there separately. Dataloader, RNG counters, optimizer schema and
+checkpoints are untouched.
+
+Artifacts: results, per-kernel attribution and kernel resources in ignored
+`build/ce72m_chunked_final_20261014.json`, accuracy isolation in
+`build/ce72m_chunked_accuracy_20261014.json`, the in-session controls in
+`build/ce72m_fla_20261014_resession.json`, sanitizer logs in
+`build/ce72m_chunked_{memcheck,synccheck,racecheck}_20261014.log`, kernel
+cubins/PTX/SASS next to the result JSON.
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MAX_JOBS=2 TORCHINDUCTOR_COMPILE_THREADS=1 \
+PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat" \
+/home/cicuvc/miniconda3/envs/blkw/bin/python -u dism_v3/tools/bench_ce_chunked.py \
+  --checkpoint-dir /media/cicuvc/c63abdf1-0e56-4153-9228-95df5a2f239b/cicuvc/dism-runs/dism-fwedu-valres-72m-2500m/base_checkpoints/seqtrue72m-fwedu-valres \
+  --warmup 5 --repeats 10 --samples 5 --chunk-rows 1024 2048 4096 --kernel-probe \
+  --output dism_v3/build/ce72m_chunked_final_20261014.json
+
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MAX_JOBS=2 TORCHINDUCTOR_COMPILE_THREADS=1 \
+PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat" \
+/home/cicuvc/miniconda3/envs/blkw/bin/python -u dism_v3/tools/bench_ce_chunked.py \
+  --checkpoint-dir /media/cicuvc/c63abdf1-0e56-4153-9228-95df5a2f239b/cicuvc/dism-runs/dism-fwedu-valres-72m-2500m/base_checkpoints/seqtrue72m-fwedu-valres \
+  --warmup 5 --repeats 10 --samples 5 --chunk-rows 1024 --no-profile --fp32-buffer \
+  --output dism_v3/build/ce72m_chunked_accuracy_20261014.json
+
+PYTHONPATH="$PWD/dism_v3/python" /home/cicuvc/miniconda3/envs/blkw/bin/python -m pytest -q \
+  dism_v3/python/flash_dism/kernels/test_fused_ce_chunked.py
+```
