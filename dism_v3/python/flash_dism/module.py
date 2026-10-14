@@ -5,16 +5,32 @@ from torch import nn
 from torch.nn import functional as F
 from .kernels.conv1d import CausalShortConv1d
 from .kernels.random_bool import triton_rand_bool
+from .kernels.value_residual import value_residual_fused, value_residual_supported
 
 
-def value_residual_mix(v, v_first, gate):
-    """v_first + (v - v_first) * sigmoid(gate), per head.
+def value_residual_mix_reference(v, v_first, gate):
+    """Eager reference: v_first + (v - v_first) * sigmoid(gate), per head.
 
     v, v_first: [B, N, H, DV]; gate: [B, N, H].
+
+    Kept as the numerical and performance reference for the fused kernel; it is
+    also the fallback for every layout/dtype the fused operator does not cover.
     """
     g = torch.sigmoid(gate.float()).unsqueeze(-1)
     mixed = v_first.float() + (v.float() - v_first.float()) * g
     return mixed.to(v.dtype)
+
+
+def value_residual_mix(v, v_first, gate):
+    """Single common helper for the value-residual mix.
+
+    Dispatches to the fused Triton operator when the packed CUDA training
+    layout is supported, and to :func:`value_residual_mix_reference` otherwise.
+    Set ``DISM_VALUE_RESIDUAL_KERNEL=reference`` to force the eager path.
+    """
+    if value_residual_supported(v, v_first, gate):
+        return value_residual_fused(v, v_first, gate)
+    return value_residual_mix_reference(v, v_first, gate)
 
 
 class TransVQMap(nn.Module):
