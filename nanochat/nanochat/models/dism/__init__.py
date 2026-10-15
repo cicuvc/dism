@@ -49,6 +49,9 @@ class DismConfig:
     conv_impl: str = "fused"
     conv_backend: str = "cuda"
     gqa_query_channels: int = 1
+    # >1 groups the query heads so every kv_group_size of them share one
+    # key/value head (classic GQA). Mutually exclusive with gqa_query_channels.
+    kv_group_size: int = 1
     vocab_transvq: bool = False
     vocab_transvq_lite: bool = False
     vocab_transvq_map: str = "linear_attn"

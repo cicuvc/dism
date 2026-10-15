@@ -53,6 +53,8 @@ def forward_torch(module, x, last_state, *, direction=None, hard=None,
     """Exact FP32 (FP64 for double models) inference; no Triton/CUDA kernel calls."""
     if getattr(module, "gqa_query_channels", 1) > 1:
         raise NotImplementedError("GQA-DISM G>1 is not supported by Torch decoding")
+    if getattr(module, "kv_group_size", 1) > 1:
+        raise NotImplementedError("shared-KV DISM is not supported by Torch decoding")
     batch, length, _ = x.shape
     if batch < 1 or length < 1:
         raise ValueError("decoding requires nonempty batch and new tokens")

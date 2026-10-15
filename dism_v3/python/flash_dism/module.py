@@ -144,7 +144,8 @@ class DismAttention(nn.Module):
                  rope_theta=10000.0, qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
                  value_residual=False, vocab_temperature=1.0,
                  vocab_transvq=False, vocab_transvq_lite=False,
-                 vocab_transvq_map="linear_attn", vocab_transvq_rank=4, gqa_query_channels: int = 1):
+                 vocab_transvq_map="linear_attn", vocab_transvq_rank=4, gqa_query_channels: int = 1,
+                 kv_group_size: int = 1):
         super().__init__()
         if min(width, heads, vocab_size, conv_size) <= 0:
             raise ValueError("width, heads, vocab_size and conv_size must be positive")
@@ -167,21 +168,32 @@ class DismAttention(nn.Module):
         if type(gqa_query_channels) is not int or gqa_query_channels not in (1, 2):
             raise ValueError("gqa_query_channels must be 1 or 2")
         self.gqa_query_channels = gqa_query_channels
+        if type(kv_group_size) is not int or kv_group_size not in (1, 2):
+            raise ValueError("kv_group_size must be 1 or 2")
+        if kv_group_size > 1 and gqa_query_channels > 1:
+            # Two different ways to share one kv across two queries; not composable.
+            raise ValueError("kv_group_size and gqa_query_channels are mutually exclusive")
+        if heads % kv_group_size:
+            raise ValueError("heads must be divisible by kv_group_size")
+        self.kv_group_size = kv_group_size
         self.width, self.heads = width, heads
+        # kv_group_size=2 gives heads//2 key/value heads, each queried by
+        # kv_group_size distinct query heads (classic GQA head grouping).
+        self.kv_heads = heads // kv_group_size
         if layer_idx is not None and (isinstance(layer_idx, bool) or not isinstance(layer_idx, int)
                                       or not 0 <= layer_idx < (1 << 63)):
             raise ValueError("layer_idx must be a nonnegative int64 integer or None")
         self.layer_idx = layer_idx
         self.head_dim, self.value_dim, self.readout_dim = head_dim, value_dim, readout_dim
         self.q_conv = CausalShortConv1d(width, heads * head_dim, conv_size)
-        self.k_conv = CausalShortConv1d(width, heads * head_dim, conv_size)
-        self.v_conv = CausalShortConv1d(width, heads * value_dim, conv_size)
+        self.k_conv = CausalShortConv1d(width, self.kv_heads * head_dim, conv_size)
+        self.v_conv = CausalShortConv1d(width, self.kv_heads * value_dim, conv_size)
         self.sq_proj = nn.Linear(width, heads * readout_dim, bias=False)
-        self.sk_proj = nn.Linear(width, heads * readout_dim, bias=False)
+        self.sk_proj = nn.Linear(width, self.kv_heads * readout_dim, bias=False)
         # Store effective codewords directly: SiLU shapes only initialization,
         # not the trainable parameter space or its backward Jacobian.
         self.q_vocab = nn.Parameter(F.silu(torch.randn(heads, vocab_size, head_dim, dtype=torch.float32)))
-        self.k_vocab = nn.Parameter(F.silu(torch.randn(heads, vocab_size, head_dim, dtype=torch.float32)))
+        self.k_vocab = nn.Parameter(F.silu(torch.randn(self.kv_heads, vocab_size, head_dim, dtype=torch.float32)))
         self.log_sel_tau = nn.Parameter(torch.empty(heads).uniform_(-4, 4))
         for parameter in (self.q_vocab, self.k_vocab, self.log_sel_tau):
             parameter._no_weight_decay = True
@@ -210,11 +222,11 @@ class DismAttention(nn.Module):
             self.gqa_mix = nn.Parameter(torch.full((heads, 2), 0.5))
 
     @staticmethod
-    def _expand_gqa(tensor, head_axis):
-        """Duplicate each shared head in h*2+g order; backward sums over g."""
+    def _expand_gqa(tensor, head_axis, factor=2):
+        """Duplicate each shared head in h*factor+g order; backward sums over g."""
         shape = list(tensor.shape)
-        expanded = shape[:head_axis + 1] + [2] + shape[head_axis + 1:]
-        shape[head_axis] *= 2
+        expanded = shape[:head_axis + 1] + [factor] + shape[head_axis + 1:]
+        shape[head_axis] *= factor
         return tensor.unsqueeze(head_axis + 1).expand(expanded).reshape(shape).contiguous()
 
     def _mix_gqa(self, output):
@@ -236,8 +248,9 @@ class DismAttention(nn.Module):
                       linear_q=None, linear_k=None, conv_seq_idx=None):
         return output
 
-    def _activate_readout(self, projected, *, is_key=False):
-        features = F.silu(projected).unflatten(-1, (self.heads, self.readout_dim))
+    def _activate_readout(self, projected, *, is_key=False, heads=None):
+        features = F.silu(projected).unflatten(-1, (self.heads if heads is None else heads,
+                                                    self.readout_dim))
         if self.readout_l2_norm or (is_key and self.soft_k_l2_norm):
             # FP32 norm/reduction for BF16 training; unit L2 per head, not RMS.
             dtype = features.dtype
@@ -287,6 +300,8 @@ class DismAttention(nn.Module):
             mask = None
         if self.gqa_query_channels > 1 and (torch_path or past_key_values is not None):
             raise NotImplementedError("GQA-DISM G>1 supports only uncached aligned CUDA execution")
+        if self.kv_group_size > 1 and (torch_path or past_key_values is not None):
+            raise NotImplementedError("shared-KV DISM supports only uncached aligned CUDA execution")
         if torch_path:
             if v_first is not None:
                 raise NotImplementedError("value residual is only implemented for packed CUDA training/eval")
@@ -401,7 +416,7 @@ class DismAttention(nn.Module):
             direction = torch.randint(2, (), device=x.device, generator=generator,
                                       dtype=torch.int32).bool().expand(batch, self.heads).contiguous()
 
-        def project(convolution, channels, linear=None):
+        def project(convolution, channels, linear=None, heads=None):
             conv_options = ({'seq_idx': conv_seq_idx}
                             if getattr(convolution, 'supports_seq_idx', False) else {})
             if linear is not None:
@@ -413,25 +428,35 @@ class DismAttention(nn.Module):
                                       convolution.conv_weight.to(dtype), cu_seqlens, max_seqlen)
             else:
                 values = convolution(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, **conv_options)
-            return values.reshape(batch, length, self.heads, channels).contiguous()
+            return values.reshape(batch, length, self.heads if heads is None else heads,
+                                  channels).contiguous()
 
         # torch Linear + FLA conv: the DISM and GDN branches share the q/k input
-        # projection (tied linear weight), so compute it once and apply each
-        # branch's independent depthwise conv on top.
-        share_qk_linear = (getattr(self, "share_qk_linear", False)
-                           and getattr(self, "gdn_q_conv", None) is not None
-                           and self.q_conv.weight is self.gdn_q_conv.weight)
-        linear_q = self.q_conv.project_linear(x) if share_qk_linear else None
-        linear_k = self.k_conv.project_linear(x) if share_qk_linear else None
+        # projections when the linear weights are aliased, so compute the tied
+        # projection once and apply each branch's independent depthwise conv on
+        # top. kv_group_size>1 breaks the k tie (different output widths), so the
+        # two branches are decided independently rather than off one flag.
+        tied = bool(getattr(self, "share_qk_linear", False))
+        gdn_q_conv = getattr(self, "gdn_q_conv", None)
+        gdn_k_conv = getattr(self, "gdn_k_conv", None)
+        share_q = tied and gdn_q_conv is not None and self.q_conv.weight is gdn_q_conv.weight
+        share_k = tied and gdn_k_conv is not None and self.k_conv.weight is gdn_k_conv.weight
+        linear_q = self.q_conv.project_linear(x) if share_q else None
+        linear_k = self.k_conv.project_linear(x) if share_k else None
         q = project(self.q_conv, self.head_dim, linear_q)
-        k = project(self.k_conv, self.head_dim, linear_k)
-        v = project(self.v_conv, self.value_dim)
+        k = project(self.k_conv, self.head_dim, linear_k, heads=self.kv_heads)
+        v = project(self.v_conv, self.value_dim, heads=self.kv_heads)
+        if self.kv_group_size > 1:
+            # One shared key side queried by kv_group_size distinct query heads.
+            k, v = (self._expand_gqa(t, 2, self.kv_group_size) for t in (k, v))
         if self.value_residual and v_first is not None:
             v = value_residual_mix(v, v_first, self.v_residual_gate(x))
         if q.dtype != torch.bfloat16:
             raise ValueError("use CUDA BF16 autocast; the production kernels require BF16")
         sq = self._activate_readout(self.sq_proj(x))
-        sk = self._activate_readout(self.sk_proj(x), is_key=True)
+        sk = self._activate_readout(self.sk_proj(x), is_key=True, heads=self.kv_heads)
+        if self.kv_group_size > 1:
+            sk = self._expand_gqa(sk, 2, self.kv_group_size)
         # No runtime codebook activation; interpolation owns the BF16 cast.
         if self.vocab_transvq:
             with torch.autocast('cuda', enabled=False):
@@ -439,6 +464,10 @@ class DismAttention(nn.Module):
                 ek = self.k_vocab_map(self.k_vocab.float())
         else:
             eq, ek = self.q_vocab.float(), self.k_vocab.float()
+        if self.kv_group_size > 1:
+            # The shared key anchors one symbol set for the whole group; the
+            # query side keeps an independent codebook per query head.
+            ek = self._expand_gqa(ek, 0, self.kv_group_size)
         tau = F.softplus(self.log_sel_tau.float()).contiguous()
         dism_v = v
         if self.gqa_query_channels == 2:

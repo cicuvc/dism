@@ -26,8 +26,11 @@ class DismGdnAttention(DismAttention):
 
     def tie_branch_projections(self):
         # True Parameter aliasing; conv filters and both V paths remain independent.
+        # kv_group_size>1 narrows the key projection to heads//2, so the key
+        # linear cannot alias GDN's full-width key projection any more.
         self.gdn_q_conv.weight = self.q_conv.weight
-        self.gdn_k_conv.weight = self.k_conv.weight
+        if self.k_conv.weight.shape == self.gdn_k_conv.weight.shape:
+            self.gdn_k_conv.weight = self.k_conv.weight
 
     def _apply(self, fn, recurse=True):
         result = super()._apply(fn, recurse=recurse)

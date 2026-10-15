@@ -13,6 +13,7 @@ class DismConfig(PretrainedConfig):
                  value_residual=False,
                  vocab_temperature=1.0,
                  gqa_query_channels: int = 1, vocab_transvq=False,
+                 kv_group_size: int = 1,
                  vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
                  intermediate_size=None, hidden_ratio=4., norm_eps=1e-6,
@@ -52,6 +53,13 @@ class DismConfig(PretrainedConfig):
         if type(gqa_query_channels) is not int or gqa_query_channels not in (1, 2):
             raise ValueError("gqa_query_channels must be 1 or 2")
         self.gqa_query_channels = gqa_query_channels
+        if type(kv_group_size) is not int or kv_group_size not in (1, 2):
+            raise ValueError("kv_group_size must be 1 or 2")
+        if kv_group_size > 1 and gqa_query_channels > 1:
+            raise ValueError("kv_group_size and gqa_query_channels are mutually exclusive")
+        if num_heads % kv_group_size:
+            raise ValueError("num_heads must be divisible by kv_group_size")
+        self.kv_group_size = kv_group_size
         self.vocab_transvq = bool(vocab_transvq)
         self.vocab_transvq_lite = bool(vocab_transvq_lite)
         self.vocab_transvq_map = str(vocab_transvq_map)

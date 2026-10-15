@@ -111,6 +111,7 @@ class DismLM(nn.Module):
                         value_residual=config.value_residual,
                         vocab_temperature=getattr(config, 'vocab_temperature', 1.0),
                         gqa_query_channels=getattr(config, "gqa_query_channels", 1),
+                        kv_group_size=getattr(config, "kv_group_size", 1),
                         vocab_transvq=getattr(config, "vocab_transvq", False),
                         vocab_transvq_lite=getattr(config, "vocab_transvq_lite", False),
                         vocab_transvq_map=getattr(config, "vocab_transvq_map", "linear_attn"),
@@ -227,10 +228,12 @@ class DismLM(nn.Module):
                 continue
             for table in (attn.q_vocab, attn.k_vocab):
                 # Consume the original per-head RNG stream, but initialize each shared parameter once.
+                # The shared key codebook with kv_group_size>1 has fewer rows; the
+                # draw keeps its width so the RNG counter is unchanged either way.
                 draw = F.silu(torch.randn((attn.heads, attn.q_vocab.shape[-2], attn.head_dim),
                                           device=table.device, dtype=table.dtype))
                 if id(table) not in initialized_tables:
-                    table.copy_(draw[0] if table.ndim == 2 else draw)
+                    table.copy_(draw[0] if table.ndim == 2 else draw[:table.shape[0]])
                     initialized_tables.add(id(table))
             if getattr(attn, "gqa_query_channels", 1) == 2:
                 attn.gqa_mix.fill_(0.5)
