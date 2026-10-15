@@ -15,6 +15,15 @@ Convention this pins: the interpolation stores `LSE_beta - tau` (the detached ta
 is folded into the LSE) and the core does not add `rtau` again on soft rows, so
 undoing the fold must recover `dism_ref`. A future change to either half is
 caught here.
+
+Value and gradient reach tau by different routes, which is easy to misread:
+soft rows get the tau *value* from the fold but no gradient from it (the folded
+tau is detached, and `backward/recompute.cuh` builds the soft score as
+`raw - lse` without touching the tau pointer); their tau *gradient* comes from
+`backward_qk.cu`, which skips hard rows and accumulates one unit per pair. Hard
+rows take both the value and the gradient from `rtau` inside the core. The
+gradient of the soft route is a precision-limited quantity, not an exact one;
+see `dism_v3/tools/check_tau_gradient.py`.
 """
 import pytest
 import torch
