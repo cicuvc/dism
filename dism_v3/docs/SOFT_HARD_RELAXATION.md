@@ -3860,3 +3860,58 @@ D ∈ {64, 128, 256, 512, 1k, 2k, 4k, 8k, 15k}  ×  {full, recurrence-off, GDN-o
 > 远端精确 recall；只有带后缀结构的**变阶寻址**做到了。
 
 这把"指数 slot"的主张从"我们比 MoM 好"升级为"**两类已知的固定状态记忆叠起来也不够**"。
+
+## 43. 硬反向的两条派发路径梯度不一致（2026-10-15，已实测）
+
+`_voc_forward_impl` 的前向只有一份实现（都用 `forward_hard`），但反向按 ticket 的
+`route` 分岔成两套**独立内核**：
+
+- `event`：planner 编译出的 `Program`，由 `CompactFusedHardPrefillBackward` /
+  `FusedHardPrefillBackward` 消费；
+- `quadratic`（回落）：`backward_hard_recompute` 重算 `forward_hard(save_state=True)`
+  后调 `cu.hard_backward`。
+
+现有测试把两条路径**各自**钉在一个 FP64 oracle 上，容差是
+`gradient_acceptance` 的 `VECTOR`（cosine≥0.999、rel_l2≤3%）与 `TAU`
+（cosine≥0.95、rel_l2≤50%），**没有任何测试把两条路径互相比较**。新增的
+`dism_v3/tests/test_hard_route_consistency.py` 做了这件事。
+
+**结论：偏差只出现在 τ 梯度上，而且错的是 event 路径。**
+
+同一批输入、只改 planner 的 `backward_policy`，τ 梯度对 FP64 oracle 的相对 L2：
+
+| 输入形态 | event | quadratic |
+| --- | --- | --- |
+| 随机符号，8 组 | 8e-6 … 9e-5 | 5e-6 … 5e-5 |
+| 所有符号相同（最大匹配） | **2.6e-3 … 6.2e-2** | 2.5e-6 … 7.5e-4 |
+
+`sq/sk/v` 两条路径在所有形态下互差 ≤6.5e-4（bf16 舍入水平），所以是 τ 独有的。
+
+**触发条件是每条流跨多少个 planner chunk**（`dism_v3/tools/route_tau_sweep.py`
+扫出来的，τ 梯度 event-vs-quadratic 相对 L2）：
+
+| run/chunk | 误差 |
+| --- | --- |
+| 0.2 / 0.5 / 1.0 | 2e-7 … 7e-7（精确） |
+| 2.0 | 2.8e-6 … 8.4e-4 |
+| 4.0 | 3.8e-4 … 1.5e-2 |
+| 8.0 / 16 / 32 | 4.4e-3 … 1.6e-1 |
+
+同一个 run 长度在不同 `chunk_size` 下按比例复现（block=256 在 chunk 16/32/64 下都坏；
+block=64 在 chunk 64 下等于 1 chunk，精确），所以故障在**多 chunk 流的导数路径**——
+即 `prefill.hpp` 的 `logweights/derivatives` 表（存的是 `d log F/dτ`，不是 `dF/dτ`）、
+`dlogden` 的跨流反向累积（`prefill.hpp:412`），以及消费端 `_query_backward` /
+`_key_backward` + summary scan 的导数分量。
+
+生产统计量 `single_blocks 56518 / multi_streams 2547 / multi_chunks 6925`（平均
+2.7 chunk）说明约 4% 的流命中该路径，这就是为什么所有旧测试（标签随机、run 很短、
+全是单 chunk）一直是绿的。
+
+**影响与不是影响：**
+
+- τ 梯度天然由长 run 主导（长度 s 的 run 对 dτ 的贡献约为其对权重贡献的 s 倍），
+  而长 run 恰好就是多 chunk 的那些，所以偏差落在 dτ 权重最大的部分。
+- 它**不能**解释 r4 里 L10/L11 的码表集中度：回落路径服务的是 L10/L11（恒回落），
+  而那正是 τ 梯度**准确**的层；走 event 的 L06–L09 反而 coverage 更好。
+- r4 不需要因此中断：偏差量级小、且切到 `DISM_HARD_BACKWARD=quadratic` 要付
+  631 vs 600 ms/step 的代价。先离线修。
