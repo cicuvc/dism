@@ -129,6 +129,7 @@ def main():
     ap.add_argument('--hard-backward-policy', choices=['event','ready','quadratic'], default='ready')
     ap.add_argument('--planner-cpus', default='', help='one fixed CPU per native worker, e.g. 2-7,8-17')
     ap.add_argument('--service-cpus', default='', help='CPU set for main/autograd/coordinator; benchmark only')
+    ap.add_argument('--launch-cpus', default='', help='After warmup, bind only main/autograd threads; leave planner unchanged')
     ap.add_argument('--output', type=Path, required=True)
     args = ap.parse_args()
     if args.nsys and args.profile:
@@ -149,6 +150,9 @@ def main():
     os.environ['DISM_HARD_BACKWARD'] = args.hard_backward_policy
     allowed=os.sched_getaffinity(0)
     worker_cpus,service_cpus=cpu_list(args.planner_cpus),cpu_list(args.service_cpus)
+    launch_cpus = cpu_list(args.launch_cpus)
+    if not set(launch_cpus) <= allowed or (launch_cpus and service_cpus):
+        ap.error('launch CPUs must be allowed and cannot be combined with service CPUs')
     if not set(worker_cpus+service_cpus)<=allowed:
         ap.error('requested CPUs are outside the original allowed CPU set')
     if worker_cpus and len(worker_cpus)!=args.planner_workers:
@@ -362,6 +366,13 @@ def main():
         print(f'warmup {i}: {(time.perf_counter()-started)*1000:.1f}ms loss={value:.5f} norm={norm:.4f}',flush=True)
     restore()
     torch.cuda.reset_peak_memory_stats()
+    if launch_cpus:
+        for path in Path('/proc/self/task').iterdir():
+            try:
+                if int(path.name) == os.getpid() or (path/'comm').read_text().strip().startswith('pt_autograd'):
+                    os.sched_setaffinity(int(path.name), launch_cpus)
+            except FileNotFoundError:
+                pass
     report['thread_start']=thread_snapshot()
     report['planner_worker_tids']=worker_tids.copy()
     phase=[]

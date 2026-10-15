@@ -87,6 +87,43 @@ This intentionally changes the training objective, so it does not promise the
 same optimization trajectory as a historical token-mean run. No existing
 checkpoint is rewritten and no training run is automatically restarted.
 
+## Host prefetch staging
+
+GDN chunk metadata uses one owned boundary snapshot per model forward. The
+pure-GDN and hybrid layers share that tensor identity, while DISM keeps its
+separate validated `prepare_pack` outputs. This avoids per-hybrid-layer FLA
+cache misses without retaining stale metadata when callers overwrite their
+boundary buffers between forwards. The internal `_share_branch_boundaries`
+flag is valid only for immutable per-forward snapshots; standalone attention
+calls retain their previous behavior. No checkpoint keys or RNG rules change.
+`tests/test_gdn_boundary_reuse.py` checks actual compiled execution, cross-layer
+cache hits, in-place input-boundary changes and forced-cache-miss gradient parity.
+The local 72M checkpoint-4000 replay (document-balanced CE, four microbatches,
+only launch threads bound to P cores) reduced chunk-index cache misses from
+28 to 4 and associated stream synchronizations from 56 to 8 per step. Three
+eight-step windows averaged 619.37 ms before versus 610.75 ms after (about 1.4%
+lower latency). This excludes live data loading and W&B, and is not a restarted
+training run. Profiles: `dism_v3/build/gdn_conv_diagnostic_20261015.trace.json`
+and `dism_v3/build/gdn_boundary_after_20261015.trace.json`. CPU synchronization
+duration includes useful queued GPU work; it is not wholly removable idle time.
+
+The parallel loader owns each queued batch independently of the source's reused
+buffers. For CUDA training the producer copies directly into pinned host memory;
+the training thread only submits nonblocking H2D copies. The bounded queue remains
+eight batches. There is no device prefetch stream or training RNG use in the
+producer. Restored pending batches are pinned once before consumption; checkpoint
+version, consumed progress, pending order and source cursor are unchanged.
+
+`tests/test_data_prefetch.py` covers CPU/CUDA ownership, serialized queue replay
+and RNG preservation; `tests/test_checkpoint_resume.py` covers exact training
+resume. `../dism_v3/tools/bench_prefetch_staging.py` replays trusted checkpoint
+batches without advancing the real loader or writing checkpoints. It measures
+ready-queue staging only, not tokenizer starvation or end-to-end throughput.
+On the local 5090, the 2026-10-15 consumer/producer/producer/consumer comparison
+reduced median host submission from 93–95 us to 32–33 us per microbatch. At four
+microbatches per step this is only about 0.24 ms of host work, not an explanation
+for the observed GPU utilization gap. Raw results belong in ignored `build/`.
+
 ## Training command
 
 Build the sibling v3 extension first. Environment: `pyproject.toml` dependencies

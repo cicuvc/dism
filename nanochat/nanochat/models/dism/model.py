@@ -365,6 +365,10 @@ class DismLM(nn.Module):
         if self.config.hard_granularity != 'sequence':
             raise ValueError('CUDA DISM supports only sequence-level hard flags')
         with torch.autocast('cuda', dtype=torch.bfloat16):
+            # One owned identity per forward: FLA may cache chunk metadata
+            # across layers, but must not reuse it after an in-place loader
+            # boundary update on the next forward.
+            cu_seqlens = cu_seqlens.to(device=input_ids.device).clone()
             x = self.embedding(input_ids.reshape(1, -1))
             conv_seq_idx = (packed_conv_sequence_ids(cu_seqlens, batch*length, x.device)
                             if self.config.conv_impl == 'linear_fla' and self.config.conv_backend == 'cuda'
@@ -415,12 +419,12 @@ class DismLM(nn.Module):
                     x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
                               hard=hard, direction=direction, use_cache=False, v_first=v_first,
                               vocab_temperature=self.vocab_temperature, conv_seq_idx=conv_seq_idx,
-                              direction_true=fixed_true)
+                              direction_true=fixed_true, _share_branch_boundaries=True)
                 else:
                     x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
                               hard=hard, direction=direction, use_cache=False,
                               vocab_temperature=self.vocab_temperature, conv_seq_idx=conv_seq_idx,
-                              direction_true=fixed_true)
+                              direction_true=fixed_true, _share_branch_boundaries=True)
             x = self.norm(x).to(torch.bfloat16)
             if targets is not None and loss_reduction == 'reinforce':
                 # Optionally-sampled DISM path: differentiable mean NLL plus a

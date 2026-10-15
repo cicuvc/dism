@@ -296,6 +296,7 @@ class DismAttention(nn.Module):
                 options['direction'] = direction[:1].contiguous()
         output = self._forward_cuda(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen,
                                     v_first=v_first, conv_seq_idx=kwargs.get('conv_seq_idx'),
+                                    share_branch_boundaries=kwargs.get('_share_branch_boundaries', False),
                                     direction_true=kwargs.get('direction_true', False), **options)
         if indices is not None:
             from fla.layers.utils import pad_input
@@ -304,7 +305,8 @@ class DismAttention(nn.Module):
 
     def _forward_cuda(self, x, hard_prob=None, *, direction=None, hard=None,
                 hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None,
-                v_first=None, vocab_temperature=None, conv_seq_idx=None, direction_true=False):
+                v_first=None, vocab_temperature=None, conv_seq_idx=None, direction_true=False,
+                share_branch_boundaries=False):
         """Default: soft training, hard evaluation; explicit flags override sampling.
 
         direction: bool [B,H] (True selects k-to-qemb, the query-LSE path).
@@ -317,6 +319,9 @@ class DismAttention(nn.Module):
         max_seqlen: optional upper bound for fused convolution launch sizing.
         conv_seq_idx: optional precomputed int32 [B,N] convolution document IDs,
         matching cu_seqlens; consumed only by frontends with supports_seq_idx.
+        share_branch_boundaries: internal adapter contract: boundaries are an
+        owned, immutable per-forward snapshot shared across layers, never a
+        dataloader buffer that can be overwritten between forwards.
         """
         from . import voc_dism, VarlenLayout
 
@@ -330,6 +335,10 @@ class DismAttention(nn.Module):
         # Validate packed boundaries before convolution; reuse the native layout.
         layout = None
         compiled_layout = None
+        # Auxiliary branches share the caller's boundary identity across layers.
+        # prepare_pack returns a functional clone for DISM; passing that clone
+        # to FLA defeats its identity-keyed chunk-index cache at every layer.
+        branch_cu_seqlens = cu_seqlens
         compiling = torch.compiler.is_compiling()
         if cu_seqlens is not None:
             if batch != 1:
@@ -348,6 +357,7 @@ class DismAttention(nn.Module):
                 elif isinstance(max_seqlen, bool) or not isinstance(max_seqlen, int) or max_seqlen < longest:
                     raise ValueError("max_seqlen must be an integer >= longest document")
             cu_seqlens = cu_seqlens.to(device=x.device).contiguous()
+            branch_cu_seqlens = branch_cu_seqlens.to(device=x.device).contiguous()
         elif max_seqlen is not None:
             raise ValueError("max_seqlen requires cu_seqlens")
         if hard is None:
@@ -420,7 +430,9 @@ class DismAttention(nn.Module):
         else:
             output = voc_dism(q, k, sq, sk, v, eq, ek, tau,
                               direction=direction, hard=hard, layout=layout, beta=beta)
-        output = self._combine_cuda(output, x, v, cu_seqlens, max_seqlen, v_first=v_first,
+        output = self._combine_cuda(output, x, v,
+                                    branch_cu_seqlens if share_branch_boundaries else cu_seqlens,
+                                    max_seqlen, v_first=v_first,
                                     linear_q=linear_q, linear_k=linear_k, conv_seq_idx=conv_seq_idx)
         gate = self.g_proj_up(self.g_proj_down(x)).reshape(batch, length, self.heads, self.value_dim)
         if compiling:

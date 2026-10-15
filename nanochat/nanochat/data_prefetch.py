@@ -1,6 +1,7 @@
 """Ordered CPU prefetch with an explicit snapshot of outstanding batches.
 
-The producer never touches CUDA or training RNG. A checkpoint pauses it at a
+The producer only prepares host memory (pinned for CUDA), never device tensors
+or training RNG. A checkpoint pauses it at a
 batch boundary and saves BOTH its source state and every not-yet-consumed batch.
 """
 import copy
@@ -40,11 +41,23 @@ class StatefulPrefetchLoader:
         self.depth = depth
         self.condition = threading.Condition()
         self.pending = deque(copy.deepcopy(state['pending']) if state else [])
+        # Checkpoint tensors can be pageable even when the original queue was
+        # pinned. Stage them once at restore, not on the training hot path.
+        if self.device.type == 'cuda':
+            self.pending = deque(self._own_batch(batch) for batch in self.pending)
         self.progress = copy.deepcopy(state['progress'] if state else loader.progress_state())
         self.paused = self.inflight = self.stopped = False
         self.error = None
         self.thread = threading.Thread(target=self._produce, name='batch-prefetch', daemon=True)
         self.thread.start()
+
+    def _own_batch(self, batch):
+        if self.device.type == 'cuda':
+            values = tuple(torch.empty_like(t, device='cpu', pin_memory=True).copy_(t)
+                           for t in batch[:4])
+        else:
+            values = tuple(t.clone() for t in batch[:4])
+        return (*values, copy.deepcopy(batch[4]))
 
     def _produce(self):
         while True:
@@ -57,7 +70,7 @@ class StatefulPrefetchLoader:
             try:
                 batch = next(self.loader)
                 # The underlying loader recycles all four CPU buffers.
-                owned = tuple(t.clone() for t in batch[:4]) + (copy.deepcopy(batch[4]),)
+                owned = self._own_batch(batch)
             except BaseException as error:
                 with self.condition:
                     self.error = error
@@ -83,7 +96,9 @@ class StatefulPrefetchLoader:
             self.progress = copy.deepcopy(batch[4])
             self.condition.notify_all()
         if self.device.type == 'cuda':
-            values = tuple(t.pin_memory().to(self.device, non_blocking=True) for t in batch[:4])
+            # The pinned allocator tracks the asynchronous copy's lifetime;
+            # these owned buffers are never recycled by the producer.
+            values = tuple(t.to(self.device, non_blocking=True) for t in batch[:4])
         else:
             values = tuple(t.to(self.device) for t in batch[:4])
         return (*values, copy.deepcopy(batch[4]))
