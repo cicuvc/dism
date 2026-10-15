@@ -62,9 +62,13 @@ def planner_diagnostics(records):
     original = HardPlanTicket.backward
     def measured(self, *args, **kwargs):
         result = original(self, *args, **kwargs)
-        p = self.future.result() if self.future.done() else None
+        # DisabledHardPlanner (DISM_HARD_PLANNER=0) yields future-less quadratic
+        # tickets; record them as such instead of dereferencing None.
+        future = self.future
+        p = future.result() if future is not None and future.done() else None
         if p is None:
-            records.append(dict(route=self.route,host_wait_ms=self.host_wait_ms,plan_unavailable=True))
+            records.append(dict(route=self.route,host_wait_ms=self.host_wait_ms,
+                                plan_unavailable=future is not None))
             return result
         records.append(dict(p.timings, route=self.route,host_wait_ms=self.host_wait_ms,
                             native=p.host.timings, statistics=p.host.statistics,

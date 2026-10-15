@@ -1254,3 +1254,101 @@ PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat" \
 PYTHONPATH="$PWD/dism_v3/python" /home/cicuvc/miniconda3/envs/blkw/bin/python -m pytest -q \
   dism_v3/python/flash_dism/kernels/test_fused_ce_chunked.py
 ```
+
+## RTX PRO 6000 deployment and microbatch sizing (2026-10-16)
+
+Purpose: port the current tree to the RTX PRO 6000 Blackwell Server Edition box
+and measure real training throughput with the planner disabled
+(`DISM_HARD_PLANNER=0`), i.e. the n^2 `backward_hard_recompute` path for every
+hard row.
+
+Target: `RTX PRO 6000 Blackwell Server Edition`, 188 SMs / sm_120, 97887 MiB,
+driver 595.71.05, 600 W cap. Host is a 2x Xeon Platinum 8470Q (2.1 GHz base,
+208 threads) with 1007 GB RAM. torch 2.12.1+cu130, CUDA 13.0, clang 23
+(`~/dism125m-2500m/toolchain/bin/clang`), 92 local fwedu-100B shards. Same
+`archs=['120a']` build as the 5090; `cu_flash_dism` builds unchanged.
+
+Idle-box capability probes (so GPU limits are not confused with host limits):
+bf16 8192^3 matmul 426 TFLOP/s, 1 GiB device copy 1463 GB/s. The local 5090 box
+measures 419 TFLOP/s-class peaks with 1.79 TB/s HBM, so the two GPUs are close
+in compute and the PRO 6000's 96 GB is the real difference.
+
+### Microbatch sizing is the dominant throughput knob
+
+The step is **host-launch bound**, not GPU bound. Instrumentation on a
+checkpoint replay at the trained operating point (hard_prob 0.95) reports
+`Self CPU 1341 ms` against `Self CUDA 754 ms` for a 796 ms step, and a live
+`nvidia-smi` sample of a dbs16 run oscillates 16-100% (mean ~65%) at ~300 W of
+a 600 W cap.
+
+Launch count, not bytes, drives that: the step issues ~3485 CUDA launches and
+~10-15k aten dispatches. Launch overhead is per-op, so the same work in more,
+larger microbatches amortizes it away. Holding total batch at 131072 tokens and
+varying only `--device-batch-size`:
+
+| device-batch | accumulation | ms/step | tok/s | MFU | peak alloc | sampled GPU util |
+|---|---|---|---|---|---|---|
+| 16 | 4 | 779.5 | 168k | 38 | 16.8 GB | ~65% (16-100), ~300 W |
+| 32 | 2 | 644.7 | 203k | 42 | 31.9 GB | - |
+| 64 | 1 | **569.0** | **230k** | **46.9** | 61.3 GB | ~90% (74-100), ~400 W |
+
+All three runs use the same spec, RNG seed, 92-shard dataloader and
+`--total-batch-size 131072`; only the accumulation split differs. Loss at the
+same step agrees within 0.03 (5.422 / 5.455 / 5.432 at step 86), which is
+packing-order noise, so the objective is unchanged.
+
+`--device-batch-size 64` is the largest legal value for a 131072-token total
+batch and needs 61.3 GB, so it fits the PRO 6000 and does not fit the 32 GB
+5090. For reference the local 5090 at dbs16 runs 665 ms / 197k tok/s / MFU 44;
+the PRO 6000 is ~28% slower at the same dbs16 and ~17% faster than that once
+microbatch sizing is corrected. The gap at equal dbs16 is host, not device:
+single-thread CPU is ~1.5x slower on the Xeon (3e6-iteration float loop 0.188 s
+vs 0.124 s) and the replay harness pins itself to one thread.
+
+### Negative result: vectorizing the packed fallback gather
+
+`backward_hard_recompute` runs **packed** on every DISM layer (2880 calls /
+120 steps = 24/step = 6 layers x 4 microbatches, ~35 documents per call) and
+costs ~75 ms/step of host time. Its packed branch regrouped documents by length
+and then built each group with a Python loop of `x[0,s:s+length]` slices plus
+`torch.stack`, i.e. ~210 tiny aten ops per call. Replacing that with one
+`index_select` per group (plus a single `index_copy_` scatter) was correct -
+`test_hard_ready_dispatch.py` 14/14 including the FP64 packed oracle - and
+measured **3x faster in isolation** (0.236 vs 0.771 ms/call idle), but in the
+trainer it was **94 ms/step slower** (873.7 vs 779.5 ms at identical settings).
+
+The isolated benchmark only reproduces the in-situ cost once a deep queue is
+simulated, where both variants converge (1.5 vs 1.3 ms/call), and the
+vectorized form then adds per-call index construction, a non-contiguous label
+layout that `run()` re-`contiguous()`s, and an extra dtype cast per scatter.
+The change was reverted; the per-document loop stays. Conclusion: this call
+site must be judged by an in-trainer A/B, not by micro-benchmarks.
+
+### Harness notes
+
+- Conda ships libstdc++ 6.0.29 while the JIT planner extension needs
+  `GLIBCXX_3.4.30`. `LD_LIBRARY_PATH` does **not** fix it because
+  `/root/miniconda3/bin/python3.12` carries `DT_RPATH=$ORIGIN/../lib`, which is
+  searched before `LD_LIBRARY_PATH` for every dependency. Replacing
+  `/root/miniconda3/lib/libstdc++.so.6.0.29` with the system 6.0.30 is the fix.
+- `bench_model_training.py`'s diagnostic hook dereferenced `HardPlanTicket.future`,
+  which is `None` for `DisabledHardPlanner` tickets; it now records those as
+  `route='quadratic', plan_unavailable=False`.
+- `nanochat/common.py` gained `rtx pro 6000` entries (231.7e12 bf16 peak from
+  the 188/170 SM ratio, 1.6e12 HBM3e) so MFU is reported instead of 0%.
+
+```bash
+# build (remote, clang toolchain + bound parallelism)
+cd /root/dism-core/dism_v3 && \
+  PATH=/root/dism125m-2500m/toolchain/bin:/usr/local/cuda/bin:/root/miniconda3/bin:/usr/bin:/bin \
+  DISM_BUILD_JOBS=4 python build.py
+
+# trained-operating-point replay (planner off => n^2 fallback), single-threaded
+PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat" FLA_FLASH_KDA=0 DISM_HARD_PLANNER=0 \
+  python dism_v3/tools/bench_model_training.py --checkpoint-dir /root/ckpt72m \
+    --step 19074 --hard-backward-policy quadratic \
+    --output dism_v3/build/remote_pro6000_g1.json
+
+# live throughput sweep: only --device-batch-size changes
+--total-batch-size 131072 --device-batch-size {16,32,64}
+```

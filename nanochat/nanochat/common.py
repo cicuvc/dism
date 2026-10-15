@@ -262,6 +262,7 @@ def get_peak_flops(device_name: str) -> float:
         (["mi250x"], 383e12),
         (["mi250"], 362.1e12),
         # Consumer RTX
+        (["rtx pro 6000"], 231.7e12),  # Blackwell Server Edition, 188 SMs
         (["5090"], 209.5e12),
         (["4090"], 165.2e12),
         (["3090"], 71e12),
@@ -315,6 +316,7 @@ def get_peak_bandwidth(device_name: str) -> float:
         (["mi250x"], 3.28e12),
         (["mi250"], 3.28e12),
         # Consumer RTX
+        (["rtx pro 6000"], 1.6e12),  # HBM3e, Blackwell Server Edition
         (["5090"], 1.79e12),
         (["4090"], 1.01e12),
         (["3090"], 936e9),
