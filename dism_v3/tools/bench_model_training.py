@@ -486,7 +486,13 @@ def main():
                 v['count']+=1
                 v['total_us']+=e.time_range.elapsed_us()
         report['profile_kernels']=sorted([dict(name=k,**v) for k,v in kernels.items()],key=lambda x:-x['total_us'])
-        report['profile_cpu_table']=prof.key_averages().table(sort_by='self_cpu_time_total',row_limit=40)
+        if args.profile_stack:
+            # The aggregated call tree is deeper than CPython's default
+            # recursion limit once Python frames are recorded; the chrome trace
+            # is the supported output for that mode.
+            report['profile_cpu_table']='omitted with --profile-stack (see the chrome trace)'
+        else:
+            report['profile_cpu_table']=prof.key_averages().table(sort_by='self_cpu_time_total',row_limit=40)
     if args.nsys:
         restore()
         trace_kind='nsys'
