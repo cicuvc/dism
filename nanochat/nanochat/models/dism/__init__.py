@@ -26,6 +26,7 @@ class DismConfig:
     anneal_steps: int = 3000
     hard_start_fraction: float = 0.0
     softcap: float = 30.0
+    loss_balance: str = "document"
     rng_seed: int = 1729
     hard_end_fraction: float = 1.0
     readout_mode: str = "default"

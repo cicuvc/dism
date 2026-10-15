@@ -611,9 +611,9 @@ grad_accum_steps = total_batch_size // world_tokens_per_fwdbwd
 print0(f"Tokens / micro-batch / rank: {args.device_batch_size} x {args.max_seq_len} = {tokens_per_fwdbwd:,}")
 print0(f"Tokens / micro-batch: {world_tokens_per_fwdbwd:,}")
 print0(f"Total batch size {total_batch_size:,} => gradient accumulation steps: {grad_accum_steps}")
-loss_normalization = ('global_valid_document_mean_v1'
+loss_normalization = getattr(orig_model, 'loss_normalization', ('global_valid_document_mean_v1'
                       if getattr(orig_model, 'document_balanced_loss', False)
-                      else 'legacy_microbatch_mean')
+                      else 'legacy_microbatch_mean'))
 print0(f"Loss normalization: {loss_normalization}")
 if resuming and loss_normalization != meta_data.get('loss_normalization', 'legacy_microbatch_mean'):
     print0('Loss objective changed from the checkpoint run: model/optimizer/RNG/data '
@@ -799,7 +799,7 @@ while True:
     if hasattr(orig_model, 'set_training_step'):
         orig_model.set_training_step(step)
     document_step = None
-    if getattr(orig_model, 'document_balanced_loss', False):
+    if getattr(orig_model, 'count_normalized_loss', getattr(orig_model, 'document_balanced_loss', False)):
         from nanochat.document_loss import DocumentLossAccumulator
         document_step = DocumentLossAccumulator(grad_accum_steps, device)
     for micro_step in range(grad_accum_steps):
@@ -811,7 +811,7 @@ while True:
         else:
             if document_step is not None:
                 loss, count = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids,
-                                    loss_reduction='document_sum')
+                                    loss_reduction=getattr(orig_model, 'loss_sum_reduction', 'document_sum'))
                 document_step.add(loss, count)
             else:
                 loss = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids)

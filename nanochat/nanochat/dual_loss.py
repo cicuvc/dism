@@ -12,7 +12,7 @@ def dual_loss_backward(model, original, x, y, cu, segments, alpha, divisor=1, sc
         if weight == 0: continue
         key='hard' if hard else 'soft'
         for flip in flips:
-            options = {'loss_reduction': 'document_sum'} if document_step is not None else {}
+            options = {'loss_reduction': getattr(original, 'loss_sum_reduction', 'document_sum')} if document_step is not None else {}
             result=model(x,y,cu_seqlens=cu,segment_ids=segments,
                 hard_mode=hard,paired_counter=counter,direction_flip=flip, **options)
             if document_step is not None:

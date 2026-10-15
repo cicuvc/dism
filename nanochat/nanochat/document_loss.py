@@ -59,6 +59,8 @@ class DocumentLossAccumulator:
     Call add once per consumed microbatch; backward its numerator / microbatches.
     Call finalize exactly once BEFORE GradScaler.unscale_ and gradient clipping.
     No data is prefetched here and no RNG/optimizer state is changed.
+    The same numerator/count protocol also supports token-balanced loss when
+    callers supply token sums and valid-token counts instead of document sums.
     """
     def __init__(self, microbatches, device):
         if microbatches < 1:

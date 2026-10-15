@@ -292,13 +292,13 @@ def main():
                 events[-1][2].record()
                 host.append((events[-1][0],(time.perf_counter()-t)*1000))
         from nanochat.document_loss import DocumentLossAccumulator
-        document_step = DocumentLossAccumulator(accum, model.get_device()) if getattr(model, 'document_balanced_loss', False) else None
+        document_step = DocumentLossAccumulator(accum, model.get_device()) if getattr(model, 'count_normalized_loss', getattr(model, 'document_balanced_loss', False)) else None
         for micro in range(accum):
             x,y,bounds,segments = batches[cursor % len(batches)]
             cursor += 1
             t = begin('forward')
             with mark(f'microbatch_{micro}/forward'):
-                options = {'loss_reduction': 'document_sum'} if document_step is not None else {}
+                options = {'loss_reduction': getattr(model, 'loss_sum_reduction', 'document_sum')} if document_step is not None else {}
                 result = fn(x,y,cu_seqlens=bounds,segment_ids=segments,hard_mode=hard_mode, **options)
                 if document_step is not None:
                     loss, count = result
@@ -330,8 +330,9 @@ def main():
         return value,norm,events,host
 
     report = dict(arguments={k:str(v) if isinstance(v,Path) else v for k,v in vars(args).items()},
-                  loss_normalization=('global_valid_document_mean_v1' if getattr(model, 'document_balanced_loss', False)
-                                      else 'legacy_microbatch_mean'),
+                  loss_normalization=getattr(model, 'loss_normalization',
+                      'global_valid_document_mean_v1' if getattr(model, 'document_balanced_loss', False)
+                      else 'legacy_microbatch_mean'),
                   git_head=command('git','rev-parse','HEAD'),git_status=command('git','status','--short'),
                   gpu_before=gpu_status(),torch=torch.__version__,extension=cu.__file__,
                   extension_sha256=hashlib.sha256(Path(cu.__file__).read_bytes()).hexdigest(),

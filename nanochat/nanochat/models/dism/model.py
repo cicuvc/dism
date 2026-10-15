@@ -16,13 +16,16 @@ from flash_dism.kernels.fused_ce_chunked import fused_ce_chunked, fused_ce_chunk
 
 
 def packed_document_ce(hidden, weight, targets, cu_seqlens, max_seqlen, softcap,
-                       reduction='mean'):
+                       reduction='mean', balance='document'):
     """Targets are already shifted; boundaries define loss documents, not hard rows."""
-    entry = fused_ce_chunked_sum if reduction == 'document_sum' else fused_ce_chunked
+    if balance not in ('document', 'token'):
+        raise ValueError('loss_balance must be document or token')
+    entry = fused_ce_chunked_sum if reduction in ('document_sum', 'token_sum') else fused_ce_chunked
     return entry(hidden, weight.to(torch.bfloat16), targets.reshape(1, -1),
                  ignore_index=-1, softcap=softcap,
-                 cu_seqlens=cu_seqlens.to(device=hidden.device).contiguous(),
-                 max_seqlen=max_seqlen)
+                 cu_seqlens=(cu_seqlens.to(device=hidden.device).contiguous()
+                             if balance == 'document' else None),
+                 max_seqlen=max_seqlen if balance == 'document' else None)
 
 
 @torch.compiler.disable
@@ -77,10 +80,16 @@ class DismLM(nn.Module):
     exact_optimizer_hyperparameters = True
     dynamic_compile = True
     document_balanced_loss = True
+    count_normalized_loss = True
 
     def __init__(self, config, *, attention_type='hybrid'):
         super().__init__()
         self.config = config
+        if config.loss_balance not in ('document', 'token'):
+            raise ValueError('loss_balance must be document or token')
+        self.document_balanced_loss = config.loss_balance == 'document'
+        self.loss_sum_reduction = config.loss_balance + '_sum'
+        self.loss_normalization = 'global_valid_' + config.loss_balance + '_mean_v1'
         self.eval_hard = True
         if not 0. <= config.hard_start_fraction < 1.:
             raise ValueError("hard_start_fraction must be in [0,1)")
@@ -418,17 +427,19 @@ class DismLM(nn.Module):
                 # detached per-token NLL used as the score-function reward/baseline.
                 with torch.autocast('cuda', enabled=False):
                     direct = packed_document_ce(x, self.lm_head.weight, targets,
-                        cu_seqlens, self.config.sequence_len, self.config.softcap)
+                        cu_seqlens, self.config.sequence_len, self.config.softcap,
+                        balance=self.config.loss_balance)
                     with torch.no_grad():
                         tokens = fused_cross_entropy_unreduced(
                             x, self.lm_head.weight.to(torch.bfloat16), targets.reshape(1, -1),
                             ignore_index=-1, softcap=self.config.softcap).flatten()
                     return direct, tokens
-            if targets is not None and loss_reduction in ('mean', 'document_sum'):
+            if targets is not None and loss_reduction in ('mean', 'document_sum', 'token_sum'):
                 # nanochat targets are ALREADY shifted, unlike HF labels.
                 with torch.autocast('cuda', enabled=False):
                     return packed_document_ce(x, self.lm_head.weight, targets,
-                        cu_seqlens, self.config.sequence_len, self.config.softcap, loss_reduction)
+                        cu_seqlens, self.config.sequence_len, self.config.softcap, loss_reduction,
+                        balance=self.config.loss_balance)
             if targets is not None and loss_reduction == 'none' and not torch.is_grad_enabled():
                 # BPB needs unreduced token losses, not document means. The
                 # fused training kernel already computes these without logits.

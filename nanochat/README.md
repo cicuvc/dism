@@ -133,3 +133,13 @@ GDN hybrid supports packed prefill/recomputed generation, not cached decoding.
 The explicit SAM prefill/decoding backend is available in flash_dism.inference;
 it does not automatically replace nanochat's model/cache dispatch. V4 training
 operators remain excluded.
+
+DISM/SWA model specs may set `loss_balance` to `document` (default) or `token`.
+Both use the chunked fused softcap CE. Training sums the corresponding loss
+numerators and valid counts over all accumulation microbatches/ranks before
+normalizing gradients, including unequal valid-token counts and ignored-only
+microbatches. Token mode does not pass document boundaries to CE; attention and
+shortconvolution still receive the original packed boundaries. Checkpoint
+metadata records `global_valid_document_mean_v1` or `global_valid_token_mean_v1`.
+BPB/unreduced token diagnostics are unchanged. This option changes the objective,
+not model weights, optimizer schema, RNG counters or dataloader state.

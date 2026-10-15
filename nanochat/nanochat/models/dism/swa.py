@@ -48,6 +48,11 @@ class SwaLM(DismLM):
         self.config = config
         if config.sequence_len % 256 or config.head_dim % 2 or config.window_size < 1:
             raise ValueError('Expected aligned context, even head_dim and positive window')
+        if config.loss_balance not in ('document', 'token'):
+            raise ValueError('loss_balance must be document or token')
+        self.document_balanced_loss = config.loss_balance == 'document'
+        self.loss_sum_reduction = config.loss_balance + '_sum'
+        self.loss_normalization = 'global_valid_' + config.loss_balance + '_mean_v1'
         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
         self.layers = nn.ModuleList(SwaBlock(config) for _ in range(config.n_layer))
         self.norm = nn.RMSNorm(config.n_embd, eps=1e-6)
@@ -84,10 +89,10 @@ class SwaLM(DismLM):
             for layer in self.layers:
                 x = layer(x, cu_seqlens, cos, sin)
             x = self.norm(x).to(torch.bfloat16)
-            if targets is not None and loss_reduction in ('mean', 'document_sum'):
+            if targets is not None and loss_reduction in ('mean', 'document_sum', 'token_sum'):
                 with torch.autocast('cuda', enabled=False):
                     return packed_document_ce(x, self.lm_head.weight, targets,
-                        cu_seqlens, c.sequence_len, c.softcap, loss_reduction)
+                        cu_seqlens, c.sequence_len, c.softcap, loss_reduction, balance=c.loss_balance)
             logits = self.lm_head(x).float()
             logits = c.softcap * torch.tanh(logits/c.softcap)
             if targets is None:
