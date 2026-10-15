@@ -95,9 +95,10 @@ def test_model_token_loss(architecture):
     from nanochat.models import build_model, ModelSpec
     config = dict(sequence_len=512, vocab_size=128, n_layer=1, n_head=2, n_embd=64,
                   intermediate_size=128, head_dim=32, value_dim=32, readout_dim=16,
-                  qk_vocab_size=32, loss_balance='token')
+                  qk_vocab_size=32, loss_balance='token', softcap=30)
     model = build_model(ModelSpec(architecture, 1, config)).cuda().eval()
     model.init_weights()
+    assert isinstance(model.config.softcap, float)
     assert not model.document_balanced_loss
     assert model.count_normalized_loss and model.loss_sum_reduction == 'token_sum'
     ids = torch.randint(128, (1,512), device='cuda')
@@ -108,6 +109,11 @@ def test_model_token_loss(architecture):
         mean = model(ids,labels,cu_seqlens=cu)
         total,count = model(ids,labels,cu_seqlens=cu,loss_reduction='token_sum')
         per_token = model(ids,labels,cu_seqlens=cu,loss_reduction='none')
+        compiled = torch.compile(model, dynamic=True)
+        compiled_mean = compiled(ids,labels,cu_seqlens=cu)
+        compiled_total,compiled_count = compiled(ids,labels,cu_seqlens=cu,loss_reduction='token_sum')
     assert count.item() == 412
     torch.testing.assert_close(mean,total/count,rtol=1e-6,atol=1e-6)
+    torch.testing.assert_close(compiled_mean,mean,rtol=.002,atol=.005)
+    torch.testing.assert_close(compiled_total/compiled_count,mean,rtol=.002,atol=.005)
     torch.testing.assert_close(mean,per_token.flatten()[100:].mean(),rtol=.002,atol=.005)

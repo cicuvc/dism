@@ -58,6 +58,12 @@ class DismConfig:
     # behaviour. Used to test dedicated (non-mixed) layer layouts.
     layer_layout: str = ""
 
+    def __post_init__(self):
+        # JSON permits integer softcaps. Normalize before Dynamo can turn an
+        # integer attribute into a SymInt (Triton would infer an integer ABI
+        # even though CE validates/converts it to float at runtime).
+        self.softcap = float(self.softcap)
+
 
 def _build(config):
     from .model import DismLM
