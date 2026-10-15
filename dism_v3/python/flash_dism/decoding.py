@@ -51,6 +51,8 @@ def _unpack_cache(state, extra_states=0):
 def forward_torch(module, x, last_state, *, direction=None, hard=None,
                   hard_prob=None, hard_seed=None, generator=None):
     """Exact FP32 (FP64 for double models) inference; no Triton/CUDA kernel calls."""
+    if getattr(module, "gqa_query_channels", 1) > 1:
+        raise NotImplementedError("GQA-DISM G>1 is not supported by Torch decoding")
     batch, length, _ = x.shape
     if batch < 1 or length < 1:
         raise ValueError("decoding requires nonempty batch and new tokens")

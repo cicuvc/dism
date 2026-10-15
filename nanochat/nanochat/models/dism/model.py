@@ -110,6 +110,7 @@ class DismLM(nn.Module):
                         soft_k_l2_norm=config.soft_k_l2_norm,
                         value_residual=config.value_residual,
                         vocab_temperature=getattr(config, 'vocab_temperature', 1.0),
+                        gqa_query_channels=getattr(config, "gqa_query_channels", 1),
                         vocab_transvq=getattr(config, "vocab_transvq", False),
                         vocab_transvq_lite=getattr(config, "vocab_transvq_lite", False),
                         vocab_transvq_map=getattr(config, "vocab_transvq_map", "linear_attn"),
@@ -231,6 +232,8 @@ class DismLM(nn.Module):
                 if id(table) not in initialized_tables:
                     table.copy_(draw[0] if table.ndim == 2 else draw)
                     initialized_tables.add(id(table))
+            if getattr(attn, "gqa_query_channels", 1) == 2:
+                attn.gqa_mix.fill_(0.5)
             attn.log_sel_tau.uniform_(-4, 4)
             attn.norm.weight.fill_(1)
             if hasattr(attn, "init_gdn_parameters"):

@@ -73,7 +73,9 @@ class HardDismPrefill:
     of preparation. No cache prime is implicit. workers=1 is a serial fallback.
     """
     def __init__(self, *, workers=8, chunk_size=16, mma_precision="bf16", device="cuda",
-                 dispatch_threshold=64):
+                 dispatch_threshold=64, gqa_query_channels=1):
+        if gqa_query_channels != 1:
+            raise NotImplementedError("GQA-DISM G>1 is not supported by SAM prefill")
         if chunk_size not in (16,32,64):raise ValueError("invalid chunk_size")
         if mma_precision not in ("bf16","tf32x3"):raise ValueError("invalid mma_precision")
         self.device=torch.device(device)

@@ -12,7 +12,7 @@ class DismConfig(PretrainedConfig):
                  conv_size=4, rope_theta=10000., qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
                  value_residual=False,
                  vocab_temperature=1.0,
-                 vocab_transvq=False,
+                 gqa_query_channels: int = 1, vocab_transvq=False,
                  vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
                  intermediate_size=None, hidden_ratio=4., norm_eps=1e-6,
@@ -49,6 +49,9 @@ class DismConfig(PretrainedConfig):
         self.soft_k_l2_norm = bool(soft_k_l2_norm)
         self.value_residual = bool(value_residual)
         self.vocab_temperature = float(vocab_temperature)
+        if type(gqa_query_channels) is not int or gqa_query_channels not in (1, 2):
+            raise ValueError("gqa_query_channels must be 1 or 2")
+        self.gqa_query_channels = gqa_query_channels
         self.vocab_transvq = bool(vocab_transvq)
         self.vocab_transvq_lite = bool(vocab_transvq_lite)
         self.vocab_transvq_map = str(vocab_transvq_map)

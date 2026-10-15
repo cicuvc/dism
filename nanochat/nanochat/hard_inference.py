@@ -98,6 +98,8 @@ class HardInferenceEngine:
     """
 
     def __init__(self, model, prefill_engine, *, capacity, planner_backend="cpu"):
+        if getattr(model.config, "gqa_query_channels", 1) > 1:
+            raise NotImplementedError("GQA-DISM G>1 is not supported by hard inference")
         self.model = model
         self.prefill_engine = prefill_engine
         self.capacity = int(capacity)

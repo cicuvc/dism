@@ -144,7 +144,7 @@ class DismAttention(nn.Module):
                  rope_theta=10000.0, qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
                  value_residual=False, vocab_temperature=1.0,
                  vocab_transvq=False, vocab_transvq_lite=False,
-                 vocab_transvq_map="linear_attn", vocab_transvq_rank=4):
+                 vocab_transvq_map="linear_attn", vocab_transvq_rank=4, gqa_query_channels: int = 1):
         super().__init__()
         if min(width, heads, vocab_size, conv_size) <= 0:
             raise ValueError("width, heads, vocab_size and conv_size must be positive")
@@ -164,6 +164,9 @@ class DismAttention(nn.Module):
         # Host schedule value, not a parameter or device buffer.
         self.vocab_temperature = float(vocab_temperature)
 
+        if type(gqa_query_channels) is not int or gqa_query_channels not in (1, 2):
+            raise ValueError("gqa_query_channels must be 1 or 2")
+        self.gqa_query_channels = gqa_query_channels
         self.width, self.heads = width, heads
         if layer_idx is not None and (isinstance(layer_idx, bool) or not isinstance(layer_idx, int)
                                       or not 0 <= layer_idx < (1 << 63)):
@@ -200,6 +203,25 @@ class DismAttention(nn.Module):
                                           kind=vocab_transvq_map, rank=vocab_transvq_rank)
             self.q_vocab.requires_grad_(False)
             self.k_vocab.requires_grad_(False)
+
+        if self.gqa_query_channels == 2:
+            self.gqa_q_conv = CausalShortConv1d(width, heads * head_dim, conv_size)
+            self.gqa_sq_proj = nn.Linear(width, heads * readout_dim, bias=False)
+            self.gqa_mix = nn.Parameter(torch.full((heads, 2), 0.5))
+
+    @staticmethod
+    def _expand_gqa(tensor, head_axis):
+        """Duplicate each shared head in h*2+g order; backward sums over g."""
+        shape = list(tensor.shape)
+        expanded = shape[:head_axis + 1] + [2] + shape[head_axis + 1:]
+        shape[head_axis] *= 2
+        return tensor.unsqueeze(head_axis + 1).expand(expanded).reshape(shape).contiguous()
+
+    def _mix_gqa(self, output):
+        # The core has already normalized each channel independently.
+        batch, length = output.shape[:2]
+        return (output.reshape(batch, length, self.heads, 2, self.value_dim)
+                * self.gqa_mix.view(1, 1, self.heads, 2, 1)).sum(3)
 
     def _rotary_tables(self, length, device, *, offset=0, dtype=torch.float32, dimension=None):
         """Split-half RoPE tables for the hybrid SWA branch."""
@@ -263,6 +285,8 @@ class DismAttention(nn.Module):
                 raise ValueError("attention_mask must contain only 0/1")
         else:
             mask = None
+        if self.gqa_query_channels > 1 and (torch_path or past_key_values is not None):
+            raise NotImplementedError("GQA-DISM G>1 supports only uncached aligned CUDA execution")
         if torch_path:
             if v_first is not None:
                 raise NotImplementedError("value residual is only implemented for packed CUDA training/eval")
@@ -416,20 +440,36 @@ class DismAttention(nn.Module):
         else:
             eq, ek = self.q_vocab.float(), self.k_vocab.float()
         tau = F.softplus(self.log_sel_tau.float()).contiguous()
+        dism_v = v
+        if self.gqa_query_channels == 2:
+            q_extra = project(self.gqa_q_conv, self.head_dim)
+            sq_extra = self._activate_readout(self.gqa_sq_proj(x))
+            q = torch.cat((q.unsqueeze(3), q_extra.unsqueeze(3)), dim=3).flatten(2, 3)
+            sq = torch.cat((sq.unsqueeze(3), sq_extra.unsqueeze(3)), dim=3).flatten(2, 3)
+            k, sk, dism_v = (self._expand_gqa(t, 2) for t in (k, sk, v))
+            # Optional shared-head vocabularies arrive as [V,D].
+            eq = eq.unsqueeze(0).expand(self.heads, -1, -1) if eq.ndim == 2 else eq
+            ek = ek.unsqueeze(0).expand(self.heads, -1, -1) if ek.ndim == 2 else ek
+            eq, ek, tau = (self._expand_gqa(t, 0) for t in (eq, ek, tau))
+            hard, direction = (self._expand_gqa(t, 1) for t in (hard, direction))
         from .reinforce import enabled, sampled_voc
         beta = self.vocab_temperature if vocab_temperature is None else vocab_temperature
         if enabled():
-            output = sampled_voc(q, k, sq, sk, v, eq, ek, tau, direction=direction,
+            if self.gqa_query_channels > 1:
+                raise NotImplementedError("GQA-DISM G>1 does not support independent categorical K sampling")
+            output = sampled_voc(q, k, sq, sk, dism_v, eq, ek, tau, direction=direction,
                                  hard=hard, layout=layout, beta=beta)
         elif compiling or direction_true:
             from .compiler import voc_forward
             if not compiling and layout is not None:
                 compiled_layout = layout.table.flatten()
-            output = voc_forward(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard,
+            output = voc_forward(q, k, sq, sk, dism_v, eq, ek, tau, beta, direction, hard,
                                  cu_seqlens, compiled_layout, direction_true=direction_true)[0]
         else:
-            output = voc_dism(q, k, sq, sk, v, eq, ek, tau,
+            output = voc_dism(q, k, sq, sk, dism_v, eq, ek, tau,
                               direction=direction, hard=hard, layout=layout, beta=beta)
+        if self.gqa_query_channels == 2:
+            output = self._mix_gqa(output)
         output = self._combine_cuda(output, x, v,
                                     branch_cu_seqlens if share_branch_boundaries else cu_seqlens,
                                     max_seqlen, v_first=v_first,
