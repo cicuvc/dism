@@ -47,7 +47,8 @@ def stage_operands(layout,q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rta
 
 @torch.no_grad()
 def forward_varlen(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,
-                   cu_seqlens=None,*,layout=None,save_state=False,fp32_output=False,_lse_preabsorbed=False):
+                   cu_seqlens=None,*,layout=None,save_state=False,fp32_output=False,_lse_preabsorbed=False,
+                   direction_true=False):
     """Native three-stage varlen forward; inputs and output retain batch1.
 
     Raw natural-log LSE follows fixed-length semantics. Reusing layout avoids
@@ -57,6 +58,9 @@ def forward_varlen(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,
     hard is bool [training_rows,H], with equal-length original training rows
     covering T. Documents cannot cross those row boundaries. Hard rows return
     zero output/norm and zero gradients; no hard attention is computed here.
+    direction_true is a host assertion that every direction is true; it selects
+    specialized kernels without inspecting GPU flags. False retains the general
+    path (including all-true tensors). Backward reuses the saved selection.
     """
     if q.is_cuda and torch.cuda.is_current_stream_capturing():
         raise RuntimeError('varlen metadata uploads do not support CUDA Graph capture yet')
@@ -68,9 +72,10 @@ def forward_varlen(q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau,
         raise ValueError('provide either layout or cu_seqlens, not both')
     output,lse2,state=cu.core_forward(
         (q,k,sq,sk,v,q_lse,k_lse,idx_q,idx_k,direction,hard,rtau),
-        layout.table,0,save_state,fp32_output,_lse_preabsorbed)
+        layout.table,0,save_state,fp32_output,_lse_preabsorbed,direction_true)
     if save_state:
         state['layout']=layout
+        state['direction_true']=direction_true
         return output,lse2,state
     return output,lse2
 
@@ -83,7 +88,7 @@ def backward_varlen(state,dout,*,fp32_output=False,return_diagnostics=False):
         raise RuntimeError('varlen descriptor uploads do not support CUDA Graph capture yet')
     gradients,details=cu.core_backward(
         state['operands'],state['vertical'],state['output'],state['normalizer'],dout,
-        layout.table,0,fp32_output,return_diagnostics)
+        layout.table,0,fp32_output,return_diagnostics,state.get('direction_true',False))
     return (gradients,details) if return_diagnostics else gradients
 
 

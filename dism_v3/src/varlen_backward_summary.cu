@@ -6,7 +6,7 @@ namespace DISM_VARIANT {
 
 using namespace dism_backward;
 
-template<bool FP32Output, class Configuration = ActiveConfig>
+template<bool FP32Output, bool DirectionTrue = false, class Configuration = ActiveConfig>
 __global__ __launch_bounds__(384,1) void varlen_backward_summary_kernel(
         const __grid_constant__ dism_varlen::BackwardArgs packed) {
     const auto& args=packed.common;
@@ -46,7 +46,7 @@ __global__ __launch_bounds__(384,1) void varlen_backward_summary_kernel(
             for (int q0=((score_args.n+Q-1)/Q-1)*Q;q0>=task.k0;q0-=Q) {
                 auto packet=input.waitBuffer(2,shared.input);
                 auto& data=packet.template get<0>();
-                auto score=recompute(score_args,keys,data.q,task.bh,k0,q0);
+                auto score=recompute<DirectionTrue>(score_args,keys,data.q,task.bh,k0,q0);
                 kt::rt_fl<K,Q> a{0.f},b{0.f};
                 {
                     kt::rt_bf<Q,R> soft_queries;
@@ -181,10 +181,13 @@ __global__ __launch_bounds__(384,1) void varlen_backward_summary_kernel(
     kt::warpgroup::sync(group+1);
 }
 
-template<bool FP32> const void* varlen_backward_summary_address() { return reinterpret_cast<const void*>(varlen_backward_summary_kernel<FP32>); }
-template const void* varlen_backward_summary_address<false>();
+template<bool FP32> const void* varlen_backward_summary_address(bool direction_true) {
+    return direction_true ? reinterpret_cast<const void*>(varlen_backward_summary_kernel<FP32,true>)
+                          : reinterpret_cast<const void*>(varlen_backward_summary_kernel<FP32,false>);
+}
+template const void* varlen_backward_summary_address<false>(bool);
 #if DISM_ENABLE_FP32
-template const void* varlen_backward_summary_address<true>();
+template const void* varlen_backward_summary_address<true>(bool);
 #endif
 
 } // namespace DISM_VARIANT

@@ -6,11 +6,12 @@ from test_backward_summary import pytestmark
 
 
 def torch_voc(q,k,sq,sk,v,eq,ek,tau,direction,hard):
-    # Compact flags select the new soft-only CUDA contract. Keep the legacy
-    # token-mask oracle available for reference-only diagnostic callers.
-    keep=(~hard)[:,None,:,None] if hard.ndim==2 else None
-    if keep is not None:
-        hard=torch.zeros(q.shape[0],q.shape[2],q.shape[1],device=q.device,dtype=torch.bool)
+    # This oracle models the complete vocabulary operator, including hard
+    # attention. Expand sequence flags for dism_ref's token-shaped interface;
+    # do not apply the low-level soft-only kernel's zero-output contract here.
+    # Legacy token masks remain supported for reference-only diagnostics.
+    if hard.ndim==2:
+        hard=hard[:,:,None].expand(-1,-1,q.shape[1])
     eq,ek=eq.bfloat16().float(),ek.bfloat16().float()
     qs=torch.einsum('bnhd,hvd->bhnv',q.float(),eq)
     ks=torch.einsum('bnhd,hvd->bhnv',k.float(),ek)
@@ -20,7 +21,7 @@ def torch_voc(q,k,sq,sk,v,eq,ek,tau,direction,hard):
     result = dism_ref(torch.where(select,q,k_from_q),torch.where(select,q_from_k,k),
                     sq,sk,qs.logsumexp(-1).transpose(1,2),ks.logsumexp(-1).transpose(1,2),
                     qs.argmax(-1),ks.argmax(-1),direction,hard,v,tau)
-    return result if keep is None else result*keep
+    return result
 
 
 @pytest.mark.parametrize('mode',['soft','mixed','hard'])

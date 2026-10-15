@@ -24,7 +24,7 @@ PRIMARY = {
 
 
 @pytest.mark.parametrize('config', CONFIGS)
-def test_twelve_primary_instances(config):
+def test_primary_instances(config):
     r,d,dv = config
     tag = f'r{r}_d{d}_v{dv}'
     count = 0
@@ -33,10 +33,12 @@ def test_twelve_primary_instances(config):
         sass = subprocess.check_output(['/usr/local/cuda/bin/cuobjdump','-sass',str(obj)],text=True)
         functions = re.findall(r'Function\s*:\s*(\S+)',sass)
         selected = [f for f in functions if kernel in f]
-        assert len(selected) == (2 if source == 'varlen_chunk' else 1), selected
+        specialized = source in {'varlen_summary', 'varlen_forward',
+                                 'varlen_backward_summary', 'varlen_backward_qk'}
+        assert len(selected) == (2 if source == 'varlen_chunk' or specialized else 1), selected
         assert all(f'dism_{tag}' in f and 'KernelConfig' in f for f in selected), selected
         assert 'CALL' not in sass, (config,source)
         dependency = (ROOT / f'build/deps/{tag}/{source}.cu.d').read_text()
         assert '/torch/include/' not in dependency, source
         count += len(selected)
-    assert count == 12
+    assert count == 16

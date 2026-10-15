@@ -6,7 +6,7 @@ namespace DISM_VARIANT {
 
 // Varlen workload entrypoint. The compute/pipeline body follows the validated
 // fixed-length summary, with whole-pack descriptors and document-local checkpoints.
-template<class Configuration = ActiveConfig>
+template<bool DirectionTrue = false, class Configuration = ActiveConfig>
 __global__ __launch_bounds__(384, 1) void varlen_summary_kernel(
     const __grid_constant__ dism_varlen::SummaryArgs packed) {
     const auto& args=packed.common;
@@ -34,7 +34,7 @@ __global__ __launch_bounds__(384, 1) void varlen_summary_kernel(
     auto &shared = alloc.allocate<LoadSharedMemoryLayouts>();
 
     if (group == PRODUCER) {
-        dism_varlen::produce_packed_summary(args, load_pipe, prefetch_pipe, shared, task, warp_in_group);
+        dism_varlen::produce_packed_summary<DirectionTrue>(args, load_pipe, prefetch_pipe, shared, task, warp_in_group);
     } else {
         kt::warpgroup::increase_registers<232>();
         using Scan = pscore::AltLayoutSplitScanBuffer<CONFIG.WarpQSize, CONFIG.WarpKSize,
@@ -49,7 +49,7 @@ __global__ __launch_bounds__(384, 1) void varlen_summary_kernel(
             prefetch_pipe.setup();
             auto prefetch =
                 prefetch_pipe.waitBuffer(PRODUCER, shared.Tiles.Prefetch, shared.Vectors.Prefetch);
-            bool query_lse = shared.direction;
+            bool query_lse = DirectionTrue || shared.direction;
             auto &vectors = prefetch.template get<1>();
             kt::rt_bf<CONFIG.WarpQSize, CONFIG.KcKeyDim> query;
             kt::rv_fl<CONFIG.WarpQSize, kt::ducks::rv_layout::ortho> query_bias;
@@ -121,6 +121,9 @@ __global__ __launch_bounds__(384, 1) void varlen_summary_kernel(
     kt::warpgroup::sync(group + 1);
 }
 
-const void* varlen_summary_address() { return reinterpret_cast<const void*>(varlen_summary_kernel<ActiveConfig>); }
+const void* varlen_summary_address(bool direction_true) {
+    return direction_true ? reinterpret_cast<const void*>(varlen_summary_kernel<true>)
+                          : reinterpret_cast<const void*>(varlen_summary_kernel<false>);
+}
 
 } // namespace DISM_VARIANT

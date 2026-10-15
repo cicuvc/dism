@@ -7,7 +7,7 @@ namespace DISM_VARIANT {
 
 using namespace dism_forward;
 
-template<bool FP32Output, class Configuration = ActiveConfig>
+template<bool FP32Output, bool DirectionTrue = false, class Configuration = ActiveConfig>
 __global__ __launch_bounds__(384, 1) void varlen_forward_kernel(
         const __grid_constant__ dism_varlen::ForwardArgs<FP32Output> packed) {
     using Shared = SharedT<FP32Output>;
@@ -29,7 +29,7 @@ __global__ __launch_bounds__(384, 1) void varlen_forward_kernel(
                           ConsumerWarpGroup<true, 0>, ConsumerWarpGroup<false, 1>);
     auto& shared = allocator.allocate<Shared>();
     if (group == 2) {
-        dism_varlen::produce_packed_forward(args, shared, input, prefetch, task);
+        dism_varlen::produce_packed_forward<DirectionTrue>(args, shared, input, prefetch, task);
     } else {
         kt::warpgroup::increase_registers<232>();
         {
@@ -41,7 +41,7 @@ __global__ __launch_bounds__(384, 1) void varlen_forward_kernel(
             kt::warp::rv_maps::zero(bias);
             prefetch.setup();
             auto first = prefetch.waitBuffer(2, shared.tiles.prefetch, shared.metadata.prefetch);
-            bool query_lse = shared.query_lse;
+            bool query_lse = DirectionTrue || shared.query_lse;
             auto& meta = first.template get<1>();
             kt::group<8>::load(query, first.template get<0>().q);
             kt::group<8>::load(soft_query, first.template get<0>().sq);
@@ -153,10 +153,13 @@ __global__ __launch_bounds__(384, 1) void varlen_forward_kernel(
     kt::warpgroup::sync(group + 1);
 }
 
-template<bool FP32> const void* varlen_forward_address() { return reinterpret_cast<const void*>(varlen_forward_kernel<FP32>); }
-template const void* varlen_forward_address<false>();
+template<bool FP32> const void* varlen_forward_address(bool direction_true) {
+    return direction_true ? reinterpret_cast<const void*>(varlen_forward_kernel<FP32,true>)
+                          : reinterpret_cast<const void*>(varlen_forward_kernel<FP32,false>);
+}
+template const void* varlen_forward_address<false>(bool);
 #if DISM_ENABLE_FP32
-template const void* varlen_forward_address<true>();
+template const void* varlen_forward_address<true>(bool);
 #endif
 
 } // namespace DISM_VARIANT

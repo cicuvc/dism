@@ -120,7 +120,7 @@ def _voc_forward_impl(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: to
     output, norm, state = cu.core_forward(
         (qv, kv, sq, sk, v, lq.transpose(1, 2), lk.transpose(1, 2),
          iq, ik, direction, hard, tau), table,
-        0, True, False, True)
+        0, True, False, True, direction_true)
     combined = output + forward_hard(sq.contiguous(),sk.contiguous(),v.contiguous(),iq,ik,
                                      hard.contiguous(),tau.contiguous(),layout=pack)[0] if q.shape[1] else output.clone()
     # All auxiliary results own newly computed storage; no inputs alias outputs.
@@ -187,7 +187,8 @@ def _voc_backward_impl(inputs: list[torch.Tensor], saved: list[torch.Tensor],
     prepared.append(boundary)
     core_norm = norm.flatten() if packed else norm
     g, _ = cu.core_backward(prepared, vertical, output, core_norm, dout.to(torch.bfloat16).contiguous(),
-                            layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1]), 0, False, False)
+                            layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1]),
+                            0, False, False, direction_true)
     ticket = cu.get_training_plan(handle)
     if ticket is not None:
         from .hard_backward import backward_hard_recompute

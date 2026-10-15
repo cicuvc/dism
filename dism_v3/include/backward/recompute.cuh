@@ -33,20 +33,20 @@ struct RecomputeArgs {
 // Natural-log bias is seeded before MMA, as in the saved forward computation.
 // This initial correctness helper deliberately keeps metadata access explicit;
 // the WS producer will cache it in the same input slot as its query tile.
-template<class ScoreArgs>
+template<bool DirectionTrue = false, class ScoreArgs>
 __device__ __forceinline__ Scalar recompute(
         const ScoreArgs& args, const kt::rt_bf<K,D>& keys,
         const QueryTile& query_shared, int bh, int k0, int q0) {
     constexpr float LOG2E = 1.4426950408889634f;
     kt::rt_fl<K,Q> score;
     int64_t offset = int64_t(bh) * args.padded;
-    bool query_lse = args.direction[bh];
+    bool query_lse = DirectionTrue || args.direction[bh];
 #pragma unroll
     for (int r = 0; r < 2; ++r) {
 #pragma unroll
         for (int c = 0; c < 4; ++c) {
             auto pos = Scalar::layout(r,c,0);
-            float key_bias = -args.k_lse[offset+k0+pos.first];
+            float key_bias = DirectionTrue ? 0.f : -args.k_lse[offset+k0+pos.first];
             float x = query_lse ? -args.q_lse[offset+q0+pos.second] : key_bias;
             float y = query_lse ? -args.q_lse[offset+q0+pos.second+4] : key_bias;
             score.tiles[0][c/2].data[r+2*(c&1)] = {x,y};

@@ -24,7 +24,7 @@ __device__ __forceinline__ ForwardTask forward_task(const ForwardArgs<FP32Output
 }
 using namespace dism_forward;
 
-template <bool FP32Output, class InputPipe, class PrefetchPipe>
+template <bool DirectionTrue = false, bool FP32Output, class InputPipe, class PrefetchPipe>
 __device__ __forceinline__ void produce_packed_forward(const ArgsT<FP32Output>& args, SharedT<FP32Output>& shared,
                                         InputPipe& input, PrefetchPipe& prefetch,
                                         const ForwardTask& task) {
@@ -36,9 +36,9 @@ __device__ __forceinline__ void produce_packed_forward(const ArgsT<FP32Output>& 
         auto first = prefetch.waitBuffer(0, shared.tiles.prefetch, shared.metadata.prefetch);
         auto& tiles = first.template get<0>();
         auto& metadata = first.template get<1>();
-        bool query_lse = args.direction[task.batch * args.heads + task.head];
+        bool query_lse = DirectionTrue || args.direction[task.batch * args.heads + task.head];
         if (leader) {
-            shared.query_lse = query_lse;
+            if constexpr (!DirectionTrue) shared.query_lse = query_lse;
             kt::tma::expect_bytes(first.getBarrier(), sizeof(QTile) + sizeof(SQTile));
             kt::tma::load_async(tiles.q, args.q, {0, task.head, task.begin+task.q_start, 0}, first.getBarrier());
             kt::tma::load_async(tiles.sq, args.sq, {0, task.head, task.begin+task.q_start, 0}, first.getBarrier());

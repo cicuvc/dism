@@ -62,11 +62,11 @@ T backward_delta_cuda(T,T); \
 V backward_summary_cuda(V,T,T,T,T,int64_t,int64_t,bool); \
 T backward_chunk_cuda(T,T); \
 V backward_qk_cuda(V,T,T,T,T,T,int64_t,int64_t,bool); \
-Pair varlen_summary_cuda(V,T); T varlen_chunk_cuda(T,T,T,int64_t); \
-Triple varlen_forward_cuda(V,T,bool,bool); T varlen_delta_cuda(T,T,T); \
-V varlen_backward_summary_cuda(V,T,T,T,T,T,bool); \
+Pair varlen_summary_cuda(V,T,bool); T varlen_chunk_cuda(T,T,T,int64_t); \
+Triple varlen_forward_cuda(V,T,bool,bool,bool); T varlen_delta_cuda(T,T,T); \
+V varlen_backward_summary_cuda(V,T,T,T,T,T,bool,bool); \
 T varlen_backward_chunk_cuda(T,T,T,int64_t); \
-V varlen_backward_qk_cuda(V,T,T,T,T,T,T,bool); }
+V varlen_backward_qk_cuda(V,T,T,T,T,T,T,bool,bool); }
 DISM_CONFIGS(DECLARE)
 #undef DECLARE
 
@@ -84,10 +84,10 @@ struct Backend {
     V (*b1)(V,T,T,T,T,int64_t,int64_t,bool);
     T (*b2)(T,T);
     V (*b3)(V,T,T,T,T,T,int64_t,int64_t,bool);
-    Pair (*vs)(V,T); T (*vc)(T,T,T,int64_t);
-    Triple (*vf)(V,T,bool,bool); T (*vd)(T,T,T);
-    V (*vb1)(V,T,T,T,T,T,bool); T (*vb2)(T,T,T,int64_t);
-    V (*vb3)(V,T,T,T,T,T,T,bool);
+    Pair (*vs)(V,T,bool); T (*vc)(T,T,T,int64_t);
+    Triple (*vf)(V,T,bool,bool,bool); T (*vd)(T,T,T);
+    V (*vb1)(V,T,T,T,T,T,bool,bool); T (*vb2)(T,T,T,int64_t);
+    V (*vb3)(V,T,T,T,T,T,T,bool,bool);
 };
 #define ENTRY(R,D,DV) {R,D,DV, \
     dism_r##R##_d##D##_v##DV::summarization_cuda, dism_r##R##_d##D##_v##DV::hard_summary_cuda, \
@@ -172,7 +172,7 @@ static V prepare(const V& x,bool packed,bool absorbed=false) {
     return result;
 }
 
-static py::tuple core_forward(V raw,std::optional<T> table,int64_t ctas,bool save,bool fp32,bool absorbed) {
+static py::tuple core_forward(V raw,std::optional<T> table,int64_t ctas,bool save,bool fp32,bool absorbed,bool direction_true) {
     // Async planner uploads can enter the CUDA allocator concurrently. Never
     // hold the GIL across ATen/CUDA work: allocator/profiler callbacks may need
     // it while holding the allocator lock (also exercised by sanitizer).
@@ -185,7 +185,7 @@ static py::tuple core_forward(V raw,std::optional<T> table,int64_t ctas,bool sav
     int64_t b=raw[0].size(0),n=raw[0].size(1),h=raw[0].size(2);
     T a,s,boundary,out,norm,vertical;
     if (table) {
-        std::tie(a,s)=backend.vs(x,*table);
+        std::tie(a,s)=backend.vs(x,*table,direction_true);
         boundary=backend.vc(a,s,*table,h);
     } else {
         std::tie(a,s)=backend.summary(x[0],x[1],x[5],x[6],x[7],x[8],x[9],x[10],x[11],n,ctas);
@@ -193,7 +193,7 @@ static py::tuple core_forward(V raw,std::optional<T> table,int64_t ctas,bool sav
     }
     a=T(); s=T();
     x.push_back(boundary);
-    if (table) std::tie(out,norm,vertical)=backend.vf(x,*table,save,fp32);
+    if (table) std::tie(out,norm,vertical)=backend.vf(x,*table,save,fp32,direction_true);
     else {
         if (save) vertical=at::full({b,h,(n-1)/16,n},-1e6,raw[0].options().dtype(at::kFloat));
         std::tie(out,norm)=backend.forward(x[0],x[1],x[2],x[3],x[4],x[5],x[6],x[7],x[8],
@@ -210,7 +210,7 @@ static py::tuple core_forward(V raw,std::optional<T> table,int64_t ctas,bool sav
 }
 
 static py::tuple core_backward(V x,T vertical,T output,T normalizer,T dout,
-                              std::optional<T> table,int64_t ctas,bool fp32,bool diagnostics) {
+                              std::optional<T> table,int64_t ctas,bool fp32,bool diagnostics,bool direction_true) {
     py::gil_scoped_release release;
     at::NoGradGuard no_grad;
     precision(fp32);
@@ -223,12 +223,12 @@ static py::tuple core_backward(V x,T vertical,T output,T normalizer,T dout,
     dout=dout.contiguous();
     T delta=table?backend.vd(output,dout,*table):backend.delta(output,dout);
     T input=table?dout.squeeze(0):dout;
-    V first=table?backend.vb1(x,vertical,input,normalizer,delta,*table,fp32):
+    V first=table?backend.vb1(x,vertical,input,normalizer,delta,*table,fp32,direction_true):
         backend.b1(x,vertical,input,normalizer,delta,n,ctas,fp32);
     T boundary=table?backend.vb2(first[3],first[4],*table,h):backend.b2(first[3],first[4]);
     T diagnostic_a=diagnostics?first[3]:T(), diagnostic_b=diagnostics?first[4]:T();
     first[3]=T(); first[4]=T();
-    V last=table?backend.vb3(x,vertical,input,normalizer,delta,boundary,*table,fp32):
+    V last=table?backend.vb3(x,vertical,input,normalizer,delta,boundary,*table,fp32,direction_true):
         backend.b3(x,vertical,input,normalizer,delta,boundary,n,ctas,fp32);
     auto q_lse=last[2].view({b,h,n}).transpose(1,2);
     auto k_lse=last[3].view({b,h,n}).transpose(1,2);
@@ -317,7 +317,8 @@ void bind_frontend(py::module_& m) {
                 return backend.hard_readout(x,boundary,lut,table,ctas);
         TORCH_CHECK(false,"unsupported hard readout (R,DV)");
     });
-    m.def("core_forward",&core_forward);
+    m.def("core_forward",&core_forward,py::arg("raw"),py::arg("table"),py::arg("ctas"),
+          py::arg("save"),py::arg("fp32"),py::arg("absorbed"),py::arg("direction_true")=false);
     m.def("hard_backward",[](V x,T boundary,T lut,T norm,int64_t ctas) {
         py::gil_scoped_release release;
         TORCH_CHECK(x.size()==7 && x[0].dim()==4 && x[2].dim()==4,"invalid hard backward operands");
@@ -326,7 +327,9 @@ void bind_frontend(py::module_& m) {
                 return backend.hard_backward(x,boundary,lut,norm,ctas);
         TORCH_CHECK(false,"unsupported hard backward (R,DV)");
     });
-    m.def("core_backward",&core_backward);
+    m.def("core_backward",&core_backward,py::arg("operands"),py::arg("vertical"),
+          py::arg("output"),py::arg("normalizer"),py::arg("dout"),py::arg("table"),
+          py::arg("ctas"),py::arg("fp32"),py::arg("diagnostics"),py::arg("direction_true")=false);
     m.def("make_varlen_layout",&make_layout);
     m.def("prepare_operands",[](V x,bool packed,bool absorbed){
         py::gil_scoped_release release;

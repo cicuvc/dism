@@ -6,7 +6,7 @@ namespace DISM_VARIANT {
 
 using namespace dism_backward;
 
-template<bool FP32Output, class Configuration = ActiveConfig>
+template<bool FP32Output, bool DirectionTrue = false, class Configuration = ActiveConfig>
 __global__ __launch_bounds__(384,1) void varlen_backward_qk_kernel(
         const __grid_constant__ dism_varlen::BackwardArgs packed) {
     const auto& args=packed.common;
@@ -47,7 +47,7 @@ __global__ __launch_bounds__(384,1) void varlen_backward_qk_kernel(
             for (int q0=((score_args.n+Q-1)/Q-1)*Q;q0>=task.k0;q0-=Q) {
                 auto packet=input.waitBuffer(2,shared.input);
                 auto& data=packet.template get<0>();
-                auto score=recompute(score_args,keys,data.q,task.bh,k0,q0);
+                auto score=recompute<DirectionTrue>(score_args,keys,data.q,task.bh,k0,q0);
                 kt::rt_fl<K,Q> a{0.f},b{0.f};
                 {
                     kt::rt_bf<Q,R> soft_queries;
@@ -117,7 +117,7 @@ __global__ __launch_bounds__(384,1) void varlen_backward_qk_kernel(
                 }
                 gradient.reverse_roll<false>();
                 kt::rt_bf<K,Q> soft_gradient;
-                bool query_lse=score_args.direction[task.bh];
+                bool query_lse=DirectionTrue || score_args.direction[task.bh];
                 float row_lse[4][2]{};
 #pragma unroll
                 for (int r=0;r<2;++r) {
@@ -171,6 +171,7 @@ __global__ __launch_bounds__(384,1) void varlen_backward_qk_kernel(
             first.submitToNextAndTrigger();
             held.moveNext();
             store_key_gradient<D,2,FP32Output>(dk,args.dk,args.score,task.bh,task.begin+k0,args,shared);
+            if constexpr (!DirectionTrue) {
 #pragma unroll
             for (int r=0;r<2;++r) {
                 float x=key_lse[r];
@@ -183,6 +184,7 @@ __global__ __launch_bounds__(384,1) void varlen_backward_qk_kernel(
                     else static_cast<__nv_bfloat16*>(args.dlk)[offset]=__float2bfloat16_rn(x);
                 }
             }
+            } // true direction leaves the zero-initialized dK-LSE untouched
 #pragma unroll
             for (int shift=16;shift>0;shift/=2)
                 tau_sum+=__shfl_down_sync(0xffffffff,tau_sum,shift);
@@ -193,10 +195,13 @@ __global__ __launch_bounds__(384,1) void varlen_backward_qk_kernel(
     kt::warpgroup::sync(group+1);
 }
 
-template<bool FP32> const void* varlen_backward_qk_address() { return reinterpret_cast<const void*>(varlen_backward_qk_kernel<FP32>); }
-template const void* varlen_backward_qk_address<false>();
+template<bool FP32> const void* varlen_backward_qk_address(bool direction_true) {
+    return direction_true ? reinterpret_cast<const void*>(varlen_backward_qk_kernel<FP32,true>)
+                          : reinterpret_cast<const void*>(varlen_backward_qk_kernel<FP32,false>);
+}
+template const void* varlen_backward_qk_address<false>(bool);
 #if DISM_ENABLE_FP32
-template const void* varlen_backward_qk_address<true>();
+template const void* varlen_backward_qk_address<true>(bool);
 #endif
 
 } // namespace DISM_VARIANT

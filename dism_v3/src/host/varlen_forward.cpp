@@ -8,9 +8,9 @@
 
 namespace DISM_VARIANT {
 using namespace dism_forward;
-template<bool FP32> const void* varlen_forward_address();
+template<bool FP32> const void* varlen_forward_address(bool);
 std::tuple<at::Tensor,at::Tensor,at::Tensor> varlen_forward_cuda(
-        std::vector<at::Tensor> operands,at::Tensor table,bool save_boundaries,bool fp32_output) {
+        std::vector<at::Tensor> operands,at::Tensor table,bool save_boundaries,bool fp32_output,bool direction_true) {
     auto run = [&]<bool FP32Output>() -> std::tuple<at::Tensor,at::Tensor,at::Tensor> {
         using Args = ArgsT<FP32Output>;
         using DType = OutputDType<FP32Output>;
@@ -54,7 +54,7 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor> varlen_forward_cuda(
         std::vector<int2> tasks;
         for (int s=0;s<layout.sequences;++s)
             append_tasks(tasks,s,h*(layout.get(s,Length)/QROWS));
-        launch_common(varlen_forward_address<FP32Output>(),args,layout,tasks,shared_bytes<FP32Output>,operands[0].device(),
+        launch_common(varlen_forward_address<FP32Output>(direction_true),args,layout,tasks,shared_bytes<FP32Output>,operands[0].device(),
                       384,t/operands[9].size(0));
         return {output,normalizer,vertical};
     };

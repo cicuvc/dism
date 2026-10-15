@@ -27,7 +27,7 @@ __device__ __forceinline__ SummaryTask summary_task(const SummaryArgs& packed) {
             row[ForwardOffset]*packed.common.Head};
 }
 
-template <class LoadPipe, class PrefetchPipe>
+template <bool DirectionTrue = false, class LoadPipe, class PrefetchPipe>
 __device__ __forceinline__ void
 produce_packed_summary(const TmaSummarizationKernelArgs &args, LoadPipe &load_pipe,
                       PrefetchPipe &prefetch_pipe, LoadSharedMemoryLayouts &shared,
@@ -38,13 +38,13 @@ produce_packed_summary(const TmaSummarizationKernelArgs &args, LoadPipe &load_pi
     if (warp_in_group == 0) {
         bool leader = kt::warp::elect_leader();
         {
-            bool query_lse = args.direction[task.Batch * args.Head + task.Head];
+            bool query_lse = DirectionTrue || args.direction[task.Batch * args.Head + task.Head];
 
             prefetch_pipe.setup();
             auto prefetch = prefetch_pipe.waitBuffer(CONSUMER_A, shared.Tiles.Prefetch,
                                                      shared.Vectors.Prefetch);
             if (leader) {
-                shared.direction = query_lse;
+                if constexpr (!DirectionTrue) shared.direction = query_lse;
             }
             auto &tiles = prefetch.template get<0>();
             auto &vectors = prefetch.template get<1>();

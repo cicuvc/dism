@@ -8,10 +8,10 @@
 
 namespace DISM_VARIANT {
 using namespace dism_backward;
-template<bool FP32> const void* varlen_backward_qk_address();
+template<bool FP32> const void* varlen_backward_qk_address(bool);
 std::vector<at::Tensor> varlen_backward_qk_cuda(std::vector<at::Tensor> operands,
         at::Tensor vertical,at::Tensor dout,at::Tensor normalizer,at::Tensor delta,
-        at::Tensor boundary,at::Tensor table,bool fp32_output) {
+        at::Tensor boundary,at::Tensor table,bool fp32_output,bool direction_true) {
     using namespace dism_varlen;
     BackwardInputs input(operands,vertical,dout,normalizer,delta,table);
     const auto& layout=input.layout;
@@ -41,12 +41,12 @@ std::vector<at::Tensor> varlen_backward_qk_cuda(std::vector<at::Tensor> operands
     copy_output_map(args.lse_output,lse_map);
 #if DISM_ENABLE_FP32
     if (fp32_output)
-        launch_backward(varlen_backward_qk_address<true>(),args,layout,operands[0].device(),layout.tokens/operands[9].size(0));
+        launch_backward(varlen_backward_qk_address<true>(direction_true),args,layout,operands[0].device(),layout.tokens/operands[9].size(0));
     else
 #else
     TORCH_CHECK(!fp32_output,"FP32 output instances are disabled in this build");
 #endif
-        launch_backward(varlen_backward_qk_address<false>(),args,layout,operands[0].device(),layout.tokens/operands[9].size(0));
+        launch_backward(varlen_backward_qk_address<false>(direction_true),args,layout,operands[0].device(),layout.tokens/operands[9].size(0));
     return {dq,dk,dlq,dlk,dtau};
 }
 

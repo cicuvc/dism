@@ -118,16 +118,22 @@ def test_disabled_fp32():
 
 @pytest.mark.parametrize('config',CONFIGS)
 @pytest.mark.parametrize('packed',[False,True])
-def test_vocabulary_wrapper(config,packed):
+@pytest.mark.parametrize('mode',['soft','mixed','hard'])
+def test_vocabulary_wrapper(config,packed,mode):
     from flash_dism import voc_dism
     from test_voc_backward import torch_voc
-    x=inputs(config,256,'mixed')
+    x=inputs(config,256,mode)
     q,k,sq,sk,v,_,_,_,_,direction,hard,tau=x
     eq,ek=[(.2*torch.randn(2,512,config[1],device='cuda')) for _ in range(2)]
     args=[t.requires_grad_() for t in (q,k,sq,sk,v,eq,ek,tau)]
     options={'cu_seqlens':torch.tensor([0,256],dtype=torch.int32)} if packed else {}
     output=voc_dism(*args,direction=direction,hard=hard,**options)
     reference=torch_voc(*args,direction,hard)
+    if hard.any():
+        # Guard against accidentally reinstating the soft-only zero mask in
+        # this complete-operator oracle. These fixtures contain label matches.
+        selected=hard[:,None,:,None].expand_as(reference)
+        assert torch.count_nonzero(reference[selected])>0
     torch.testing.assert_close(output.float(),reference,atol=.008,rtol=.025)
     do=torch.randn_like(output)
     actual=torch.autograd.grad(output,args,do)
