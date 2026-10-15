@@ -67,7 +67,9 @@ class HardPlanTicket:
         if self.policy != 'event':
             # result() is only inspected after done(): never hide planner errors
             # behind a fallback. A completed CPU future is not a completed H2D.
-            if self.future.done():
+            # A disabled planner hands out tickets with no future at all; they
+            # always take the fallback, which is what `not ready` already means.
+            if self.future is not None and self.future.done():
                 prepared = self.future.result()
             ready = prepared is not None and prepared.h2d_events[1].query()
             if self.policy == 'quadratic' or not ready:
@@ -94,6 +96,8 @@ class HardPlanTicket:
         h2d_ms is the bulk+bucket upload window including CPU launch gaps,
         not an isolated PCIe transfer. host_wait_ms excludes device waits.
         """
+        if self.future is None:
+            return dict(route=self.route, host_wait_ms=0., abandoned=True)
         p = self.future.result()
         if p is None:
             return dict(route=self.route, host_wait_ms=self.host_wait_ms, abandoned=True)
@@ -250,6 +254,26 @@ _runtimes = {}
 _runtime_lock = threading.Lock()
 
 
+class DisabledHardPlanner:
+    """Planner substitute selected by `DISM_HARD_PLANNER=0`.
+
+    Every hard backward takes the quadratic fallback. No native worker pool, no
+    coordinator thread, no pinned staging and no D2H/H2D traffic are created, so
+    this also removes the planner's CPU cost rather than discarding its output.
+    The forward is unchanged: `_voc_forward_impl` still computes the hard output
+    with `forward_hard`, and the fallback recomputes that same state.
+    """
+
+    def __init__(self, device):
+        self.device = torch.device(device)
+
+    def submit(self, iq, ik, hard, tau, *, layout=None):
+        return HardPlanTicket(None, None, 'quadratic')
+
+    def close(self):
+        pass
+
+
 def take_route_log():
     """Return and clear the recorded hard-backward dispatch decisions.
 
@@ -275,11 +299,14 @@ def default_hard_planner(device):
     key = (os.getpid(), device.index)
     with _runtime_lock:
         if key not in _runtimes:
-            _runtimes[key] = AsyncHardPlanner(
-                device=device, workers=int(os.environ.get('DISM_PLANNER_WORKERS', '16')),
-                max_inflight=int(os.environ.get('DISM_PLANNER_MAX_INFLIGHT', '32')),
-                backward_policy=os.environ.get('DISM_HARD_BACKWARD', 'ready'),
-                compact=bool(int(os.environ.get('DISM_PLANNER_COMPACT', '1'))))
+            if os.environ.get('DISM_HARD_PLANNER', '1') == '0':
+                _runtimes[key] = DisabledHardPlanner(device)
+            else:
+                _runtimes[key] = AsyncHardPlanner(
+                    device=device, workers=int(os.environ.get('DISM_PLANNER_WORKERS', '16')),
+                    max_inflight=int(os.environ.get('DISM_PLANNER_MAX_INFLIGHT', '32')),
+                    backward_policy=os.environ.get('DISM_HARD_BACKWARD', 'ready'),
+                    compact=bool(int(os.environ.get('DISM_PLANNER_COMPACT', '1'))))
         return _runtimes[key]
 
 
