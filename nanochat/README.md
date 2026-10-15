@@ -185,6 +185,20 @@ it does not automatically replace nanochat's model/cache dispatch. V4 training
 operators remain excluded.
 
 DISM/SWA model specs may set `loss_balance` to `document` (default) or `token`.
+
+DISM training logs a diagnostic census of the hard-backward dispatch decision:
+`train/hard_route/event_per_step`, `train/hard_route/quadratic_per_step` and
+`train/hard_route/quadratic_fraction`, plus
+`train/hard_route/quadratic_fraction/dispatchNN` per dispatch bucket. Bucket 0 is
+the DISM layer whose backward runs first, i.e. the last DISM layer in forward
+order. The planner records one letter per layer per accumulation microbatch in
+the order the autograd engine replays them and the training loop drains it on
+log steps, so the census cannot affect routing, the objective, RNG, optimizer
+state or checkpoint content. Because the coordinator is a single ordered
+pipeline, readiness is monotone in that replay order: the buckets form a prefix
+that takes the event route and a suffix that falls back, so where the buckets
+stop being 0.0 is the planner deadline cliff.
+
 Both use the chunked fused softcap CE. Training sums the corresponding loss
 numerators and valid counts over all accumulation microbatches/ranks before
 normalizing gradients, including unequal valid-token counts and ignored-only

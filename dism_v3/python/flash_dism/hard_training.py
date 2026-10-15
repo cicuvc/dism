@@ -38,12 +38,29 @@ class _Prepared:
 
 class HardPlanTicket:
     """Owns this invocation's inputs/metadata, including retained-graph replay."""
+
+    # Diagnostic census of the dispatch decision, one entry per backward: 'e'
+    # when the prepared event kernel runs, 'q' when the ticket falls back to the
+    # quadratic recompute. The decision never reads this record, so it cannot
+    # change routing, the objective, RNG, optimizer state or checkpoints; the
+    # training loop drains it on log steps to keep it bounded. Entries are
+    # appended without the lock because list.append is atomic, so a racing drain
+    # can at worst attribute one entry to the neighbouring interval.
+    _ROUTE_LOG: list = []
+    _ROUTE_LOG_LIMIT = 1 << 20
+    _ROUTE_LOCK = threading.Lock()
+
     def __init__(self, future, lease, policy='event', abandoned=None):
         self.future, self._lease = future, lease
         self.host_wait_ms = 0.
         self.policy = policy
         self.abandoned = abandoned or threading.Event()
         self.route = None
+
+    @classmethod
+    def _record_route(cls, decision: str) -> None:
+        if len(cls._ROUTE_LOG) < cls._ROUTE_LOG_LIMIT:
+            cls._ROUTE_LOG.append(decision)
 
     def backward(self, sq, sk, v, dout, *, fallback=None):
         prepared = None
@@ -58,11 +75,13 @@ class HardPlanTicket:
                     raise RuntimeError('nonblocking hard backward requires a fallback')
                 self.abandoned.set()
                 self.route, self.host_wait_ms = 'quadratic', 0.
+                self._record_route('q')
                 return fallback()
         start = time.perf_counter()
         prepared = self.future.result() if prepared is None else prepared
         self.host_wait_ms = (time.perf_counter()-start)*1000
         self.route = 'event'
+        self._record_route('e')
         xs = [x.reshape(-1, x.shape[-1]).contiguous() for x in (sq, sk, v, dout)]
         gradients = prepared.kernel.backward(*xs)
         for name, x in zip(('sq_vec', 'sk_vec', 'v'), (sq, sk, v)):
@@ -229,6 +248,18 @@ class AsyncHardPlanner:
 
 _runtimes = {}
 _runtime_lock = threading.Lock()
+
+
+def take_route_log():
+    """Return and clear the recorded hard-backward dispatch decisions.
+
+    Diagnostic only. The entries are 'e' (prepared event kernel) or 'q'
+    (quadratic recompute) in the order the autograd engine replayed them. The
+    planner reads none of this, so draining it cannot change training.
+    """
+    with HardPlanTicket._ROUTE_LOCK:
+        log, HardPlanTicket._ROUTE_LOG = HardPlanTicket._ROUTE_LOG, []
+    return log
 
 
 def default_hard_planner(device):

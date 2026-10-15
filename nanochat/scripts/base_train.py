@@ -129,6 +129,51 @@ if args.eval_device_batch_size <= 0:
     raise ValueError("eval-device-batch-size must be positive")
 user_config = vars(args).copy()  # for logging
 # -----------------------------------------------------------------------------
+
+
+def dism_dispatch_layers(model):
+    """Count the DISM layers that each make one hard-backward dispatch decision.
+
+    Used only to bucket the diagnostic route census. The autograd engine replays
+    these layers in reverse forward order, once per accumulation microbatch, so
+    the k-th decision of a microbatch belongs to DISM layer
+    ``count - 1 - (k % count)`` of microbatch ``k // count``.
+    """
+    return sum(1 for layer in getattr(model, "layers", [])
+               if not getattr(getattr(layer, "attn", None), "is_pure_gdn", False))
+
+
+def hard_route_log_data(routes, dispatch_layers, decisions_per_step, window):
+    """Translate a drained hard-route census into wandb scalars (diagnostic only).
+
+    ``dispatch_layers`` is the bucket stride: one hard-backward decision per DISM
+    layer per accumulation microbatch, replayed in reverse forward order, so
+    bucket 0 is the last DISM layer of a microbatch. ``decisions_per_step`` is
+    ``dispatch_layers`` times the accumulation microbatches and ``window`` is the
+    number of training steps the census covers. Buckets are only emitted when the
+    census length equals the expected number of decisions, so any mismatch
+    degrades to totals instead of a wrong per-bucket number.
+    """
+    if not routes:
+        return {}
+    data = {
+        "train/hard_route/event_per_step": routes.count("e") / window,
+        "train/hard_route/quadratic_per_step": routes.count("q") / window,
+        "train/hard_route/quadratic_fraction": routes.count("q") / len(routes),
+    }
+    if dispatch_layers < 1 or len(routes) != decisions_per_step * window:
+        return data
+    # Bucket 0 is the DISM layer whose backward runs first, i.e. the last DISM
+    # layer in forward order. A monotone split over dispatch buckets means the
+    # planner deadline cliff sits between the last surviving and first failing
+    # bucket.
+    for bucket in range(dispatch_layers):
+        group = routes[bucket::dispatch_layers]
+        data[f"train/hard_route/quadratic_fraction/dispatch{bucket:02d}"] = \
+            group.count("q") / len(group)
+    return data
+
+
 # Compute init and wandb logging
 
 device_type = autodetect_device_type() if args.device_type == "" else args.device_type
@@ -377,6 +422,7 @@ def disable_fp8(model):
 # Compile the model
 
 orig_model = model # original, uncompiled model, for saving raw model state_dict and for inference/evaluation (because the shapes may change shape)
+hard_dispatch_layers = dism_dispatch_layers(orig_model)
 if args.log_hidden_rms:
     hidden_rms_handles, hidden_rms_buffer = register_residual_rms_probe(orig_model)
 else:
@@ -670,6 +716,7 @@ def log_cuda_memory(phase, step):
         handle.write(json.dumps(record) + "\n")
 
 
+last_hard_route_step = step
 while True:
     last_step = step == num_iterations # loop runs num_iterations+1 times so that we can eval/save at the end
     flops_so_far = num_flops_per_token * total_batch_size * step
@@ -910,6 +957,16 @@ while True:
         }
         if hasattr(orig_model, "hard_probability"):
             log_data["train/hard_probability"] = orig_model.hard_probability.item()
+        if hard_dispatch_layers:
+            # Diagnostic census of the DISM hard-backward dispatch decision
+            # (prepared event kernel vs quadratic recompute). Draining it never
+            # changes the decision, the objective or any checkpoint content.
+            from flash_dism.hard_training import take_route_log
+            routes = take_route_log()
+            log_data.update(hard_route_log_data(
+                routes, hard_dispatch_layers, hard_dispatch_layers * grad_accum_steps,
+                max(1, step - last_hard_route_step)))
+            last_hard_route_step = step
         if args.dual_path_loss:
             log_data['train/hard_loss_weight'] = alpha
             for key,value in path_losses.items():
