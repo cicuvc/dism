@@ -30,9 +30,17 @@ def register_residual_rms_probe(model):
     buffer = torch.zeros(len(layers), device=device, dtype=torch.float32)
     handles = []
     for index, layer in enumerate(layers):
-        def hook(module, args, index=index):
+        # Capture a scalar view, not a Python layer index: an index specializes
+        # the compiled block once per layer and exhausts Dynamo's cache limit.
+        def hook(module, args, slot=buffer[index]):
             residual = args[0]
-            buffer[index] = residual.detach().float().pow(2).mean(-1).sqrt().max()
+            if (residual.is_cuda and residual.is_contiguous() and residual.numel()
+                    and residual.shape[-1] <= 4096
+                    and residual.numel() // residual.shape[-1] <= 1048576):
+                from nanochat.metrics_kernels import residual_rms_max
+                slot.copy_(residual_rms_max(residual.detach()))
+            else:
+                slot.copy_(residual.detach().float().pow(2).mean(-1).sqrt().max())
         handles.append(layer.mlp_norm.register_forward_pre_hook(hook))
     return handles, buffer
 
@@ -47,11 +55,16 @@ def remove_probe(handles):
 
 def snapshot_parameters(model):
     """Clone trainable parameters before an optimizer step."""
-    return {
-        name: param.detach().clone()
+    params = {
+        name: param.detach()
         for name, param in model.named_parameters()
         if param.requires_grad
     }
+    if not params:
+        return {}
+    # Multi-tensor copy batches CUDA launches, preserving independent storage
+    # and named_parameters' default deduplication of tied parameters.
+    return dict(zip(params, torch._foreach_clone(list(params.values()))))
 
 
 def _group_key(name):
@@ -64,13 +77,36 @@ def _group_key(name):
 def update_rms_max_per_group(model, snapshot):
     """Max per-parameter RMS of the applied update, grouped by layer/module."""
     grouped = {}
-    for name, param in model.named_parameters():
-        before = snapshot.get(name)
-        if before is None:
-            continue
-        rms = (param.detach() - before).float().pow(2).mean().sqrt()
-        grouped.setdefault(_group_key(name), []).append(rms)
-    return {key: torch.stack(values).max().item() for key, values in grouped.items()}
+    pairs = [(name, param.detach(), snapshot[name])
+             for name, param in model.named_parameters() if name in snapshot]
+    if pairs and all(p.is_cuda and p.dtype == torch.float32 and
+                     before.dtype == p.dtype and before.device == p.device
+                     for _, p, before in pairs):
+        # Keep subtraction in parameter dtype. The FP32 production path can
+        # use multi-tensor L2 reductions without per-parameter cast launches.
+        deltas = torch._foreach_sub([p for _, p, _ in pairs],
+                                   [b for _, _, b in pairs])
+        norms = torch._foreach_norm(deltas, 2)
+        rms_values = torch._foreach_div(norms, [p.numel() ** 0.5 for _, p, _ in pairs])
+        for (name, _, _), rms in zip(pairs, rms_values):
+            grouped.setdefault(_group_key(name), []).append(rms)
+    else:
+        for name, param, before in pairs:
+            rms = (param - before).float().pow(2).mean().sqrt()
+            grouped.setdefault(_group_key(name), []).append(rms)
+    if not grouped:
+        return {}
+    # Exactly one device-to-host readback rather than one synchronization per
+    # layer. Group maxima are over parameter RMS, not a pooled group norm.
+    by_device = {}
+    for key, group in grouped.items():
+        value = torch.stack(group).max()
+        by_device.setdefault(value.device, []).append((key, value))
+    result = {}
+    for items in by_device.values():
+        values = torch.stack([v for _, v in items]).tolist()
+        result.update(zip([k for k, _ in items], values))
+    return {k: result[k] for k in grouped}
 
 
 # -----------------------------------------------------------------------------
