@@ -400,14 +400,18 @@ class DismLM(nn.Module):
                         hard = row_hard.squeeze(0).T.contiguous()
                 if self.training and hard_mode is not None:
                     hard = torch.full_like(hard, hard_mode)
+                fixed_true = (not self.training or
+                              (self.config.direction_policy == 'true' and not direction_flip))
                 if self.config.value_residual:
                     x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
                               hard=hard, direction=direction, use_cache=False, v_first=v_first,
-                              vocab_temperature=self.vocab_temperature, conv_seq_idx=conv_seq_idx)
+                              vocab_temperature=self.vocab_temperature, conv_seq_idx=conv_seq_idx,
+                              direction_true=fixed_true)
                 else:
                     x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
                               hard=hard, direction=direction, use_cache=False,
-                              vocab_temperature=self.vocab_temperature, conv_seq_idx=conv_seq_idx)
+                              vocab_temperature=self.vocab_temperature, conv_seq_idx=conv_seq_idx,
+                              direction_true=fixed_true)
             x = self.norm(x).to(torch.bfloat16)
             if targets is not None and loss_reduction == 'reinforce':
                 # Optionally-sampled DISM path: differentiable mean NLL plus a

@@ -96,16 +96,23 @@ def _voc_forward_impl(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: to
                 v: torch.Tensor, eq: torch.Tensor, ek: torch.Tensor, tau: torch.Tensor,
                 beta: torch.Tensor, direction: torch.Tensor, hard: torch.Tensor,
                 boundaries: Optional[torch.Tensor], layout: Optional[torch.Tensor],
-                need_backward: bool) -> list[torch.Tensor]:
+                need_backward: bool, direction_true=False) -> list[torch.Tensor]:
     from .hard_training import default_hard_planner, layout_from_table
     from .hard_forward import forward_hard
     b = float(beta)
     cu.prepare_embedding(q, k, sq, sk, v, eq, ek, tau, direction, hard, False)
     query, key, qe, ke = prepare_embedding(q, k, eq, ek)
-    qfk, kfq, lk, lq, _, _, ik, iq = emb_fwd_wrapper(query, key, qe, ke, b, tau.detach())
+    if direction_true:
+        from .kernels.interp_true import emb_fwd_true
+        qfk, kfq, lk, lq, _, _, ik, iq = emb_fwd_true(query, key, qe, ke, b, tau.detach())
+    else:
+        qfk, kfq, lk, lq, _, _, ik, iq = emb_fwd_wrapper(query, key, qe, ke, b, tau.detach())
     # The core score must be beta*raw - LSE_beta; scale the interpolated side.
-    qsk, ksk = (qfk, kfq) if b == 1.0 else (qfk * b, kfq * b)
-    qv, kv = select_operands(q, k, qsk, ksk, direction)
+    if direction_true:
+        qv, kv = q.contiguous(), qfk if b == 1.0 else qfk*b
+    else:
+        qsk, ksk = (qfk, kfq) if b == 1.0 else (qfk * b, kfq * b)
+        qv, kv = select_operands(q, k, qsk, ksk, direction)
     table = layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1])
     pack = layout_from_table(table, q.shape[1])
     ticket = (default_hard_planner(q.device).submit(iq, ik, hard, tau, layout=pack)
@@ -132,18 +139,18 @@ def _voc_forward(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.T
     return _voc_forward_impl(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward)
 
 
-@torch.library.custom_op('flash_dism::voc_forward_host_beta_v1', mutates_args=())
+@torch.library.custom_op('flash_dism::voc_forward_host_beta_v2', mutates_args=())
 def _voc_forward_host(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.Tensor,
                       v: torch.Tensor, eq: torch.Tensor, ek: torch.Tensor, tau: torch.Tensor,
                       beta: float, direction: torch.Tensor, hard: torch.Tensor,
                       boundaries: Optional[torch.Tensor], layout: Optional[torch.Tensor],
-                      need_backward: bool) -> list[torch.Tensor]:
-    return _voc_forward_impl(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward)
+                      need_backward: bool, direction_true: bool = False) -> list[torch.Tensor]:
+    return _voc_forward_impl(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward,direction_true)
 
 
 @_voc_forward_host.register_fake
 @_voc_forward.register_fake
-def _forward_fake(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundaries, layout, need_backward):
+def _forward_fake(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundaries, layout, need_backward, direction_true=False):
     b, n, h, d = q.shape
     vector = lambda: q.new_empty((b, n, h, d))
     scalar = lambda dtype: q.new_empty((b, h, n), dtype=dtype)
@@ -154,7 +161,7 @@ def _forward_fake(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundarie
         ctx = torch.library.get_ctx()
         vertical = q.new_empty((ctx.new_dynamic_size(),), dtype=torch.float32)
         boundary = q.new_empty((ctx.new_dynamic_size(),), dtype=torch.float32)
-    return [torch.empty_like(v), vector(), vector(), scalar(torch.float32),
+    return [torch.empty_like(v), vector(), q.new_empty((0,)) if direction_true else vector(), scalar(torch.float32),
             scalar(torch.float32), scalar(torch.int32), scalar(torch.int32),
             vertical, boundary, scalar(torch.float32), torch.empty_like(v),
             torch.empty((1,), dtype=torch.int64, device='cpu')]
@@ -162,14 +169,17 @@ def _forward_fake(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundarie
 
 def _voc_backward_impl(inputs: list[torch.Tensor], saved: list[torch.Tensor],
                  boundaries: Optional[torch.Tensor], dout: torch.Tensor,
-                 layout: Optional[torch.Tensor] = None) -> list[torch.Tensor]:
+                 layout: Optional[torch.Tensor] = None, direction_true=False) -> list[torch.Tensor]:
     q, k, sq, sk, v, eq, ek, tau, beta, direction, hard = inputs
     b = float(beta)
     _, qfk, kfq, lk, lq, ik, iq, vertical, boundary, norm, output, handle = saved
     cu.prepare_embedding(q, k, sq, sk, v, eq, ek, tau, direction, hard, False)
     query, key, qe, ke = prepare_embedding(q, k, eq, ek)
-    qsk, ksk = (qfk, kfq) if b == 1.0 else (qfk * b, kfq * b)
-    qv, kv = select_operands(q, k, qsk, ksk, direction)
+    if direction_true:
+        qv, kv = q.contiguous(), qfk if b == 1.0 else qfk*b
+    else:
+        qsk, ksk = (qfk, kfq) if b == 1.0 else (qfk * b, kfq * b)
+        qv, kv = select_operands(q, k, qsk, ksk, direction)
     raw = (qv, kv, sq, sk, v, lq.transpose(1, 2), lk.transpose(1, 2), iq, ik, direction, hard, tau)
     # Forward already absorbed tau. Do not allocate zeros or subtract it again.
     packed = boundaries is not None or layout is not None
@@ -188,10 +198,18 @@ def _voc_backward_impl(inputs: list[torch.Tensor], saved: list[torch.Tensor],
                 layout.view(-1,7) if layout is not None else _table(boundaries,q.shape[1]),q.shape[1])))
         for name in ('sq_vec', 'sk_vec', 'v', 'rtau'):
             g[name] = g[name].float() + hg[name]
-    doq, dok = split_interpolation_gradients(g['q_vec'], g['k_vec'], direction)
+    if direction_true:
+        # Q output does not exist; its backward reads only dLSE, not this placeholder.
+        doq, dok = g['k_vec'].to(torch.bfloat16).contiguous(), q
+        from .kernels.interp_bwd_split import emb_bwd_split
+        backward = lambda *args: emb_bwd_split(*args, direction_true=True)
+    else:
+        doq, dok = split_interpolation_gradients(g['q_vec'], g['k_vec'], direction)
+        backward = emb_bwd_wrapper
     # doq/dok are dL/d(beta*E); the kernel wants dL/dE with out=E, so multiply by beta.
-    dq, dk, dqe, dke = emb_bwd_wrapper(query, key, qe, ke, qfk, kfq, lk, lq,
-        doq * b, dok * b, g['k_lse'].transpose(1, 2).float(), g['q_lse'].transpose(1, 2).float(), b, tau.detach())
+    dq, dk, dqe, dke = backward(query, key, qe, ke, qfk, kfq, lk, lq,
+        doq if direction_true and b == 1.0 else doq * b, dok if direction_true else dok * b,
+        g['k_lse'].transpose(1, 2).float(), g['q_lse'].transpose(1, 2).float(), b, tau.detach())
     dq, dk, dsq = merge_token_gradients(g['q_vec'], g['k_vec'], dq, dk, g['sq_vec'], direction)
     dqe, dke = cast_vocabulary_gradients(dqe, dke, eq, ek)
     gradients = [dq, dk, dsq, g['sk_vec'].to(sk.dtype), g['v'].to(v.dtype),
@@ -206,15 +224,15 @@ def voc_backward(inputs: list[torch.Tensor], saved: list[torch.Tensor],
     return _voc_backward_impl(inputs, saved, boundaries, dout, layout)
 
 
-@torch.library.custom_op('flash_dism::voc_backward_host_beta_v1', mutates_args=())
+@torch.library.custom_op('flash_dism::voc_backward_host_beta_v2', mutates_args=())
 def _voc_backward_host(inputs: list[torch.Tensor], beta: float, saved: list[torch.Tensor],
                        boundaries: Optional[torch.Tensor], dout: torch.Tensor,
-                       layout: Optional[torch.Tensor]) -> list[torch.Tensor]:
-    return _voc_backward_impl([*inputs[:8], beta, *inputs[8:]], saved, boundaries, dout, layout)
+                       layout: Optional[torch.Tensor], direction_true: bool = False) -> list[torch.Tensor]:
+    return _voc_backward_impl([*inputs[:8], beta, *inputs[8:]], saved, boundaries, dout, layout,direction_true)
 
 
 @_voc_backward_host.register_fake
-def _backward_host_fake(inputs, beta, saved, boundaries, dout, layout):
+def _backward_host_fake(inputs, beta, saved, boundaries, dout, layout,direction_true=False):
     return [t.new_empty(t.shape) for t in inputs[:8]]
 
 
@@ -247,6 +265,7 @@ _voc_forward.register_autograd(_backward, setup_context=_setup)
 
 def _setup_host(ctx, inputs, output):
     ctx.beta = inputs[8]  # Immutable forward-time host value, not a live schedule buffer.
+    ctx.direction_true = inputs[14]
     ctx.packed = inputs[11] is not None
     ctx.has_layout = inputs[12] is not None
     ctx.save_for_backward(*inputs[:8], *inputs[9:11], *output,
@@ -259,16 +278,22 @@ def _backward_host(ctx, grads):
     saved = ctx.saved_tensors
     gradients = _voc_backward_host(list(saved[:10]), ctx.beta, list(saved[10:22]),
                                    saved[22] if ctx.packed else None, grads[0],
-                                   saved[22 + int(ctx.packed)] if ctx.has_layout else None)
-    return (*gradients, None, None, None, None, None, None)[:len(ctx.needs_input_grad)]
+                                   saved[22 + int(ctx.packed)] if ctx.has_layout else None,ctx.direction_true)
+    return (*gradients, None, None, None, None, None, None, None)[:len(ctx.needs_input_grad)]
 
 
 _voc_forward_host.register_autograd(_backward_host, setup_context=_setup_host)
 
 
-def voc_forward(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundaries, layout=None):
+def voc_forward(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundaries, layout=None, *, direction_true=False):
     need_backward = torch.is_grad_enabled() and any(x.requires_grad for x in (q,k,sq,sk,v,eq,ek,tau))
     entry = _voc_forward if isinstance(beta, torch.Tensor) else _voc_forward_host
+    if direction_true:
+        if isinstance(beta, torch.Tensor):
+            raise ValueError('fixed true direction requires a host scalar beta')
+        # Explicit semantic override, never a GPU all()/item() dispatch decision.
+        direction = torch.ones_like(direction)
+        return entry(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward,True)
     return entry(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward)
 
 

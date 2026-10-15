@@ -295,7 +295,8 @@ class DismAttention(nn.Module):
                     raise ValueError("packed attention_mask path requires the same direction across batch")
                 options['direction'] = direction[:1].contiguous()
         output = self._forward_cuda(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen,
-                                    v_first=v_first, conv_seq_idx=kwargs.get('conv_seq_idx'), **options)
+                                    v_first=v_first, conv_seq_idx=kwargs.get('conv_seq_idx'),
+                                    direction_true=kwargs.get('direction_true', False), **options)
         if indices is not None:
             from fla.layers.utils import pad_input
             output = pad_input(output.squeeze(0), indices, batch, length)
@@ -303,10 +304,12 @@ class DismAttention(nn.Module):
 
     def _forward_cuda(self, x, hard_prob=None, *, direction=None, hard=None,
                 hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None,
-                v_first=None, vocab_temperature=None, conv_seq_idx=None):
+                v_first=None, vocab_temperature=None, conv_seq_idx=None, direction_true=False):
         """Default: soft training, hard evaluation; explicit flags override sampling.
 
         direction: bool [B,H] (True selects k-to-qemb, the query-LSE path).
+        direction_true: explicit fixed-True CUDA specialization, overriding the
+        direction tensor; not an inference from its device contents.
         hard: bool [training_rows,H]; soft uses CUDA forward/backward, hard uses
         integer CUDA forward and asynchronous event backward. Pass both flags for replay. A supplied
         generator must target the same device as x. No stateful annealing here.
@@ -408,10 +411,12 @@ class DismAttention(nn.Module):
         if enabled():
             output = sampled_voc(q, k, sq, sk, v, eq, ek, tau, direction=direction,
                                  hard=hard, layout=layout, beta=beta)
-        elif compiling:
+        elif compiling or direction_true:
             from .compiler import voc_forward
+            if not compiling and layout is not None:
+                compiled_layout = layout.table.flatten()
             output = voc_forward(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard,
-                                 cu_seqlens, compiled_layout)[0]
+                                 cu_seqlens, compiled_layout, direction_true=direction_true)[0]
         else:
             output = voc_dism(q, k, sq, sk, v, eq, ek, tau,
                               direction=direction, hard=hard, layout=layout, beta=beta)

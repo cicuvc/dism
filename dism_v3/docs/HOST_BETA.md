@@ -9,6 +9,10 @@ corresponding scalar backward op. The interpolation kernels receive their
 existing scalar launch parameter, with unchanged math, launch defaults and
 BF16 rounding. The beta==1 fast path is retained.
 
+The subsequent [fixed-true specialization](DIRECTION_TRUE.md) versions these
+host-beta ops to v2 to carry its static direction flag and empty unused output;
+the host-only beta contract described here is unchanged.
+
 No state_dict keys change: the previous temperature buffer was non-persistent.
 Initialization restores the configured temperature; set_training_step computes
 the same cosine schedule on the host. Resuming training must still restore
