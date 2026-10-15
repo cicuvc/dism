@@ -1,5 +1,141 @@
 # sm120 training performance baseline
 
+## Host-device synchronization audit (2026-10-15)
+
+Purpose: close the previous section's "remaining per-microbatch metadata
+synchronization" candidate. Result: **every host-device synchronization point on
+the production training path is fully hidden under GPU execution. Removing them
+is worth 1% or less, so no source change is proposed and the candidate is
+retired in favour of launch count.**
+
+Method. All measurements are read-only replays of resident checkpoint batches
+(no dataloader, IO, W&B or checkpoint writes), and three harness options were
+added, each off by default:
+
+- `--sync-probe` wraps `fla.ops.gated_delta_rule.chunk.prepare_chunk_indices`
+  with a `perf_counter` bracket and classifies every call as a cache miss or hit
+  by return identity, so host blocking is measured without profiler overhead.
+- `--profile-stack` records Python stacks in the torch profile.
+  `analyze_model_profile.py` still reports kernel groups per phase; call-site
+  attribution for scalars and copies needs a time-containment join from
+  `cpu_op`/`cuda_runtime` events to the enclosing `python_function` frame, which
+  was done ad hoc and is not part of the committed analyzer.
+- `--host-delay-ms` inserts a synthetic host stall after gradient accumulation
+  to calibrate how much extra host work a step absorbs.
+
+A CUDA-only profile (no CPU activity) of one step gives the GPU activity union
+without the CPU-side profiler inflation a full profile adds.
+
+Inventory and cost, production configuration (valres 72M, checkpoint 19074,
+direct CUDA shortconv, B16/N2048, four accumulation microbatches):
+
+| synchronization point | per step | measured cost | critical path |
+| --- | --- | --- | --- |
+| FLA `prepare_chunk_indices` pageable D2H + H2D | 4 misses, 44 hits | 116.7 ms host blocking | no |
+| `clip_grad_norm_(...).item()` | 1 | below the 6 ms window noise | no |
+| training loss `.item()` | 1 | below the 6 ms window noise | no |
+| Inductor in-graph scalar read for Triton arguments | 48 | 0.15 ms | no |
+| `metrics.update_rms_max_per_group` pinned readback | 4 | about 0.04 ms | no |
+| hidden-RMS `tolist()` of 12 floats | 1 | under 0.1 ms | no |
+| hard-planner staging on background threads | 4 | 1.0-2.4 ms H2D, 0.07 ms D2H | no (host wait 0.0002 ms) |
+| `document_loss._sum_gradients` `active.tolist()` | 1 if `dist` is initialized | not exercised on one rank | - |
+
+The FLA helper is the only material one, and only because its result is cached
+by identity in a **single-entry** cache. Inside one microbatch the adapter's
+shared boundary snapshot makes all twelve mixers hit the same entry, so the
+blocking device round trip happens exactly once per microbatch: four per step at
+116.7 ms of host blocking, against 0.22 ms for the other 44 calls.
+
+Evidence that it is hidden:
+
+- Supplying the chunk-index tables from the host instead of letting FLA compute
+  them, with everything else unchanged, gives **604.37 +- 6.14 ms to
+  599.91 +- 5.96 ms** over 11 resident steps: -4.5 ms, -0.7%, inside one
+  standard deviation. The substituted tables were verified element-wise against
+  the FLA result for all nine resident batches (512 chunks each), and per
+  microbatch loss and gradient norm reproduce the unmodified path exactly
+  through five steps.
+- The same helper blocked 173 ms per step in the historical fused-shortconv
+  configuration (step about 810 ms); removing it there also changed nothing
+  (808.6 to 814.6 ms, both inside the 10 ms window spread).
+- Host-slack calibration in the production configuration (mean of five steps):
+  +20 ms gives +2.3 ms, +40 ms gives +9.1 ms, +60 ms gives +35.0 ms, +80 ms
+  gives +52.3 ms, +120 ms gives +94.0 ms. A step absorbs about 25-35 ms of extra
+  host work before it starts costing step time one for one.
+
+Why. A CUDA-only profile of one step reports 15 311 kernels and a GPU activity
+union of 550-560 ms against a step of about 600 ms, so the GPU timeline is
+occupied roughly 92% of the step. The remaining about 45 ms is not one stall but
+the sum of sub-3 us gaps between launches, which host-side work cannot fill. The
+phase event windows (forward 247 ms, backward 350 ms, normalization, optimizer
+and probes 6.9 ms) already account for the whole step.
+
+Consequence: remaining host-side and synchronization work on this path has a
+hard ceiling of about 5%, and nothing measured comes close to it. The live lever
+is launch count and per-kernel cost.
+
+Artifacts, all under ignored `build/`: `syncprof_base_20261015.{json,trace.json}`,
+`syncprof_stack_20261015.{json,gz,breakdown.json}` and
+`hostsync_probe_20261015.json`. The stack trace is kept gzipped because the plain
+chrome trace is 214 MB and this partition is nearly full; it can be regenerated
+with `--profile --profile-stack`. The "supply tables from the host" and
+host-slack experiments ran from a scratch copy of the replay harness outside the
+worktree; the three harness options above are their committed form. No kernel
+math, launch default, tolerance, checkpoint schema or training semantics were
+changed by this audit.
+
+## GDN metadata, prefetch and session closeout (2026-10-15)
+
+Implementation commit: `4726418`. No kernel math, launch defaults, checkpoint
+schema or normalization semantics changed.
+
+- GDN previously received a new `prepare_pack` boundary clone in each hybrid
+  layer, defeating FLA's identity cache. The adapter now owns one immutable
+  boundary snapshot per forward and shares it across GDN layers. DISM still
+  uses its validated outputs; subsequent forwards get new snapshots, including
+  when the caller overwrites its input buffer in place.
+- A 72M checkpoint-4000 replay (document-balanced CE, four resident microbatches,
+  launch threads on P cores) reduced chunk-index rebuilds28 to4 and associated
+  stream synchronizations56 to8 per step. Three eight-step windows averaged
+  619.37 ms before versus610.75 ms after. The remaining four misses are one per
+  microbatch. Synchronization duration includes queued GPU work, not just idle.
+- Producer-side pinned staging reduced ready-queue host consumption from93–95 us
+  to32–33 us per microbatch. This is only about0.24 ms of host work per step,
+  not a measured end-to-end saving of that size.
+- Affinity alone: unrestricted623.46 ms, P-core service/E-core planner623.41 ms,
+  only launch threads on P cores619.37 ms. These small, single-session differences
+  do not justify changing production defaults. Actual restarted training stayed
+  unrestricted, with16 planner workers.
+
+Validation:18 tests passed (compiled metadata identity/invalidation and gradient
+parity, CUDA shortconv, checkpoint resume); the prefetch CPU/CUDA and resume suite
+passed9 tests separately. No new native kernels; no new sanitizer campaign.
+Results under ignored `build/`: `affinity_*_20261015.json`,
+`prefetch_staging_20261015.json`, `gdn_boundary_reuse_tests_final.log`,
+`gdn_conv_diagnostic_20261015.trace.json`, and
+`gdn_boundary_after_20261015.{json,trace.json}`. These new traces are PyTorch
+profiles, not Nsight captures. Replay excludes live data loading and W&B.
+
+Fresh training smoke run `dism-fwedu-valres-72m-2500m-tokenbal-20261015-r3`
+used the exact previous r2 model specification and training arguments:72,035,808
+parameters, fixed true direction, packed-row sequence hard sampling,
+token-balanced CE with global valid-token accumulation normalization,2048-token
+context, device batch16, accumulation4, planned19074 steps/2.5B tokens.
+It was explicitly stopped by the user after logged step294 (PID508050 exited).
+Steps195–294 averaged619.84 ms, about211.5k packed tokens/s; this is logged step
+time and excludes some logging overhead, not a controlled comparison to replay.
+Final logged loss4.773583, gradient norm0.578479. No checkpoint was produced
+before the first scheduled save at2000; this run cannot resume at294. The prior
+r2 stopped at1129 without a checkpoint too. Older checkpoint files are untouched.
+
+Run directory:
+`/media/cicuvc/c63abdf1-0e56-4153-9228-95df5a2f239b/cicuvc/dism-runs/dism-fwedu-valres-72m-2500m-tokenbal-20261015-r3`.
+Its `README.md`, `train.sh`, `model_spec.json`, `logs/train.log` and provenance
+remain available; W&B run ID`1vsezazx`. No training is left running at closeout.
+Next candidates: GDN eager gate preparation. The per-microbatch metadata
+synchronization candidate was measured and closed by the later host-device
+synchronization audit above. Do not infer a new training restart.
+
 ## Direct CUDA shortconv and GPU sequence IDs (2026-10-15)
 
 The user stopped the fresh 72M run after logged step484 (no checkpoint yet),

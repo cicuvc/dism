@@ -122,6 +122,12 @@ def main():
                     help='explicit scratch-only conversion, including optimizer moments')
     ap.add_argument('--validate-conv', action='store_true', help='compare both frontends to an FP32 convolution oracle')
     ap.add_argument('--profile', action='store_true')
+    ap.add_argument('--profile-stack', action='store_true',
+                    help='record Python stacks in the torch profile (large trace, host-sync attribution)')
+    ap.add_argument('--sync-probe', action='store_true',
+                    help='time the FLA chunk-index host round trip and count cache misses per step')
+    ap.add_argument('--host-delay-ms', type=float, default=0.0,
+                    help='synthetic host stall after gradient accumulation; calibrates host slack')
     ap.add_argument('--nsys', action='store_true', help='one warmed cudaProfilerApi capture with NVTX phases')
     ap.add_argument('--profile-only', action='store_true', help='skip latency/throughput phases after warmup')
     ap.add_argument('--legacy-cuda', type=Path, help='SHA-verified local baseline artifact; compiled benchmark only')
@@ -282,6 +288,30 @@ def main():
         gc.collect()
         torch.cuda.synchronize()
 
+    # Optional uninstrumented host-sync accounting. FLA's chunk-index helper is
+    # a single-entry identity cache: within one microbatch every mixer reuses
+    # the first result, so the blocking device round trip happens once per
+    # microbatch. Timing the wrapper measures host blocking directly, without
+    # profiler overhead, and distinguishes misses from cache hits.
+    sync_counts = {}
+    sync_last = None
+    if args.sync_probe:
+        import fla.ops.gated_delta_rule.chunk as _gdn_chunk
+        _sync_real = _gdn_chunk.prepare_chunk_indices
+
+        def _sync_timed(*a, **k):
+            nonlocal sync_last
+            started = time.perf_counter()
+            out = _sync_real(*a, **k)
+            hit = out is sync_last
+            sync_last = out
+            key = 'chunk_index_hit' if hit else 'chunk_index_miss'
+            count, total = sync_counts.get(key, (0, 0.0))
+            sync_counts[key] = (count + 1, total + (time.perf_counter() - started) * 1000)
+            return out
+
+        _gdn_chunk.prepare_chunk_indices = _sync_timed
+
     def step(measure=False):
         nonlocal cursor
         events, host = [], []
@@ -314,6 +344,12 @@ def main():
             with mark(f'microbatch_{micro}/backward'):
                 (loss/accum).backward()
             end(t)
+        if args.host_delay_ms > 0:
+            # Synthetic host stall: how much extra host work the step absorbs
+            # before it starts costing step time one-for-one.
+            deadline = time.perf_counter() + args.host_delay_ms / 1000
+            while time.perf_counter() < deadline:
+                pass
         t = begin('optimizer_and_probes')
         if document_step is not None:
             loss = document_step.finalize(model.parameters())
@@ -390,8 +426,10 @@ def main():
     save()
     restore()
     windows=[]
+    sync_windows=[]
     for i in range(0 if args.profile_only else args.windows):
         torch.cuda.synchronize()
+        sync_counts.clear()
         started=time.perf_counter()
         for _ in range(args.window_steps):
             value,norm,_,_=step()
@@ -399,9 +437,21 @@ def main():
         elapsed=time.perf_counter()-started
         item=dict(step_ms=elapsed*1000/args.window_steps,
                   tokens_per_second=tokens*accum*args.window_steps/elapsed,loss=value,norm=norm)
+        if args.sync_probe:
+            item['host_sync_per_step_ms']={
+                k:{'calls_per_step':v[0]/args.window_steps,
+                   'host_ms_per_step':v[1]/args.window_steps}
+                for k,v in sync_counts.items()}
+            sync_windows.append(item['host_sync_per_step_ms'])
         windows.append(item)
         print('window',i,item,flush=True)
     report['sustained']=windows
+    if args.sync_probe:
+        report['host_sync_probe']=dict(
+            helper='fla.ops.gated_delta_rule.chunk.prepare_chunk_indices',
+            method='wrapper perf_counter around the real helper; host_ms is CPU blocking, '
+                   'not added GPU work; miss = the single-entry identity cache did not hit',
+            windows=sync_windows)
     report['thread_end']=thread_snapshot()
     save()
     restore()
@@ -422,7 +472,8 @@ def main():
         trace_kind='torch'
         with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU,
                                                torch.profiler.ProfilerActivity.CUDA],
-                                    record_shapes=True) as prof:
+                                    record_shapes=True,
+                                    with_stack=args.profile_stack) as prof:
             with mark('training_step'):
                 step()
                 torch.cuda.synchronize()

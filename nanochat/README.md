@@ -47,6 +47,13 @@ or change to packed-row hard sampling is introduced. Shortconv custom ops keep
 the CUDA channel-last layout inside an opaque functional/autograd boundary for
 Dynamo. This does not eliminate DISM's exact-layout validation or GDN metadata
 host work, and does not add cached decoding or CUDA Graph support.
+The host-device synchronization audit in
+[training benchmark](../dism_v3/docs/TRAINING_BENCHMARK.md) measured what is
+left of that host work and found it hidden under GPU execution: the production
+step is GPU-occupied about 92%, FLA's once-per-microbatch chunk-index round trip
+blocks 117 ms per step but removing it is worth 0.7% +- 1%, and the step absorbs
+25-35 ms of extra host work before it costs step time. Further host-side work
+here has a hard ceiling of about 5% and is not the live lever.
 
 DISM and SWA-control training now use chunked fused linear CE with softcap and
 the actual `cu_seqlens`. Their default scalar `mean` is an equal-weight mean of
@@ -88,6 +95,12 @@ same optimization trajectory as a historical token-mean run. No existing
 checkpoint is rewritten and no training run is automatically restarted.
 
 ## Host prefetch staging
+
+Session status (2026-10-15): implementation committed as `4726418`; fresh
+token-balanced run `dism-fwedu-valres-72m-2500m-tokenbal-20261015-r3` stopped at
+the user's request after logged step294. No checkpoint yet (save interval2000),
+no automatic restart. Last100 logged steps averaged619.84 ms /211.5k tokens/s.
+See [training closeout and benchmark caveats](../dism_v3/docs/TRAINING_BENCHMARK.md).
 
 GDN chunk metadata uses one owned boundary snapshot per model forward. The
 pure-GDN and hybrid layers share that tensor identity, while DISM keeps its
