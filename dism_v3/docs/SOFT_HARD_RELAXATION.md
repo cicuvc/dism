@@ -4724,3 +4724,97 @@ FP64 JVP 对 autograd 最大绝对误差 **1.47e−14**，全部断言通过；F
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 $PY dism_v3/tools/tau_jvp_analysis.py \
   --out dism_v3/build/NEW_tau_jvp.json
 ```
+
+## 52. 恢复基线上的 FineWeb-Edu 离线 K quantile balancing（2026-10-16）
+
+### 52.1 问题与评估边界
+
+本轮检查训练集校准的全局 code price 是否能在独立验证集改善 K 词频，并测量
+冻结模型下改变 hard K labels 的扰动成本。**不是训练中均衡的效果评估**：训后只改
+K、Q 和权重不适配，本就容易破坏已有匹配；掉点不能否定训练中加入均衡。
+同样，强制符号均匀未必是正确训练目标，符号频率与 MoE 算力负载不同。
+
+使用恢复基线 checkpoint：
+`dism-fwedu-valres-72m-2500m-tokenbal-quadforce-20261015/base_checkpoints/seqtrue72m-fwedu-valres-tokenbal-quadforce/model_019074.pt`，
+根目录为 `/media/cicuvc/c63abdf1-0e56-4153-9228-95df5a2f239b/cicuvc/dism-runs`。
+模型 12 层、后 6 层 DISM，每层 6 heads，每 head 512 codes；原 tokenizer、
+全 hard eval、权重冻结。没有修改 checkpoint、恢复/重启训练或推进现有训练 loader。
+
+本地 FineWeb-Edu `sample/100BT`：训练从 `000_00000.parquet` 顺序取 32 packed rows，
+验证从 held-out `009_00009.parquet` 顺序取 128 rows。使用原 best-fit BOS packing，
+B=1、T=2048、256-aligned segment ends、shuffle=False。
+校准有 60,705 个有效 loss targets，每 row 等距选 512 个有效位置，
+最终每 head 16,384 个校准 scores；验证有 **243,658** 个正字节有效 targets，
+847,424 bytes。NLL/BPB 按原验证的正字节 token mask，词频按 y>=0 mask。
+此次 packing/sample 与历史训练验证不同，不声称逐位复现历史 BPB。
+
+### 52.2 求解与干预
+
+对基线激活求 scores S，均匀容量 c=N/512，校准 price b，使
+`D(b)=mean_i max_j(S_ij-b_j)+mean_j b_j` 降低。采用 hinge dual 的交替块最小化：
+row alpha 取调整后最大/次大 score 中点；column price 取 S-alpha 的第 c 与 c+1
+大值中点，随后中心化。每个块有 quantile 解，**有限次迭代不是精确容量分配解**；
+记录 dual、实际 argmax 负载与残差，并返回 reduced dual 最小的迭代。
+
+实际在 `interp_true.emb_fwd_true` 返回处替换 hard K label，
+`argmax_j(S_ij-lambda*b_j)`；Q labels 和其余返回量保持原路径。
+S 来自真实 BF16 K/codebook operands，FP32 dot、TF32 关闭。
+price 只在训练样本上拟合，验证固定，不使用验证频率或未来 token 拟合价格。
+各层的校准激活来自基线；全层干预会进一步改变下游激活。
+
+先迭代 32 轮，比较 lambda=0/.25/.5/1；再在相同校准数据上 warm-start 增加
+128 轮，只评估 lambda=1。精化前校准 replay 的全部 loss 记录与原运行完全一致。
+校准 active codes 的 head 均值由 495.97 提高到 509.33，最差 head 从 415 提高到
+502；末次平均绝对相对负载误差从 .15193 降至 .03618。精化后的最坏 max-load-ratio
+仍为 2.09375，不能声称实现精确均匀容量。
+
+### 52.3 Held-out 结果
+
+有效符号数定义为 `exp(H(全局 K 频率))`，不是 token softmax entropy。
+下表 active/effective 都是 36 heads 的均值；CI 是 128 packed rows 配对 bootstrap，
+10,000 次、seed=1729，按 token 总量加权的探索性逐项 95% 区间。
+
+| K 价格强度 | active / 512 | 有效符号数 | NLL | BPB | ΔNLL [95% CI] |
+|---|---:|---:|---:|---:|---|
+| 原基线 | 220.72 | 32.06 | 2.851805 | 1.182971 | 0 |
+| .25，32 轮 | 347.58 | 57.84 | 2.852350 | 1.183197 | +.000545 [-.000119, .001218] |
+| .5，32 轮 | 451.39 | 131.93 | 2.856402 | 1.184879 | +.004598 [.003499, .005797] |
+| 1，32 轮 | 503.08 | 466.38 | 2.916238 | 1.209699 | +.064434 [.057438, .072029] |
+| 1，精化 128 轮 | 511.11 | 489.77 | 2.919403 | 1.211012 | +.067598 [.060312, .075518] |
+
+基线最集中的 L11H3 验证 active=161，但有效符号数只有 2.412，最大词频 76.60%。
+整个模型的最小 active=16；因此这里没有复现其他训练中“仅 9 个 active codes”事件。
+L11H3 是依据校准集有效符号数选择的单头对照，单独应用 32 轮全强度 price 后，
+该 head active=494、有效符号数=421.632、最大词频=.4107%；整体 NLL=2.851829，
+ΔNLL=+.00002465，CI=[-.00004686, .00009635]。近乎全部标签改写而整体 loss
+变化很小，表明这种头可能对当前验证 loss 不敏感；不能据此断言它无用或质量改善。
+
+每 row 抽样 8 个 query，按实际 segment 边界测量局部 causal matching chains。
+全 head 原有三步匹配对的保留率，lambda=.25/.5/1 分别为 39.45%/10.66%/.138%，
+精化后 .104%。这是**同一当前层激活**上旧/新 K 的局部比较，后层激活随干预变化；
+按匹配对数汇总会被高频重复匹配主导，不能当作“有用 circuit 保留率”。
+其用途是说明标签改写确实大幅改变匹配结构，而非证明全部损失来自某类 circuit。
+
+### 52.4 结论、检查与产物
+
+固定价格在 held-out 数据上显著改善词频，说明训练集校准具有迁移效果。
+冻结权重的强 K-only 干预掉点符合预期；弱干预没有检出显著损失变化，也没有证据
+表明提高质量。要回答防塌缩与最终质量，应做训练中缓慢引入价格、允许 Q/K 共同
+适配的对照，并区分弱约束/防死码与完全均匀目标。本轮没有执行这类训练。
+
+零价格 hook 与未安装 observer 的首 batch loss 完全相等；所有运行结束时模型
+buffers 均未变化。FP32 score argmax 与原 CUDA label 的最大不一致比例为
+8.134e-6，非零价格 arm 包含这一级别的数值路径差异。评估 peak allocated 约
+.446 GiB（非 GPU 全局使用量）。4 个 CPU tests 覆盖二类排序、三类枚举最优值、
+边界/匹配链与有效词表统计；不等价于 CUDA sanitizer 或训练验证。
+
+实现：`tools/qb_fwedu_probe.py`、`tools/qb_fwedu_refine.py`、
+`tools/summarize_qb_fwedu.py`；测试：`tests/test_qb_fwedu_probe.py`。
+原始结果、逐 head 统计、价格和输入位于 gitignored：
+
+- `build/qb_fwedu_restored_20261016/{results.json,summary.json,prices.pt,inputs.pt}`
+- `build/qb_fwedu_restored_refined_20261016/{results.json,summary.json,prices.pt}`
+
+输入 SHA256：`a0c7ec07720080a52116dabc51e036e4a12a3dd51b22911e376cc14a6c9cdbc3`。
+运行元数据记录 checkpoint 路径、tokenizer fingerprint、代码 hash 和源 commit。
+无生产 kernel/default 修改，无 optimizer/RNG/annealing/dataloader 状态重置。
