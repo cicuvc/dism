@@ -1,0 +1,292 @@
+# NIAH long-range circuit probe — handoff
+
+Status: not started. Written 2026-10-16 for a circuit-interpretability pass on
+three 72M checkpoints that differ in how well they recall a needle at 16k.
+
+Read `AGENTS.md` and `docs/AGENTS.md` first. This document is a plan; the
+measured facts in §3 are already established and must not be redone.
+
+## 1. The question
+
+All three models are the same 72M `dism_gdn_hybrid` architecture (12 layers,
+0–5 pure GDN, 6–11 DISM+GDN hybrid, direction=true, value residual) trained on
+2.5B fwedu-100B tokens with the same seed and data order. They differ in one
+training-pipeline decision each, and they differ measurably in NIAH present NLL
+at long context:
+
+| ctx | old | restored | gqa2 |
+|---|---|---|---|
+| 2048 | **1.724** | 1.761 | 1.743 |
+| 8192 | **2.230** | 2.567 | 2.359 |
+| 16384 | **2.459** | 2.859 | 2.713 |
+
+(present NLL, mean over depths 0.05/0.5/0.95, 16 trials; lower is better)
+
+Question: **which part of the DISM computation carries the needle from the
+insertion position to the query position, and what specifically is lost in
+`restored`?** Secondary: why is `gqa2` intermediate at 16k but slightly better
+than `restored` at 8k.
+
+The deliverable is a statement of the form "at layer L, head h, the query reads
+the needle through <mechanism>, and in `restored` <quantity> is <how> different",
+backed by numbers.
+
+## 2. The three checkpoints
+
+All under `/media/cicuvc/c63abdf1-0e56-4153-9228-95df5a2f239b/cicuvc/dism-runs/`.
+Load any of them with `load_ckpt()` from `diagnostics/niah.py` (it reads the
+sibling `meta_*.json` and builds from `meta['model_spec']`, so each model gets
+its own architecture defaults automatically).
+
+This matters more than it looks: `old`'s spec has no `conv_impl` key, and
+`DismConfig.conv_impl` defaults to `"fused"`, which is exactly the conv frontend
+`old` was trained with; `restored` and `gqa2` carry `"linear_fla"` explicitly.
+So building from each spec reproduces each model's own frontend. All three have
+already been loaded and evaluated under the current tree (the numbers in §1 were
+produced that way), so this is known-good rather than assumed.
+
+| label | run dir | checkpoint | launched | objective |
+|---|---|---|---|---|
+| `old` | `dism-fwedu-valres-72m-2500m` | `base_checkpoints/seqtrue72m-fwedu-valres/model_019074.pt` | 2026-10-09 (code `68e1975`) | legacy microbatch mean |
+| `restored` | `dism-fwedu-valres-72m-2500m-tokenbal-quadforce-20261015` | `base_checkpoints/seqtrue72m-fwedu-valres-tokenbal-quadforce/model_019074.pt` | 2026-10-15 (worktree `8bf415e`) | global valid-token mean |
+| `gqa2` | `dism-fwedu-valres-72m-2500m-tokenbal-gqa2-20261015` | `base_checkpoints/seqtrue72m-fwedu-valres-tokenbal-gqa2/model_019074.pt` | 2026-10-15 (worktree `69d7106`) | global valid-token mean, `gqa_query_channels: 2` |
+
+`old` and `restored` have byte-identical specs up to fields that did not exist
+on Oct 9 (`conv_impl`, `conv_backend`, `loss_balance`). `gqa2` is `restored` plus
+one key.
+
+Two more checkpoints are useful as references, and a third pair is coming:
+
+- `valres-norec` (`dism-fwedu-valres-norec-72m-2500m`): same layout but
+  `diag_recurrence=false`. Gains 1.075 / 0.478 / 0.366 — it shows what the
+  suffix-chain recurrence is worth. Use it as the "long-range path removed"
+  upper bound.
+- `kvg2` (`...-tokenbal-kvg2-20261016`, running) and `legacy`
+  (`...-tokenbal-legacy-20261016`, queued behind it) are the same isolation pair
+  for the shared-KV head grouping and for the loss-normalization revert. Their
+  NIAH will tell you whether `restored`'s deficit tracks the objective or the
+  architecture. Add them if they have finished.
+
+## 3. Already established — do not redo
+
+1. **DISM carries the far needle; SWA/GDN does not.** Zeroing the DISM core
+   output (`niah.py --mode dism_core`) collapses the far-needle gain:
+   4k/d0.05 +0.55 → −0.07, 8k +0.68 → +0.01, 16k +0.44 → +0.10. Near-needle
+   (d0.95) only drops 0.2–0.35. Zeroing the whole DISM layer (`--mode
+   dism_layer`) gives 3.1601 at 16k.
+2. **Scrambling all symbols ≈ zeroing** (`--mode flip`), so the discrete symbol
+   identity, not the continuous embeddings, is what does the work.
+3. **The suffix recurrence is the long-range mechanism.** `valres-norec` loses
+   most of the 8k/16k gain (1.075/0.478/0.366).
+4. **`absent` NLL differs across arms** (old 2.94–3.19, restored 3.27–3.58,
+   gqa2 3.23–3.37), so `gain = absent − present` is not comparable across arms.
+   Use present NLL, absent NLL and present token accuracy separately. §4 of
+   `SOFT_HARD_RELAXATION.md` has the full per-cell table.
+5. **The wandb `qk/*` probe is not usable for gqa2**: it calls `attn.q_conv` /
+   `attn.k_conv` directly, bypassing `_forward_cuda`, so on GQA2 it measures
+   only the base query channel (6 of 12 slots). For circuit work hook the real
+   kernel inputs instead.
+6. Codebook concentration is a *pre-existing* drift, not a regression: on the
+   repaired probe `old`'s final checkpoint has q coverage 0.406/0.386/0.337/
+   0.240/0.134/0.236 for layers 06–11. See §44 of `SOFT_HARD_RELAXATION.md`.
+
+## 4. The circuit, written out
+
+The whole DISM layer is small enough to read in full. The authoritative
+implementation is the FP64 oracle
+`dism_v3/python/flash_dism/reference/dism_v3_ref.py::dism_ref` (about 40 lines,
+lines ~30–65). Reproduced here because every probe below is a query against one
+of its tensors:
+
+```
+raw_scores = einsum('bnhc,bmhc->bhnm', q_vec, k_vec)          # [B,H,N,M]
+norm_score = raw_scores - (q_lse or k_lse)                    # direction selects
+hard_score = 0 masked_fill(idx_q != idx_k, -inf)              # discrete gate
+logM       = where(hard, hard_score, norm_score) + rtau
+rows[i]    = logM[i] + softplus(shift_left(rows[i-1]))        # suffix chain
+scores     = causal_mask(rows[1:])
+zmax       = scores.amax(-1).clamp_min(0).detach()
+weight     = exp(scores - zmax)          # <-- "attention map", N x M
+fallback   = exp(-zmax)                  # exact-zero on no match
+s_weight   = einsum('bnhc,bmhc->bhnm', sq_vec, sk_vec)        # signed readout
+numerator  = einsum('bhnm,bmhc->bhnc', weight * s_weight, v)
+output     = numerator / (weight.sum(-1) + fallback)
+```
+
+Key structural facts:
+
+- `idx_q[i] == idx_k[j]` is a **hard discrete gate**. Only positions whose key
+  symbol equals the query symbol can contribute at all.
+- `weight` is the read map. `logM` is accumulated along the diagonal
+  (`softplus(shift_left(...))`), so a pair (i, j) contributes in proportion to
+  the length of the *matching suffix chain ending at (i, j)*, not to a plain
+  dot product. This is the "suffix matching" that `--mode flip` destroys.
+- The readout is **signed** (`sq · sk`, SiLU is not nonnegative) and the
+  denominator excludes `s_weight`, so the output is not a convex combination
+  of `v`. Both signs matter.
+- `zmax.clamp_min(0)` plus `fallback` is what produce the *exact zero* output
+  when a query has no match at all; that "no match → zero, not noise" property
+  is why the far needle can be dropped silently instead of degraded smoothly.
+
+Where the pieces live:
+
+| stage | code |
+|---|---|
+| q/k/sq/sk/v/eq/ek/tau for a layer | `dism_v3/python/flash_dism/module.py::DismAttention._forward_cuda` |
+| GQA2 second query channel + mix | same file, `self.gqa_query_channels == 2` block and `_mix_gqa` |
+| kernel entry points | `flash_dism/voc.py::voc_dism`, `flash_dism/compiler.py::voc_forward` |
+| FP64 oracle with all intermediates | `reference/dism_v3_ref.py::dism_ref` |
+| hard-path summary | `flash_dism/hard_forward.py`, `summary.py`, `include/summary/*.cuh` |
+| branch composition | `flash_dism/hybrid_gdn.py::_combine_cuda` → `voc_dism_out + gdn_raw(...)` |
+| layer loop, `v_first`, eval path | `nanochat/nanochat/models/dism/model.py::DismLM.forward` |
+| value residual | `dism_v3/python/flash_dism/kernels/value_residual.py` (fused) and `value_residual_mix_reference` |
+
+## 5. Probe plan, in priority order
+
+Each probe must be run on **all three** checkpoints with identical inputs, and
+must report per layer 06–11 and per head. `gqa2` has 12 head slots (slot 2h is
+the base channel, 2h+1 the added one); report both and say which.
+
+### P1 — per-layer necessity (cheapest, do first)
+
+`niah.py::patch` currently has `dism_core` which zeroes *every* DISM layer.
+Extend it to zero exactly one layer at a time and sweep L = 6..11, at 8k and 16k
+with depths 0.05/0.95. That gives a per-layer contribution curve.
+
+Discriminator: if `restored` loses the needle because one specific layer stopped
+carrying it, the curve will show a single layer whose removal is much cheaper
+than in `old`. If all layers are uniformly less useful, the cause is upstream of
+the layer (symbols, values, or readout).
+
+### P2 — where the read mass lands
+
+On a single NIAH sequence (the same one for all three models — build it with the
+fixed seed from `niah.py`, or write it out and reuse it), run `dism_ref` per
+layer and extract `weight`, `idx_q`, `idx_k`, `s_weight`. For the query position
+i (the token before the number) look at the row `weight[i, :]`:
+
+- total mass on the needle span vs everywhere else,
+- the rank of the needle position in that row,
+- `idx_q[i]` vs `idx_k[j]` at the needle (does the gate even open?),
+- the sign and magnitude of `s_weight[i, j]` at the needle.
+
+Cost note: `raw_scores` is `[1,H,N,N]` fp32, so N=16384 is ~6.4 GB for 6 heads.
+Run 2048 and 4096 in the fp64 path, and 16384 one head at a time (1 GB), or
+instrument the varlen CUDA kernel to dump only the query row.
+
+This is the single most informative probe: it separates "the gate never opens"
+(symbol problem) from "the gate opens but weight is tiny" (chain/recurrence
+problem) from "weight is fine but `s_weight` cancels" (readout problem).
+
+### P3 — symbol chain alignment
+
+For the needle position j and the query position i, print `idx_q`/`idx_k` per
+layer and head for all three models, plus the resulting match length. The suffix
+chain needs `idx_q[i] == idx_k[j]` **and** a long enough matching run ending
+there. Check whether `restored` fails at the equality, at the run length, or
+neither.
+
+Cheap version: `flash_dism/emb_kernel.py::interp_embeddings` already returns
+`idx_k`/`idx_q` (the module currently discards `top1_q`/`top1_k`); hook it.
+
+### P4 — is the value still there
+
+The readout is `Σ_j weight·(sq·sk)·v_j`. Even with perfect `weight`, `restored`
+differs only if `v_j` no longer encodes the number. Probe: at the needle
+position, train a one-line linear map (or just take the top principal
+directions) from `v_j` to the number's token identity, per layer, and compare
+cross-entropy across the three models. Also compare `sk_j` (the key readout) the
+same way, since `sq·sk` is the actual per-pair gain.
+
+### P5 — does it survive to the residual stream
+
+§30 already measured that flipping all symbols changes the DISM core output by
+53–82% (relative) but the residual stream by only 2–3% per layer, 13% at the
+last layer, and the loss by 0.9% — dense averaging plus RMSNorm/gate/o_proj
+compression. So it is possible that `restored` computes the right needle read
+and then attenuates it. Measure, per DISM layer and per model: `|core output|`,
+`|o_proj output|`, and the cosine between the layer's DISM contribution at the
+query position and the direction that reduces the number's loss.
+
+If P2 and P4 come out equal across models but P5 does not, the fix is in the
+output path, not the matcher.
+
+### P6 — codebook health at the operating point
+
+`nanochat/nanochat/metrics.py::probe_qk_vocab_usage` (now kv-head aware) plus
+`k_max_share` / `coverage_pooled` per layer at the final step for all three
+models. This is descriptive, not causal, but it is cheap and it is the thing
+the `kvg2` arm was designed to move.
+
+## 6. How to run things
+
+```bash
+cd /home/cicuvc/cs/project/dism-core
+export PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat"
+export FLA_FLASH_KDA=0 CUDA_VISIBLE_DEVICES=0
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export DISM_HARD_PLANNER=0          # no planner workers; quadratic fallback
+PY=/home/cicuvc/miniconda3/envs/blkw/bin/python
+```
+
+Existing harnesses to reuse rather than rewrite:
+
+- `dism-runs/dism-fwedu-valres-72m-2500m/diagnostics/niah.py` — needle builder,
+  `--mode {none,dism_core,dism_layer,flip}`, final-norm hook, `--trial-chunk`.
+- `.../diagnostics/run_niah_pair.sh` — paired runner (in the gqa2 run dir).
+- `.../diagnostics/niah_results/*.json` — all stored NIAH numbers.
+- `.../diagnostics/pg19_ablate.py`, `sym_prop.py`, `sym_sens.py`,
+  `soft_hard_diag_reach_layer6.py` — earlier ablation machinery.
+- `dism_v3/tools/probe_old_valres_coverage.py` — codebook coverage probe.
+
+Environment facts that will bite:
+
+- The GPU is **shared with live training** (`kvg2` now, `legacy` queued behind
+  it, each ~18 GB of 32 GB). Check `nvidia-smi` before every run and keep the
+  probe peak under ~10 GB. 16 trials x 16384 in one forward needs >15 GB and
+  will OOM; use `--trial-chunk 4`, which is numerically equivalent (verified:
+  gain ±0.012, present NLL ±0.011).
+- `/` is at 99% (6 GB free) and `~/.triton` is 14 GB. Point
+  `TRITON_CACHE_DIR` / `TORCHINDUCTOR_CACHE_DIR` at `/media/...` for anything
+  that compiles.
+- `nanochat/tests/test_dism_document_ce.py` has 4 pre-existing failures
+  (`InductorError` in a Triton compile subprocess), reproducible at HEAD. The
+  repo baseline is ~56 failures from stale tests.
+
+## 7. Working agreements
+
+- **Astra's sandbox is `workspace-write` on the worktree and `/tmp` only**, so
+  it cannot write into `/media/...` run dirs. Put new probe scripts in
+  `dism_v3/tools/` and outputs in `dism_v3/build/` (gitignored) or `/tmp`.
+- Never write into a checkpoint directory. Never mutate a checkpoint.
+- Keep probes monkeypatched / opt-in. Do not change default training or eval
+  behaviour; `kv_group_size=1` and `legacy_loss_normalization=False` must stay
+  bit-identical.
+- Record findings as a new numbered section appended to
+  `dism_v3/docs/SOFT_HARD_RELAXATION.md` (the running lab notebook, now past
+  §44), with the raw JSON paths next to the numbers.
+- Every claim needs a paired, same-input comparison across the three models.
+  A single-model number is not evidence about the difference.
+
+## 8. What would count as an answer
+
+One of these, with numbers:
+
+1. **Symbol alignment.** At 16k the needle is lost because `idx_q[i] ==
+   idx_k[j]` fails (or the matching run is too short) in `restored` but holds in
+   `old`. Mechanism: codebook drift. Fix direction: the `kvg2` / normalization
+   levers.
+2. **Chain decay.** The gate opens, but `weight[i, needle]` is orders of
+   magnitude smaller because the recurrence (`softplus` accumulation) decays
+   faster. Mechanism: `rtau` and the chain arithmetic. Fix direction:
+   temperature / `log_sel_tau`.
+3. **Readout cancellation.** `weight` and `v` are fine, but `sq · sk` at the
+   needle is near zero or of the wrong sign in `restored`.
+4. **Output attenuation.** The matcher is fine at every layer, but the DISM
+   contribution reaching the residual stream is smaller, or `o_proj` /
+   RMSNorm-gate compresses it.
+5. **Uniform degradation** — no localized culprit, so the deficit is a
+   distributed calibration shift rather than a circuit change. That is also a
+   valid and useful answer, and it would point back at the objective rather
+   than at any specific matcher component.
