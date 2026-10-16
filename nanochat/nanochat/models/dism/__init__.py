@@ -49,6 +49,11 @@ class DismConfig:
     conv_impl: str = "fused"
     conv_backend: str = "cuda"
     gqa_query_channels: int = 1
+    # Opt out of the global count-normalized objective that arrived with
+    # document-balanced training, restoring the older per-microbatch mean
+    # (loss / grad_accum_steps on the model's own token mean). Default off
+    # keeps every existing spec bit-identical.
+    legacy_loss_normalization: bool = False
     # >1 groups the query heads so every kv_group_size of them share one
     # key/value head (classic GQA). Mutually exclusive with gqa_query_channels.
     kv_group_size: int = 1

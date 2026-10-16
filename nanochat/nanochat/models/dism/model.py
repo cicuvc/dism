@@ -89,7 +89,14 @@ class DismLM(nn.Module):
             raise ValueError('loss_balance must be document or token')
         self.document_balanced_loss = config.loss_balance == 'document'
         self.loss_sum_reduction = config.loss_balance + '_sum'
-        self.loss_normalization = 'global_valid_' + config.loss_balance + '_mean_v1'
+        # legacy_loss_normalization restores the pre-document-balancing objective:
+        # each microbatch contributes its own token mean, divided by the
+        # accumulation count, so microbatches are weighted equally instead of
+        # every valid token across the whole step. The training loop keys off
+        # count_normalized_loss to decide whether to build the accumulator.
+        self.count_normalized_loss = not bool(getattr(config, 'legacy_loss_normalization', False))
+        self.loss_normalization = ('legacy_microbatch_mean' if not self.count_normalized_loss
+                                   else 'global_valid_' + config.loss_balance + '_mean_v1')
         self.eval_hard = True
         if not 0. <= config.hard_start_fraction < 1.:
             raise ValueError("hard_start_fraction must be in [0,1)")
