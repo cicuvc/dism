@@ -4031,3 +4031,696 @@ norm × LR 的小规模交互实验（例如 2000–4000 步、LR ∈ {2/3×, 1�
    注意 §44 的第 4 条：k 侧与 q 侧塌得一样重，本设计只保护 q 侧。
 5. **监控口径固化。** 覆盖率只读逐 head 的 `qk/{q,k}_coverage/layerNN`；`coverage_pooled`
    在 `vocab_share_heads=false` 时是把 6 张独立码表取并集，必然虚高，不能用来判断塌缩。
+
+## 47. NIAH circuit：层级依赖重分布与 L10 head 3（2026-10-16）
+
+按 `NIAH_CIRCUIT_PROBE.md` 开始第一轮分析。完成 P1（单层必要性）、P2/P3
+（真实内核输入的查询行和符号链），并针对 L8/L10 补做逐 slot 消融。
+没有修改生产 forward、kernel、checkpoint 或训练进程。代码基线 `4259eb6`；
+每份实验 JSON 记录实际探针源码 SHA256，新增脚本当时尚未提交。
+
+### 47.1 输入、指标和 hook 的实际口径
+
+- 三臂均读取各自 step 19074 的 `model_spec`，保留 old 的 fused conv 和另两臂的
+  linear_fla。固定 hard、direction=true，保留 value residual 和完整 GDN 分支。
+- 原 `niah.py` **只在背景插入数字尾部，不插入完整提示句**。实际 tokenizer 将尾部
+  编为「空白 token + 五个数字 + 句号」共 7 tokens；答案预算 6，因而评分包含空白和
+  五个数字，末尾句号被截掉。查询与答案之间没有 EOS 填充。P1 保留这个任务定义，
+  P2/P3 的表格只聚合五个数字预测，排除空白目标；原始 JSON 包含全部六个查询行。
+- 原 harness 的 present/absent 连续消耗 RNG，不是严格成对背景。此次新建固定 suite：
+  每个 `(seed=1234, context, depth)` 独立确定随机序列，present/absent 只在 needle span
+  不同；各臂、各消融完全复用同一 token 序列。每格 16 trials；8k/16k × depth .05/.95。
+  **这是新样本集，不能与历史表格逐格相减。** 全部 64 对输入已检查长度、目标及差异范围。
+- P1 在 `_combine_cuda` 输入处置零 DISM core，原样转发 `conv_seq_idx` 等参数，保留
+  GDN 和共同的 norm/gate/o_proj。逐头干预在 `compiler.voc_forward` 输出处、GQA mix
+  之前置零一个 slot；slot `2h` 是 base，`2h+1` 是新增 query。所有 hook 均核验调用次数。
+- 固定 true 分支实际走 `compiler.voc_forward → emb_fwd_true`，不是普通
+  `flash_dism.voc_dism → interp_embeddings`。P2/P3 截取真实 `iq/ik/sq/sk/v/tau`，
+  以及 mix 前的 core 输出，不重新执行 q_conv/k_conv 来近似输入。
+- 每格保存逐 trial、逐 token NLL/hit。置信区间为 **paired trial bootstrap，10000 次，
+  seed 1729，pointwise 95%**；没有做多重比较校正，属于探索性定位。单头效应不能相加。
+
+### 47.2 P1：主要依赖层不是统一衰弱
+
+下面每个三元组为 `present NLL / absent NLL / present token accuracy`；最后一项为百分比。
+原始：`dism_v3/build/niah_circuit_p1_20261016/{old,restored,gqa2}.json`；
+配对区间：同目录 `summary.json`；固定输入：同目录 `inputs.json`。
+
+| ctx / depth | old | restored | gqa2 |
+|---|---|---|---|
+| 8192 / .05 | 2.5061 / 3.0810 / 13.54 | 2.8353 / 3.3730 / 16.67 | 2.4309 / 3.2116 / 32.29 |
+| 8192 / .95 | 1.3663 / 3.0376 / 65.63 | 1.4454 / 3.4690 / 62.50 | 1.7074 / 3.3036 / 57.29 |
+| 16384 / .05 | 2.6977 / 3.0968 / 12.50 | 3.0416 / 3.4710 / 12.50 | 2.6395 / 3.2784 / 16.67 |
+| 16384 / .95 | 2.0163 / 3.0543 / 37.50 | 2.1162 / 3.4706 / 38.54 | 2.3566 / 3.1696 / 26.04 |
+
+16k 远端 restored−old present NLL = **+0.3439 [0.2217, 0.4714]**；
+gqa2−old = **−0.0582 [−0.2728, 0.1543]**。因此复现了 restored 的远端劣势，
+但本 suite 没有确立远端 old/gqa2 排序，也没有证明历史三个 depth 平均的完整排序。
+不能把 across-arm `absent−present` 当成同一量尺。
+
+移除对应层 DISM core 后的 **present NLL 增量**（16k / depth .05）：
+
+| 模型 | L6 | L7 | L8 | L9 | L10 | L11 |
+|---|---:|---:|---:|---:|---:|---:|
+| old | −0.0061 | +0.0104 | −0.0322 | −0.0068 | **+0.3127** | +0.0970 |
+| restored | +0.0020 | +0.0491 | **+0.2038** | −0.0035 | **+0.1813** | +0.0949 |
+| gqa2 | +0.0427 | +0.2306 | **+0.5395** | +0.0152 | +0.0783 | +0.0172 |
+
+restored−old 的消融增量差：L10 = **−0.1315 [−0.2490, −0.0224]**，
+L8 = **+0.2359 [0.1120, 0.3657]**。8k 远端同样呈 L8 从 old 的 −0.0561
+变为 restored 的 +0.3142、gqa2 的 +0.6553。支持**依赖层重分布**，不支持
+「所有层均匀变弱」；L10 的必要性降低也不能单独解释全部性能差距。
+
+完整四格图：`dism_v3/build/niah_circuit_p1_20261016/layer_necessity.png`。
+
+### 47.3 P2/P3：old L10 head 3 的读路径，在 restored 同索引头不再出现
+
+全 hard 下，长度为 `l` 的匹配后缀有 `exp(score)=sum(exp(k*tau), k=1..l)`。
+因此仅沿请求行的匹配对角线计数，即可用 O(N) 存储重建归一化读权重，包含 fallback；
+再乘真实 `sq·sk` 和 `v` 得到各 key 对 core 的向量贡献。没有分配 N×N 矩阵。
+各 target 的 query 位置均为其前一 token，不能把六个预测视为同一个 query。
+
+以下为 **16k / .05、16 trials × 五个数字 = 80 个 digit queries** 的均值。
+「源数字」指 needle 中与当前目标同一 offset 的数字位置，不假设它是唯一有效 key；
+另报整个七 token needle span 的 mass。chain 长度在 gate 关闭时计零。
+
+| 模型 / 层 / slot | τ | 源数字 gate 开启率 | 源数字 chain | 源数字归一化 mass | 全 needle mass |
+|---|---:|---:|---:|---:|---:|
+| old L10 h0 | 1.39210 | 73.75% | 1.5375 | 0.13674 | 0.23047 |
+| old L10 h3 | 1.16930 | **87.50%** | **2.2875** | **0.06506** | 0.07062 |
+| restored L10 h0 | 1.60855 | **85.00%** | **2.1750** | **0.21099** | 0.31556 |
+| restored L10 h3 | ≈0.00042 | **6.25%** | **0.0750** | ≈0.0002 | ≈0.0005 |
+| restored L8 h5 | 2.94709 | 48.75% | 0.9375 | 0.10925 | 0.11386 |
+| gqa2 L8 slot1 = h0/新增 | 1.36193 | 92.50% | 2.4250 | 0.20157 | 0.26665 |
+| gqa2 L8 slot5 = h2/新增 | 1.42110 | 86.25% | 2.3625 | 0.04006 | 0.04145 |
+
+old L10 h3 在源数字位置的 signed readout 平均 **+0.67637**，负值比例 **3.75%**；
+restored 同索引头平均 **−0.04556**。但 gate、chain、τ、readout 同时变化，
+不能据此单独归因于 readout cancellation 或仅归因于 τ。
+
+逐头消融进一步给出 16k 远端 **present NLL 增量 [95% CI]**：
+
+| 模型 / 层 / slot | Δ present NLL |
+|---|---:|
+| old L10 h0 | +0.0878 [0.0316, 0.1429] |
+| **old L10 h3** | **+0.2458 [0.1599, 0.3323]** |
+| restored L10 h0 | +0.2119 [0.1294, 0.3222] |
+| restored L10 h3 | −0.0312 [−0.0430, −0.0203] |
+| restored L8 h5 | +0.1396 [0.0241, 0.2598] |
+| gqa2 L8 slot5 = h2/新增 | +0.3859 [0.2210, 0.5578] |
+
+8k 远端 old L10 h3 同样必要：**+0.2260 [0.1207, 0.3357]**。
+这建立了一个具体的工作假说：**old 在 L10 h3 用符号后缀匹配读取针中的数字，
+其 core 对答案有实测贡献；restored 同索引头的匹配、链增强及读出特征没有保留，
+但 L10 h0 和 L8 h5 仍承担读取。** 这比「restored 完全丢失针」更符合观测。
+不同训练模型的相同 head 索引不是已经证明的语义对应，故不能把这一观察当成
+训练过程中的同一 circuit 消亡证据，也不能把整头消融等同于仅移除针贡献。
+
+gqa2 的额外 query 通道确实承载有用读取，而不是只扩大无效 slot 数量。
+注意以上 mass 与 core norm 都是 **mix 前**；例如 L8 slot1 和 slot5 的 learned mix
+分别为 **0.00749535** 和 **0.31577924**。不能仅按 pre-mix mass/norm 排序最终贡献，
+也不能把不同模型不同 head 的向量范数直接当成质量指标。
+
+原始查询行（所有 L6–11、全部 head/slot、全部目标位置）：
+
+- `dism_v3/build/niah_circuit_p23_20261016/{old,restored,gqa2}.json`：trials 0–3。
+- `dism_v3/build/niah_circuit_p23_remaining_20261016/{old,restored,gqa2}.json`：trials 4–15。
+- 聚合：`dism_v3/build/niah_circuit_p23_summary_20261016.json`。
+- 逐头消融：`dism_v3/build/niah_circuit_heads_20261016/{old,restored,gqa2}.json`，
+  包含 8k/16k 远端 L8/L10 所有 slot 的逐 trial present 分数和 paired CI。
+- GQA mixing 权重：`dism_v3/build/niah_circuit_gqa_mix_20261016.json`。
+
+### 47.4 验证、资源与可复现入口
+
+- P2/P3 的 baseline NLL 与 P1 固定输入的结果 **全部相等（最大漂移 0）**。
+  查询行 CPU FP64 重建与实际 BF16 core 输出的 relative L2（median / p95 / max）：
+  old **0.153% / 0.284% / 0.894%**，restored **0.155% / 0.274% / 0.766%**，
+  gqa2 **0.151% / 0.281% / 1.319%**。保留这一数值限制，不称逐位重建。
+- CPU 回归测试覆盖：单层消融保留 GDN/kwargs 且异常时恢复；单 slot 干预不影响其他
+  层或 slot、不修改原输出；低内存查询行与完整 FP64 oracle 对照（长匹配、无匹配、
+  τ=0/近零/正/负）。三项通过。没有修改 CUDA kernel；本轮未运行 sanitizer。
+- P1 最大 allocated 显存 old/restored/gqa2 = **1.44 / 1.48 / 2.54 GiB**，chunk=1；
+  运行前检查共享 RTX 5090 余量，allocator 上限 30%。所有 probe 完成时检查 buffers
+  未变。缓存放外盘 `cicuvc/eval-cache/niah-{triton,inductor}`，结果在 gitignored build。
+- 探针入口：`tools/niah_circuit_probe.py`、`tools/niah_read_rows.py`、
+  `tools/niah_head_ablation.py`；汇总入口 `tools/summarize_niah_circuit.py`、
+  `tools/summarize_niah_rows.py`。路径相对 `dism_v3/`。输出目录必须新建，避免覆盖结果。
+
+```bash
+# 在工作树根目录；PYTHONPATH 只指向本树
+export PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat"
+export FLA_FLASH_KDA=0 DISM_HARD_PLANNER=0 CUDA_VISIBLE_DEVICES=0
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+# TRITON_CACHE_DIR / TORCHINDUCTOR_CACHE_DIR 指向外盘可写缓存目录
+PY=/home/cicuvc/miniconda3/envs/blkw/bin/python
+$PY dism_v3/tools/niah_circuit_probe.py --out dism_v3/build/NEW_p1
+$PY dism_v3/tools/niah_read_rows.py \
+  --inputs dism_v3/build/NEW_p1/inputs.json --out dism_v3/build/NEW_rows --trials 16
+$PY dism_v3/tools/niah_head_ablation.py \
+  --p1 dism_v3/build/NEW_p1 --out dism_v3/build/NEW_heads
+$PY dism_v3/tools/summarize_niah_circuit.py dism_v3/build/NEW_p1
+$PY dism_v3/tools/summarize_niah_rows.py --p1 dism_v3/build/NEW_p1 \
+  --directories dism_v3/build/NEW_rows --out dism_v3/build/NEW_rows/summary.json
+$PY dism_v3/tests/test_niah_circuit_probe.py
+```
+
+**尚未解决：** 尚无跨模型 circuit rescue，未分离 symbol、τ、readout 的独立因果效应；
+P4 的 value 可解码性和 P5 的 residual/loss 方向尚未测。下一步优先对已定位的
+old L10 h3 / restored L10 h0、L8 h5 做针贡献定向干预，再决定是否训练 value probe。
+old/restored 同时有 conv frontend 与目标函数差异，不能把 circuit 差异直接归因于
+loss normalization；还需完成后的 legacy/kvg2 对照。本轮没有重做全层 zero/flip/norec
+等已确立实验，也没有将仅四格的结果推广为全部 NIAH 条件结论。
+
+### 47.5 逐头 absent 对照：L10 h3 的差异不只是一般数字预测
+
+对 16k/.05 的 L8/L10 slots `{0,1,3,5,9}`（超出该模型 slot 数的跳过）补做
+相同 16 trials 的 absent 干预。每个模型先复算一个 baseline，均与 P1 相等；
+所有模型 buffers 检查通过。原始：
+`dism_v3/build/niah_circuit_heads_absent_20261016/{old,restored,gqa2}.json`；
+汇总：`dism_v3/build/niah_circuit_head_contrasts_20261016.json`。
+
+这里比较**同一模型内** `Δpresent − Δabsent` 的 paired 干预交互，
+不是把不同模型的 baseline `absent−present` 当成可比较的 recall 分数。
+
+| 模型 / 层 / slot | Δpresent | Δabsent | 差值及 paired 95% CI |
+|---|---:|---:|---:|
+| old L10 h0 | +0.0878 | +0.0483 | +0.0395 [−0.0074, 0.0823] |
+| **old L10 h3** | **+0.2458** | **+0.0134** | **+0.2324 [0.1534, 0.3104]** |
+| restored L10 h0 | +0.2119 | +0.0713 | +0.1406 [0.0516, 0.2258] |
+| restored L10 h3 | −0.0312 | −0.0292 | −0.0020 [−0.0110, 0.0055] |
+| restored L8 h5 | +0.1396 | −0.0680 | +0.2076 [0.0906, 0.3296] |
+| gqa2 L8 slot1（新增） | +0.1402 | −0.0205 | +0.1606 [0.1046, 0.2219] |
+| gqa2 L8 slot5（新增） | +0.3859 | −0.0322 | +0.4182 [0.2487, 0.5940] |
+
+因此 old L10 h3 的必要性确实主要出现在针存在时；restored 同索引头的微小负效应
+在 present/absent 都出现，不能描述为「有害的针读取」。这与 §47.3 中其源数字 gate、
+chain 和 mass 都低的观测一致。restored 的 L10 h0、L8 h5 和 gqa2 新增查询通道仍有
+明显的针条件效应。当前结果支持**读取路径重分布，old 的一条有用 L10 h3 路径在
+restored 同索引头缺失**；尚未证明这是 restored 总体 NLL 劣势的充分原因。
+
+复现该补充对照：
+
+```bash
+$PY dism_v3/tools/niah_head_ablation.py --p1 dism_v3/build/NEW_p1 \
+  --out dism_v3/build/NEW_heads_absent --condition absent \
+  --contexts 16384 --slots 0 1 3 5 9
+```
+
+## 48. old L10h3 的局部符号流：错一 token 的后缀续写（2026-10-16）
+
+按用户要求直接查看 old，不做新的跨模型比较。复用 §47 的 16k/.05 trials 0–3，
+hook 实际 `emb_fwd_true` 的 q/k labels，保存针前后及查询附近的逐 token 窗口。
+脚本 `tools/niah_symbol_windows.py`；原始数据
+`dism_v3/build/niah_symbol_windows_old_l10h3_20261016.json`。
+四条样本的 NLL、各源数字 chain 和归一化 mass 均与已存 P2/P3 相等；buffers 未变。
+
+trial 0 的针是 `88897`。`▁` 为独立空白 token，`↵` 表示换行。
+下面所有数字都是该 head 的离散码表 ID，不是词表 token ID。
+
+```text
+位置        817  818  819  820  821  822  823  824  825
+token        ↵    ▁    8    8    8    9    7    .  with
+q           241  353   82  422  422  422  390  101  130
+k           423  241  353   82  422  422  422  390  101
+
+位置      16373 16374 16375 16376 16377 16378 16379 16380 16381 16382 16383
+token       The special magic number    is     ▁     8     8     8     9     7
+q           469   239   184    69   106   353    82   422   422   422   422
+k           455   469   239   184   196   106   353    82   422   422   422
+```
+
+局部可见 `k[j] ≈ q[j−1]`，尤其整个针的空白至句号区间严格成立。
+这不是同位置 q=k，而是 key 更像对前一个 token 的状态作索引。预测下一位时：
+
+```text
+目标数字                 8    8    8    9    7
+查询前一 token 的 q     353   82  422  422  422
+针内目标位置的 k        353   82  422  422  422
+匹配后缀长度              1    2    3    4    5
+目标源位置归一化 mass  0.39% 3.52% 6.32% 13.74% 33.00%
+```
+
+这是 **teacher-forced** 评估：后续查询已经看到真实数字前缀，不是模型自由生成了
+`88897` 的证据。预测最前面的空白时，该 head 在整个 needle span 上 mass=0；
+预测首位数字的 mass 也很小，随着正确前缀增长才强化。故此例更接近**前缀匹配后续写**，
+不应解释为仅凭 `The special magic number is` 就精确取出整个五位数。
+
+符号不是数字的一一编码：trial 0 `88897` 与 trial 2 `95257` 在针内五个数字的
+k 流均为 `[353,82,422,422,422]`，查询数字预测 q 流也相同。
+它提供的是有碰撞的粗粒度路由/后缀特征；具体数字内容需要从 value/readout 通路读出，
+仅凭此观察不能确定完整 value 解码机制。
+
+也存在断链：trial 3 `96277` 预测第二位 `6` 时，查询 q=82，源数字 k=390，
+该位置 mass=0，后缀长度为 0。五位数字对应 chain 为 `[1,0,1,2,3]`，
+最后一位源数字 mass 仅 4.27%。因此上面的连续增长是一个实测例子，不是所有针均成立。
+
+## 49. 三 checkpoint 的有害匹配筛查：短链背景竞争（2026-10-16）
+
+### 49.1 范围与干预定义
+
+复用 §47 同一输入 hash 的 **16k、depth=.05、16 trials**，只评估五位数字的
+teacher-forced token NLL。统计覆盖 L6–L11 全部 query slots；因果干预限定为此前
+逐头实验定位出的六条路径：old L10 h0/h3、restored L8 h5/L10 h0、gqa2 L8
+slot1/slot5。GQA 的两个 slot 都是新增 query 通道，在 mix 之前干预。
+这不是全部 heads 的因果穷举，也不是对齐同索引头的跨模型语义比较。
+
+每次只改一个 head 的一个 query 输出，随后重算下游，仅计该 query 对应数字的
+NLL。五个数字先在 trial 内平均，再对 16 trials 做 paired bootstrap（10,000 次）；
+CI 为 pointwise 95%，未做多重比较校正。后 8 trials 另报一致性检查，但这些输入
+此前已用于 §47，不称为全新盲测。不同位置、不同 heads 的收益不能直接相加，也
+不能作为整模型同时启用规则后的生成成绩。
+
+设 needle 完整七 token span 为 S。候选背景 D 排除针及前后各 32 tokens，也排除
+query 最近 256 tokens。背景只是候选干扰，不能先验断言其没有来源信息。
+实际离散标签从 `emb_fwd_true` 捕获，权重为
+`w(l)=sum(exp(k*tau), k=1..l)`，`a_j=w_j/(1+sum(w))`，单位 fallback 保留。
+定义 `u_j=(sq_i·sk_j)v_j`、`o=sum(a_j*u_j)`、`A_D=sum_D(a_j)`、
+`U_D=sum_D(a_j*u_j)`，比较：
+
+| 干预 | 理想输出 | 含义 |
+|---|---|---|
+| content | `o-U_D` | 只去掉候选背景的内容贡献 |
+| denominator | `o/(1-A_D)` | 只去掉其分母贡献，所有内容仍保留 |
+| full | `(o-U_D)/(1-A_D)` | 同时删除内容与分母贡献 |
+| half | `(o-.5*U_D)/(1-.5*A_D)` | 背景权重减半，检查较小剂量 |
+| source | 删除 S 后重新归一化 | 正确来源必要性对照 |
+| random0/1 | 随机删边并重新归一化 | 每个 log2 距离 bin 删除相同质量 |
+
+随机对照使用两个固定种子，允许末条边被部分删除；匹配的是质量和距离 bin，
+没有同时匹配边数、链长。其采样池包含针，因此可能删掉有效来源。
+实际实现用稳定 log 权重重算 retained 分布，避免 `1-A_D` 消减和旧分布下溢。
+FP64 计算输出差量，叠加在真实 CUDA BF16 core 输出上，保留 baseline 数值残差；
+sham 是严格零差量。这里的指标统一为 **收益 B=baseline NLL−干预 NLL，正数为改善**，
+与 §47 ablation 的 ΔNLL 符号相反。
+
+### 49.2 六条路径均存在可干预的背景竞争
+
+| 模型 / 路径 | 针质量 | 候选背景质量 | full 收益 [95% CI] | 相对随机删除的额外收益 [95% CI] | source 删除收益 |
+|---|---:|---:|---:|---:|---:|
+| old L10 h0 | 23.05% | 70.74% | +0.168 [0.106, 0.231] | +0.115 [0.059, 0.171] | −0.099 |
+| **old L10 h3** | **7.06%** | **90.54%** | **+0.751 [0.578, 0.925]** | **+0.776 [0.583, 0.972]** | **−0.268** |
+| restored L8 h5 | 11.39% | 83.85% | +0.246 [0.180, 0.316] | +0.172 [0.108, 0.241] | −0.156 |
+| restored L10 h0 | 31.56% | 63.77% | +0.253 [0.178, 0.334] | +0.197 [0.128, 0.278] | −0.181 |
+| gqa2 L8 slot1 | 26.66% | 70.42% | +0.160 [0.121, 0.206] | +0.137 [0.089, 0.190] | −0.152 |
+| **gqa2 L8 slot5** | **4.14%** | **93.76%** | **+0.765 [0.605, 0.914]** | **+1.094 [0.854, 1.311]** | **−0.461** |
+
+六条路径的 source 删除均有负收益，CI 全在零以下；full、half 和 full−random
+均为正，CI 全在零以上。后 8 trials 的 full 和 full−random CI 仍全部大于零。
+old L10 h3 / gqa2 slot5 的 full 数字准确率分别提高 38.75 / 33.75 个百分点；
+这仍是逐位置单独干预下的 teacher-forced 准确率，不是五位数自由生成 exact match。
+
+分解显示不同路径的失效方式并不一致：
+
+| 路径 | content 收益 | denominator 收益 | half 收益 |
+|---|---:|---:|---:|
+| old L10 h0 | +0.039 | −0.051 | +0.025 |
+| old L10 h3 | −0.030 | +0.452 | +0.120 |
+| restored L8 h5 | +0.008 | +0.067 | +0.043 |
+| restored L10 h0 | +0.029 | +0.052 | +0.055 |
+| gqa2 L8 slot1 | −0.005 | +0.093 | +0.035 |
+| gqa2 L8 slot5 | −0.001 | +0.429 | +0.167 |
+
+old L10 h3 的 content 删除反而小幅恶化（CI [−0.056,−0.008]），而 denominator
+收益 CI [0.334,0.568]；gqa2 slot5 的 content CI 跨零，denominator CI [0.284,0.578]。
+支持**背景匹配占据分母、稀释有效读取**这一机制，但 denominator 同时是输出增益
+干预，不能单独证明码本训练时发生了有害合并。下游非线性使 content 与 denominator
+的 NLL 收益不可相加。restored L8 h5 的 denominator CI 跨零，不能将该分解结论
+泛化到所有路径。某些 query 的全删放大很大（restored L8 h5 最大约 1.41e5）；
+half 的一致正收益提供较小剂量证据，但全删仍应视作使用来源标注的诊断。
+
+### 49.3 长链有区分力，短链总质量仍占优
+
+old L10 h3 的候选背景质量中 **96.73% 来自长度 1–2 的链**；gqa2 slot5 为
+91.84%。其余四条分别为 old h0 82.74%、restored h5 86.86%、restored h0 88.79%、
+gqa2 slot1 76.51%。以下为 16×5 个 queries 的 pooled 生存计数（S / D）：
+
+| 路径 | L≥1 | L≥2 | L≥3 | L≥4 | L≥5 |
+|---|---:|---:|---:|---:|---:|
+| old L10 h3 | 161 / 21190 | 69 / 1369 | 35 / 72 | 20 / 3 | 10 / 0 |
+| gqa2 L8 slot5 | 166 / 81166 | 72 / 5537 | 37 / 346 | 22 / 14 | 11 / 1 |
+
+因此不能只用“长链仍无法区分来源”解释：这两条路径长链相当有选择性，但短链
+数量巨大，在归一化分母中仍占优势。码本频率统计仅作背景，不作有害性的判据：
+old h3 的 K entropy-effective codes=42.91、最高频占比 6.33%；gqa2 slot5 为
+16.66、10.45%。本轮只统计这一 NIAH 子集，不能替代大验证集的长尾利用率评估；
+GQA 共享 K 的重复 slots 也不能当成独立码本合并统计。
+
+### 49.4 后 8 trials 的短链过滤补测
+
+主实验后固定阈值 3，未搜索其他阈值，复用 trials 8–15。`short_candidate` 只删除
+D 中链长 1–2 的边，仍用针位置保护来源；`min_chain3` 删除所有链长 1–2 的边，
+包括针和局部上下文，因此该规则本身不读取来源位置。仍然一次只干预一个 query。
+
+| 路径 | 保护来源、删背景短链的收益 [95% CI] | 不看来源、要求 L≥3 的收益 [95% CI] |
+|---|---:|---:|
+| old L10 h0 | +0.125 [0.028, 0.249] | −0.025 [−0.068, 0.017] |
+| **old L10 h3** | **+0.681 [0.388, 0.974]** | **+0.432 [0.097, 0.735]** |
+| restored L8 h5 | +0.218 [0.135, 0.296] | −0.030 [−0.081, 0.019] |
+| restored L10 h0 | +0.219 [0.129, 0.324] | +0.002 [−0.047, 0.049] |
+| gqa2 L8 slot1 | +0.091 [0.047, 0.139] | +0.053 [0.018, 0.090] |
+| **gqa2 L8 slot5** | **+0.478 [0.273, 0.656]** | **+0.290 [0.135, 0.424]** |
+
+old h3 的 L≥3 收益主要来自第 3/4/5 位（+0.698/+1.185/+0.469），第 2 位反而
+−0.221；gqa2 slot5 第 3/4 位 +1.024/+0.463，第 2 位 −0.092。这符合早期正确
+来源也只有短链的情况，不能统一把短链当错误。即使同一 head，也应区分查询阶段。
+三条路径 L≥3 的 NLL CI 为正，其余三条跨零；不支持所有头统一设硬阈值。
+
+**当前结论：** 三个 checkpoint 均能筛到“正确来源有用，但背景匹配竞争压低读取”
+的路径，最强候选为 old L10 h3 和 gqa2 L8 slot5。它不是 restored 特有现象，
+也尚未解释模型总体性能排序。短链背景质量与删边收益，比 coverage 更直接地反映
+该问题；保留这些指标和 source 必要性、随机删边对照联合判断。
+下一步可检验按 head/query 状态调节短链权重，在新输入、其他长度/深度及自由生成
+上同时启用干预。要把原因进一步归于**码本有害合并**，仍需保持其他条件的符号
+拆分/重路由 rescue；当前实验未拆分码本，也未证明用户提出的 q/k 训练正反馈。
+
+### 49.5 实现、产物与验证
+
+新增 `tools/niah_merge_screen.py`、`tools/niah_short_chain_screen.py`、
+`tools/summarize_niah_merge.py` 和 CPU 测试 `tests/test_niah_merge_screen.py`。
+这些都是 opt-in 诊断，未修改模型、训练配置、kernel 或 checkpoint。
+
+原始输出均在忽略目录：
+
+- 主实验 trial 0：`build/niah_merge_smoke_20261016/{old,restored,gqa2}.json`。
+- 主实验 trials 1–15：`build/niah_merge_screen_20261016/{old,restored,gqa2}.json`。
+- 主汇总：`build/niah_merge_summary_20261016.json`；图：`build/niah_merge_effects_20261016.png`。
+- 短链补测：`build/niah_short_chain_20261016/{old,restored,gqa2}.json`，附 wrapper hash manifest。
+- 补测汇总：`build/niah_short_chain_summary_20261016.json`。
+
+所有 baseline 与 §47 六 token NLL 逐项完全一致；所有 sham 完全一致；每次干预
+前的实际 core row 与捕获值完全一致；所有模型 buffers 保持不变，零非有限干预。
+FP64 重建相对真实 BF16 core 的最大相对 L2 残差 old/restored/gqa2 分别
+0.00894/0.00608/0.01052（覆盖全部统计行），没有将重建值替换成 CUDA baseline。
+随机对照的各行删除质量误差最大 1.13e−14。四项独立 CPU 测试通过：直接几何和、
+下溢后 survivor/fallback、逐距离 bin 等质量随机删除、带/不带来源保护的短链过滤。
+本轮无 kernel 改动，未运行 CUDA sanitizer。主实验进程峰值 allocated
+1.43/1.46/2.53 GiB，在共享 GPU 上顺序执行，未启动或重启训练。
+
+复现（沿用 §47 的 `$PY`、缓存环境和 `NEW_p1`；输出目录必须尚不存在）：
+
+```bash
+$PY dism_v3/tools/niah_merge_screen.py --p1 dism_v3/build/NEW_p1 \
+  --out dism_v3/build/NEW_merge --trials 16
+$PY dism_v3/tools/summarize_niah_merge.py \
+  --directories dism_v3/build/NEW_merge --out dism_v3/build/NEW_merge_summary.json
+$PY dism_v3/tools/niah_short_chain_screen.py --p1 dism_v3/build/NEW_p1 \
+  --out dism_v3/build/NEW_short --start-trial 8 --trials 8 \
+  --modes sham short_candidate min_chain3
+$PY dism_v3/tools/summarize_niah_merge.py \
+  --directories dism_v3/build/NEW_short --out dism_v3/build/NEW_short_summary.json \
+  --expected-trials 8 9 10 11 12 13 14 15
+$PY dism_v3/tests/test_niah_merge_screen.py
+```
+
+汇总可额外传 `--row-summary` 指向同 suite 的 P2/P3 汇总，以计算使用实际 τ 的
+短链质量占比；不传时仍汇总实际干预、mass、生存计数与码本频率。
+
+## 50. 按上下文长度缩放 τ：质量试验与 SAM 复杂度边界（2026-10-16）
+
+### 50.1 方案与实验范围
+
+按用户建议测试长度补偿。这里 τ 是 `softplus(log_sel_tau)` 后的正值，增大它
+提高长链相对短链的权重；不直接缩放未经 softplus 的参数。
+`W_tau(l)=sum(exp(r*tau), r=1..l)`。若一条有效链长为 ls、M 条背景链长约为 lb，
+末项主导时背景/来源比约为 `M*exp(-tau*(ls-lb))`；M 随 N 线性增长且链长差固定
+时，加法 `delta_tau≈log(N/N0)/(ls-lb)` 可以补偿。这是近似动机，不是已验证的
+entropy invariance，也无法区分同链长的有害碰撞。
+
+新增 `tools/niah_tau_scaling.py`，使用本地 tokenizer/PG19，**新 seed=20261017，
+每格 8 trials**，长度 2048/8192/16384、深度 .05/.95，三个既有 checkpoint。
+每格 present/absent 配对，三个模型共用同一输入；本轮输入不是 §47–49 的旧样本。
+固定 N0=2048，比较四种规则：
+
+| 规则 | 实际 τ | 2k / 8k / 16k 系数或增量 |
+|---|---|---|
+| log_mul | `tau * max(1, log(N)/log(2048))` | ×1 / ×1.1818 / ×1.2727 |
+| log_add | `tau + .5*max(0, log(N/2048))` | +0 / +0.6931 / +1.0397 |
+| fixed_mul | `tau * log(16384)/log(2048)` | 始终 ×1.2727 |
+| fixed_add | `tau + .5*log(8)` | 始终 +1.0397 |
+
+每种规则分别作用于全部 L6–L11 slots（all），或 §49 每模型的两个已定位 slots
+（selected）；加 baseline 共 9 cases。等价配置只运行一次并记录 `equivalent_to`：
+2k 两个 log 规则等于 baseline；16k 每个 log 规则与对应 fixed 规则相等。
+
+**整段冻结 τ**：N 是本次请求已知的上下文预算，所有位置使用同一组每头 τ，
+通过临时 `compiler.voc_forward` wrapper 注入。全部位置和下游层真正重算，
+不是 §49 的单 query 输出差量。因此会包含后续层符号变化和多位置相互作用。
+这是兼容当前固定 τ 算法的质量实验，没有实现逐 query τ，也没有调用 SAM 做
+性能测试。指标为五位数字平均 `baseline NLL−modified NLL`，正数改善；先在
+trial 内平均，再做 10,000 次 paired bootstrap，pointwise 95% CI。另保存包含
+前导空白的六 token NLL、准确率、逐数字收益和 present−absent 干预交互。
+
+### 50.2 结果：锐化有收益，尚未证明长度依赖的必要性
+
+16k/.05 全头干预：
+
+| checkpoint | baseline 数字 NLL | log_mul 收益 [95% CI] | log_add 收益 [95% CI] | log_add absent 收益 |
+|---|---:|---:|---:|---:|
+| old | 2.764 | +0.105 [0.059, 0.149] | **+0.337 [0.213, 0.455]** | +0.016 |
+| restored | 3.065 | +0.162 [0.027, 0.306] | **+0.421 [0.177, 0.672]** | −0.026 |
+| gqa2 | 2.786 | +0.317 [0.135, 0.546] | **+0.460 [0.209, 0.738]** | −0.055 |
+
+log_add 的 present−absent 交互分别 +0.322 [0.197,0.431]、+0.447 [0.210,0.695]、
++0.516 [0.264,0.791]；改善与针存在有关，不能简单解释为普遍提高数字预测概率。
+16k/.95 的 all log_add 收益也都为正：old +0.334 [0.211,0.453]，restored
++0.270 [0.113,0.428]，gqa2 +0.304 [0.117,0.494]。
+
+但固定增大 τ 是关键对照。远针 .05 全头结果：
+
+| checkpoint | 2k fixed_add 收益 | 8k log_add 收益 | 8k fixed_add 收益 | 16k 二者共同收益 |
+|---|---:|---:|---:|---:|
+| old | +0.294 | +0.203 | +0.287 | +0.337 |
+| restored | +0.334 | +0.450 | +0.543 | +0.421 |
+| gqa2 | +0.354 | +0.223 | +0.301 | +0.460 |
+
+2k 远针 fixed_add 的三个 CI 都大于零。8k 远针上，fixed_add 超过 log_add
+的收益分别为 +0.084 [0.067,0.101]、+0.093 [0.039,0.151]、+0.078 [0.037,0.139]。
+因此当前实验更直接支持**这些 checkpoint 在此 NIAH 条件下受益于增大 τ**，
+尚不能支持“必须采用 log(N) 规则”或“已保持 entropy 不变”。系数 .5 未搜索，
+乘法和加法的剂量也不等价，不能把加法较好解释为其函数形式已胜出。
+
+局部路径与全模型结果不同：16k/.05 selected log_add 的 old/restored/gqa2 收益
+分别 +0.265 [0.170,0.348]、+0.041 [−0.088,0.179]、+0.459 [0.230,0.715]。
+restored 的全头收益明显，但仅改两个已定位头不能确认有效；16k/.95 selected
+收益 −0.051，CI [−0.347,0.130]。不能把全头改善都归因于 §49 的六条路径。
+
+16k 远针 all log_add 的第 1 位收益 old/restored/gqa2 分别 +0.002/+0.014/−0.016，
+主要改善仍发生在后续数字，符合正确前缀使有效链增长的情况。尚未测自由生成、
+普通语言建模 perplexity、其他任务或更长上下文；本轮不证明修复了码本合并。
+
+### 50.3 固定 τ 与逐 query τ 对算法的影响
+
+根据当前 `README.md` 的精确界限及 `inference/csrc` 实现：
+
+1. **每个请求固定一组缩放后的 τ：保留现有算法结构。** SAM topology 及
+   prefill 的事件分解不因 τ 数值改变；改变的是事件系数。固定 head/readout/value
+   维数时，prefill 仍为 `O(N log N)`。decode 从 prime 开始使用同一组 τ，
+   普通步与重建的原有复杂度不变。可按 prompt 长度或声明的上下文预算选 τ，
+   之后冻结；若后来延长请求，它就不再是按实时长度精确更新的规则。
+2. **每个 query 使用 tau_i=f(i)：当前缓存不能直接支持。**
+   `prefill.hpp::emit` 的 mode 2 把 `W_tau(lca_length(key,centroid))` 放在 key
+   侧并共享前缀聚合。tau_i 改变后，此权重也依赖 query，原有分离失效。
+   decode 的 `Planner::tau` 是 const；`edge_weight/edge_decay/prefix_weight`
+   和 GPU sampled-prefix 矩阵都依赖它。不同链长的权重比会改变，不能靠一个
+   输出缩放修复全部历史。无权的 subtree 聚合和 SAM topology 可重用，但加权
+   摘要需重算或更换表示。朴素每 token 重扫/重建会失去原来的效率；这不是对
+   任何其他精确次二次算法的不可能性证明。
+3. **几何长度分档是可行的待实现折中。** 例如按 2k/4k/8k/16k 分档，档内
+   冻结 τ，按当前位置选档，不依赖未来 token。对一个层已有的 q/k/SQ/SK/V，
+   每档在该档末端的完整 prefix 上运行原固定 τ prefill，只保留属于本档的
+   query 输出，再拼起来传给下一层。若 prefix 长度为几何级数，则总工作
+   `sum_b O(2^b log(2^b)) = O(N log N)`；不需要每档都运行长度 N 的完整前缀。
+   这精确实现分档规则，而非连续 log 规则。decode 跨档时可用已存完整标签和
+   SK/V 历史重建新 τ 的摘要；不能用仅最近一段历史替代完整 prime。
+   此调度尚未实现或做数值/性能验证。
+
+还需纠正“现在 decode 有端到端 subquadratic 保证”的前提：README 明确指出
+当前 snapshot 重建最坏 `O(T R DV log T)`，固定每 b=128 tokens 重建的摊销项为
+`O(T R DV log T / b)`；**固定 b 不提供端到端次二次渐近保证**。普通 decode 步
+不扫全历史，但重建不能忽略。长度分档的额外 tau 重建只在倍增边界发生，不等于
+消除了既有周期重建成本；要取得整体界限，仍需设计/验证随 T 增长的重建调度。
+此外，当前 `HardDismDecoder` 显式拒绝 GQA G>1；GQA2 的质量结果不代表它已接入
+SAM 快速推理。以上缩放本身的算法分析与 GQA 接口适配是两项独立工作。
+
+代码依据：`python/flash_dism/inference/csrc/prefill.hpp` 的 `emit/finish`，
+`csrc/planner.hpp` 的 `rebuild/append`，`csrc/cuda_kernels.cu` 的 sampled-prefix
+构造，`inference/api.py` 的固定 τ/GQA 检查，以及 `README.md` 的 Prefill/Decoding。
+
+### 50.4 产物与验证
+
+- 原始输入和分格结果：`build/niah_tau_scaling_20261016/{inputs,old,restored,gqa2}.json`。
+- 汇总：`build/niah_tau_scaling_summary_20261016.json`。
+- 图：`build/niah_tau_scaling_effects_20261016.png`。
+- 汇总脚本：`tools/summarize_niah_tau.py`；输出包含全部 18 格、9 cases 的
+  present/absent 及固定增益对照，不只保存显著/正收益结果。
+
+全部模型加载自身 checkpoint spec；只使用本 worktree 的 flash_dism/cu_flash_dism。
+每格干预后重跑首条 baseline，六 token NLL/准确率等字段与原 baseline 完全一致；
+全部 buffers 未变，全部评分有限。实际 τ 注入位于原 CUDA forward 入口，无 FP64
+输出替代或行补丁。主进程峰值 allocated old/restored/gqa2 为 1.44/1.48/2.54 GiB。
+无 checkpoint 写入、训练重启、kernel 改动或新数据下载。共享 GPU 上的运行耗时
+不作为性能基准，未新增 sanitizer/吞吐结论。
+
+复现（缓存环境同 §47，输出目录必须不存在）：
+
+```bash
+$PY dism_v3/tools/niah_tau_scaling.py --out dism_v3/build/NEW_tau \
+  --seed 20261017 --trials 8 --contexts 2048 8192 16384 --depths .05 .95
+$PY dism_v3/tools/summarize_niah_tau.py --directory dism_v3/build/NEW_tau \
+  --out dism_v3/build/NEW_tau_summary.json
+```
+
+## 51. τ 梯度：数值抵消、独立切线路径与 hard/soft 目标冲突（2026-10-16）
+
+本节为代码审计、数学推导和 CPU 数值诊断；没有修改训练 kernel、optimizer、
+checkpoint 或启动训练。用户补充：先前训练中 hard/soft 对 τ 通常给出相反方向。
+本轮未重新测实际训练 batch 的两支方向，不预设哪支一定推大/推小。
+
+### 51.1 三种问题必须分开
+
+1. **分支内部数值误差。** 当前 soft `backward_qk.cu` 由 `P*(S*E-delta)`
+   启动反向对角递推，最后累加全部 gate 梯度得到 dτ；delta 来自保存的 BF16 O。
+   §44 已测 soft τ 相对误差约 1%（最大 2.1%），放大 logits 后可达约 8.3%。
+   `BACKWARD_DIMS.md` 的历史 hard/统一反向路径中，仅以高精度 O 替换 delta
+   就使部分误差从 0.03–0.06 降到 1e−7–1e−6，说明输出舍入可以是主要来源。
+2. **hard 路由差异。** 当前 `src/hard_backward.cu` 已使用解析 g_L、移位的四矩
+   和显式质量归一化，避免 BF16 O/delta；不能把上述旧路径缺陷等同于当前所有
+   hard 反向。§43 测到 event 多 chunk 路径偏差，而 quadratic 通常准确得多。
+   `_chunk_backward` 的单 chunk tau 用 FP32 pair 在 BF16 vector cast 前收缩；
+   跨 chunk 的 hq/hk 则在 BF16 模式下先把矩阵摘要转 BF16，再形成各自 τ 项，
+   是进一步审计的候选位置，不能仅凭静态代码把它断定为唯一根因。
+3. **真实 hard/soft 目标冲突。** 若两支在 FP64 下仍相反，精度修复不会消除
+   冲突。两支梯度相加后的净值很小，会把各自误差放大成净方向偏差。用已经按
+   实际采样/有效 token 归一化的贡献定义
+   `kappa_mix=(abs(g_h)+abs(g_s))/(abs(g_h+g_s)+eps)`；它与分支内部求和条件数
+   是两个不同指标。不要先对每支重新归一化再计算本来没有的冲突。
+
+§50 证实改变 τ 可改善固定 checkpoint 的 NIAH，但没有证明数值误差导致训练
+最终 τ 不合适。旧 NIAH 记录中全头 mean/max τ 与 recall 并没有给出强的预期排序；
+这也不能排除某条具体读取路径的 τ 敏感性。训练短上下文的 LM 目标与长程检索
+目标不同，即使梯度完全准确也可能偏好不同 τ。
+
+### 51.2 等价的协方差形式与误差来源
+
+对每个 query，设递推后未归一化权重为 w_j，`p_j=w_j/(1+sum(w))`，
+`u_j=(SQ_i·SK_j)V_j`，`x_j=dO_i·u_j`，`h_j=∂log(w_j)/∂tau`。
+加入 fallback 作为额外 j=0：w0=1、x0=h0=0。则
+
+```
+mu_x = sum_j p_j*x_j
+mu_h = sum_j p_j*h_j
+g_i  = sum_j p_j*(x_j-mu_x)*(h_j-mu_h)
+     = Cov_p(x,h)
+```
+
+若原反向使用 `delta=mu_x+epsilon_i`，权重/切线暂视为精确，则其 τ 行误差为
+`−epsilon_i*mu_h`。因此 BF16 输出引入的小 delta 误差会被有效链长度放大。
+提高最终 head 标量归约精度无法恢复此前已经损坏的局部残差。
+
+优先方案是**先计算真实加权均值，再累加中心化乘积**，或以分块 weighted
+covariance 合并，避免最后才相减两个大 raw moments。两个块的权重 W、均值
+mx/mh、未归一化协方差 C 可按以下方式合并：
+
+```
+C = C_A + C_B + (W_A*W_B/(W_A+W_B))*(mx_A-mx_B)*(mh_A-mh_B)
+g = C/W
+```
+
+跨块不同 log-weight pivot 必须先统一质量尺度，C 与 W 一样缩放。fallback 也要
+参与，不能当成归一化误差忽略。使用 FP32 局部 MMA/矩、固定树形 partial reduction，
+必要时仅把少量最终 scalar partials 用 FP64 归约；不采用 shared FP32 atomicAdd。
+这减少数值引入的抵消，但不能消除真实正负梯度相抵。
+
+当前 hard quadratic 选 `c_i=g_(i+1)`，然后累加 g_L−c_i 的四矩。这对长链共模
+有帮助，但晚位置只有短链时 c_i 可能远离全部有效 g_L，形成新的大数相减。
+可比较真实加权均值中心、实际最大匹配长度中心以及分块 covariance；不是说
+现有移位无效，也不是仅把最后 reduce 改 FP64 就解决所有条件数问题。
+
+### 51.3 独立 τ-only JVP：保持原数学目标
+
+soft 的自然对数递推为
+
+```
+s_ij = mix_ij + tau + softplus(s_(i-1,j-1))
+h_ij = 1 + softplus'(s_(i-1,j-1))*h_(i-1,j-1)
+```
+
+因此可以在前向重算时多传播一个标量切线 h，再用上述 covariance 与实际 dO 收缩，
+只返回 dτ。数学上与完整反向相同，不需要再把 τ 信号沿漫长的反向 gate 链传播。
+soft 主计算本来为二次，此路径保持阶数，但额外扫描/边界/带宽和寄存器开销需要
+实测。若只在 backward 重算，需要保存或重建**切线边界**；不能从 primal 边界
+凭空恢复切线。纯 hard 则直接用 `h=g_L` 的解析/稳定递推式即可。
+
+hard event 还可使用 `hard_prefill_grad_reference.py` 已有的前向 tangent-matrix
+思路，从原 event 计划传播 ∂M/∂τ，再收缩真实 dO，避免依赖有争议的跨 chunk
+backward 分解；保留 near-linear event 阶数，但 tangent 状态和归约仍须中心化及
+精度检查。该 CPU helper 的存在不代表生产 GPU JVP 已实现或已经稳定。
+
+实现时保持以下语义：
+
+- 局部 dO 必须来自该次真实 forward，不能用 soft forward 的 dO 配 hard shadow
+  输出然后声称得到全 hard loss 的梯度。
+- 只**替换**既有 dτ，其他向量/词表梯度保持原路径；不能额外叠加一份完整 dτ。
+- 当前 interpolation 已以 detached tau 做 `LSE−tau` 吸收。JVP 给 logM 的 +1
+  只计一次；不能又从吸收后的 LSE 回传同一份 τ 梯度。
+- `g_rho=sigmoid(rho)*g_tau`，rho=`log_sel_tau`，外层 softplus 链式法则仅一次。
+- 生产 softplus/tanh 近似、log2 单位、有限 mask、packed 边界及 sequence-level
+  hard sampling 都需保留。这里的 CPU 检查对应维护中的 thresholded-softplus
+  oracle，不是对所有 CUDA 浮点近似的逐位导数声明。
+
+可先抽样完整 sequence/head，在相同 operands/dO 上算高精度参考。若以概率 π
+独立抽样，`g_corr=g_fast+I/pi*(g_precise-g_fast)` 对当步 precise 梯度无偏，
+但低 π 会增加方差；每 K 步简单替换或对误差做 EMA 不具有同样的无偏保证。
+抽样 queries 时仍须保留完整匹配历史，截短上下文会改变目标。
+有限差分宜用作独立核对：多个步长、共同随机采样、FP64/FP32 readout，并正确
+重算 tau-absorbed LSE。直接对 BF16 输出作很小步长差分容易得到零或舍入噪声，
+不推荐作为主要训练估计器。
+
+### 51.4 若冲突真实存在，需要单独设计 τ 的训练目标
+
+soft `logM=tau+S`，其中 S 是负交叉熵式匹配分数；hard 匹配的 `logM=tau`。
+同一个 τ 在 soft 分支还承担补偿模糊匹配负偏置的作用，因此反向诉求可以是结构性的。
+如果 soft 想推大、hard 想推小，这提供一个可能解释；相反方向也不能仅靠这条近似
+排除，最终要测实际 batch 的高精度梯度。
+
+在数值路径对齐之后，建议用对照区分以下策略，均属于改变训练设计而非精度修复：
+
+| 策略 | 目的与限制 |
+|---|---|
+| 共享 τ、精确 mixed 梯度 | 基准，检验单纯数值修复的贡献 |
+| τ 只收实际 hard 样本的梯度 | 减少 soft 拉扯；按 hard 概率和有效 token 做正确估计，早期 hard 很少时方差大；其他层仍混合采样，不等价于全 hard 模型目标 |
+| 间歇全 hard batch，只更新 τ | 直接校准部署目标；必须真实重算全 hard forward/dO，其他参数冻结但下游反传仍需保留；额外计算不能视为免费 |
+| tau_h 与 soft 校准偏移 | 例如 rho_s=stopgrad(rho_h)+delta、tau_s=softplus(rho_s)，hard 更新 rho_h，soft 更新 delta；独立参数可减轻冲突，也可能增加 soft/hard gap，需约束/退火 delta 并验证 |
+
+不能靠相反梯度各自 normalize、取绝对值或直接删掉某符号来“修复 cancellation”。
+先分别记录 g_h/g_s、生产−参考的 signed bias、有效梯度 sign agreement、内部和
+分支间 cancellation ratio，以及 rho/tau、sigmoid(rho)、Adam 更新后的实际 Δtau。
+接近零的参考梯度单独分组，避免相对误差和 sign rate 被微小值主导。若精度修复
+后两支仍稳定相反，就有证据进入上述目标分离对照；若参考和生产经常异号，应先
+修数值路径。两者都不能通过重置已有 Adam/RNG/annealing 状态做混杂比较。
+
+### 51.5 本轮 CPU 数值检查
+
+新增 opt-in `tools/tau_jvp_analysis.py`。16 个 CPU cases 覆盖 soft/尖锐 soft/
+随机 hard/全重复 hard、N65/257、tau=.3/2，采用实际形式的 signed SQ/SK readout
+与独立 dO。对每个 case 比较独立 autograd、前向切线 covariance 和中心差分。
+FP64 JVP 对 autograd 最大绝对误差 **1.47e−14**，全部断言通过；FP32 JVP 的
+最大绝对误差 **1.61e−7**。只把输出舍入 BF16、其余仍使用 FP64 的 delta 路径，
+在重复 hard fixture 上最大绝对误差达到 **0.302**。这隔离了 saved-O 舍入机制，
+不是说当前 hard quadratic 仍然有该缺陷。
+
+另一个“晚 query、全是短匹配”的行级算术例子，真实梯度为 0.00735338012；
+模拟当前最大位置中心的 FP32 四矩为 0.00878906436，均值中心的 FP32 covariance
+为 0.00735337986。它显示改中心值得测试，但没有复制 GPU reduction 顺序或 CUDA
+近似，不能作为生产 kernel 改善倍数。均匀长链例子的真实零梯度，两种中心都为零。
+
+原始结果：`build/tau_jvp_analysis_fp64_20261016.json`。初版辅助行的几何权重常数
+误用了默认 FP32 scalar，已修为 FP64 并重跑；原始文件保留在
+`build/tau_jvp_analysis_20261016.json`，不用于本节精度结论。
+本轮未做实际 checkpoint 梯度分支审计、GPU 吞吐/数值/sanitizer 或训练 A/B。
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 $PY dism_v3/tools/tau_jvp_analysis.py \
+  --out dism_v3/build/NEW_tau_jvp.json
+```

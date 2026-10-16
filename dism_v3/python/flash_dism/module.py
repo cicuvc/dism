@@ -145,7 +145,7 @@ class DismAttention(nn.Module):
                  value_residual=False, vocab_temperature=1.0,
                  vocab_transvq=False, vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4, gqa_query_channels: int = 1,
-                 kv_group_size: int = 1):
+                 kv_group_size: int = 1, hard_tau_grad_scale: float = 1.0):
         super().__init__()
         if min(width, heads, vocab_size, conv_size) <= 0:
             raise ValueError("width, heads, vocab_size and conv_size must be positive")
@@ -176,6 +176,11 @@ class DismAttention(nn.Module):
         if heads % kv_group_size:
             raise ValueError("heads must be divisible by kv_group_size")
         self.kv_group_size = kv_group_size
+        if not (0.0 <= float(hard_tau_grad_scale) <= 1.0):
+            raise ValueError("hard_tau_grad_scale must be in [0,1]")
+        # 1.0 keeps rtau trained by both paths (unchanged); 0.0 detaches it on
+        # hard rows so only the soft relaxation sets it.
+        self.hard_tau_grad_scale = float(hard_tau_grad_scale)
         self.width, self.heads = width, heads
         # kv_group_size=2 gives heads//2 key/value heads, each queried by
         # kv_group_size distinct query heads (classic GQA head grouping).
@@ -469,6 +474,16 @@ class DismAttention(nn.Module):
             # query side keeps an independent codebook per query head.
             ek = self._expand_gqa(ek, 0, self.kv_group_size)
         tau = F.softplus(self.log_sel_tau.float()).contiguous()
+        if self.hard_tau_grad_scale != 1.0 and hard is not None:
+            # Per (row, head) hard flags; rtau is one scalar per head, so the
+            # flags must agree across rows for this to be well defined.
+            row = hard if hard.ndim == 1 else hard[0]
+            if hard.ndim > 1 and not torch.equal(hard, row.expand_as(hard)):
+                raise ValueError("hard_tau_grad_scale requires uniform hard flags across rows")
+            row = row.to(device=tau.device)
+            if bool(row.any()):
+                scaled = tau * self.hard_tau_grad_scale + tau.detach() * (1.0 - self.hard_tau_grad_scale)
+                tau = torch.where(row, scaled, tau)
         dism_v = v
         if self.gqa_query_channels == 2:
             q_extra = project(self.gqa_q_conv, self.head_dim)

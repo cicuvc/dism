@@ -119,6 +119,7 @@ class DismLM(nn.Module):
                         vocab_temperature=getattr(config, 'vocab_temperature', 1.0),
                         gqa_query_channels=getattr(config, "gqa_query_channels", 1),
                         kv_group_size=getattr(config, "kv_group_size", 1),
+                        hard_tau_grad_scale=getattr(config, "hard_tau_grad_scale", 1.0),
                         vocab_transvq=getattr(config, "vocab_transvq", False),
                         vocab_transvq_lite=getattr(config, "vocab_transvq_lite", False),
                         vocab_transvq_map=getattr(config, "vocab_transvq_map", "linear_attn"),

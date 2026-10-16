@@ -54,6 +54,12 @@ class DismConfig:
     # (loss / grad_accum_steps on the model's own token mean). Default off
     # keeps every existing spec bit-identical.
     legacy_loss_normalization: bool = False
+    # Gradient scale for rtau on hard rows only. 1.0 = unchanged; 0.0 detaches
+    # rtau on the hard path so the soft relaxation alone sets it. On layers
+    # 8/10/11 both paths push rtau down (dL/dtau > 0) while raising it improves
+    # NIAH, so this knob trades "tau is trained by both paths" against "tau is
+    # trained by the soft path only".
+    hard_tau_grad_scale: float = 1.0
     # >1 groups the query heads so every kv_group_size of them share one
     # key/value head (classic GQA). Mutually exclusive with gqa_query_channels.
     kv_group_size: int = 1

@@ -14,6 +14,7 @@ class DismConfig(PretrainedConfig):
                  vocab_temperature=1.0,
                  gqa_query_channels: int = 1, vocab_transvq=False,
                  kv_group_size: int = 1,
+                 hard_tau_grad_scale: float = 1.0,
                  vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
                  intermediate_size=None, hidden_ratio=4., norm_eps=1e-6,
