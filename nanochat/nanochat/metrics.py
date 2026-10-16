@@ -160,8 +160,11 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                 conv_options = {'seq_idx': conv_seq_idx} if getattr(attn.q_conv, 'supports_seq_idx', False) else {}
                 q = attn.q_conv(hidden, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, **conv_options)
                 k = attn.k_conv(hidden, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, **conv_options)
+                # kv_group_size>1 gives the key side fewer heads than the query
+                # side, and fewer codebook rows, so the two axes differ.
+                kv_heads = int(getattr(attn, "kv_heads", heads))
                 q = q.reshape(1, length, heads, attn.head_dim).float()
-                k = k.reshape(1, length, heads, attn.head_dim).float()
+                k = k.reshape(1, length, kv_heads, attn.head_dim).float()
                 if getattr(attn, "vocab_transvq", False):
                     # Effective codebook is C' = P_phi(C), not the frozen base.
                     with torch.autocast("cuda", enabled=False):
@@ -170,19 +173,20 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                 else:
                     table_q, table_k = attn.q_vocab, attn.k_vocab
                 stats = {}
-                for tag, vec, table in (("q", q, table_q), ("k", k, table_k)):
+                for tag, vec, table, rows in (("q", q, table_q, heads),
+                                              ("k", k, table_k, kv_heads)):
                     # Per-head counts: q_vocab/k_vocab are [heads, V, D] with independent
                     # per-head codebooks unless vocab_share_heads, so entries must not
                     # be pooled across heads.
-                    counts = torch.zeros((heads, vocab_size), device=device, dtype=torch.float64)
+                    counts = torch.zeros((rows, vocab_size), device=device, dtype=torch.float64)
                     entropy_sum = 0.0
                     max_sum = 0.0
                     for start in range(0, length, chunk_size):
                         stop = min(start + chunk_size, length)
                         scores = torch.einsum("bnhd,hvd->bnhv", vec[:, start:stop], table.float())
                         probs = torch.softmax(scores, dim=-1).reshape(-1, vocab_size)
-                        idx = probs.argmax(-1).reshape(-1, heads)
-                        for head in range(heads):
+                        idx = probs.argmax(-1).reshape(-1, rows)
+                        for head in range(rows):
                             counts[head] += torch.bincount(idx[:, head], minlength=vocab_size).double()
                         entropy_sum += float(-(probs * (probs + 1e-12).log()).sum(-1).mean()) * (stop - start)
                         max_sum += float(probs.max(-1).values.mean()) * (stop - start)
