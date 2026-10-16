@@ -1,7 +1,13 @@
 # NIAH long-range circuit probe — handoff
 
-Status: not started. Written 2026-10-16 for a circuit-interpretability pass on
-three 72M checkpoints that differ in how well they recall a needle at 16k.
+Status: first P1/P2/P3 pass and L8/L10 head ablations completed 2026-10-16.
+Results, paired absent controls, implementation corrections and limitations:
+`SOFT_HARD_RELAXATION.md` §47. Local symbol streams: §48; single-query
+background-collision interventions and short-chain filtering: §49.
+Whole-forward tau scaling and SAM complexity boundaries: §50.
+P4/P5/P6 and codebook/cross-model circuit rescue remain open.
+Written 2026-10-16 for a circuit-interpretability pass on three 72M checkpoints
+that differ in how well they recall a needle at 16k.
 
 Read `AGENTS.md` and `docs/AGENTS.md` first. This document is a plan; the
 measured facts in §3 are already established and must not be redone.
@@ -270,6 +276,94 @@ Environment facts that will bite:
   A single-model number is not evidence about the difference.
 
 ## 8. What would count as an answer
+
+## 9. Update 2026-10-16: `rtau` is the long-vs-short contrast knob
+
+Astra found that **raising `rtau` on the located retrieval head improves NIAH
+broadly**, and that the 16k deficit is not "no signal" but the needle's
+exponential weight being diluted by many short matches in the longer context.
+Both follow directly from §4, so here is the derivation to work from.
+
+`rtau` is added to `logM` at **every step of the softplus chain**:
+
+```
+rows[i][j] = mix[i][j] + rtau + softplus(rows[i-1][j-1])
+```
+
+For a matching run of length k ending at (i, j) the inner values are large, so
+`softplus(x) ~= x` and the accumulated score is approximately
+`sum(mix) + k * rtau`. For a broken/short run the inner value is small,
+`softplus(x) ~= e^x`, and the whole contribution collapses toward 0. So rtau is
+multiplied by the **chain length**: it is the knob that sets how much a long
+match dominates a short one.
+
+The read is normalised by the whole row, which is where dilution enters:
+
+```
+weight[i][j] = exp(core[i][j] - zmax[i])
+output[i]    = sum_j weight[i][j] * (sq_i . sk_j) * v_j
+               / (sum_j weight[i][j] + exp(-zmax[i]))
+```
+
+The row max is 1 by construction, so the needle's *share* of the numerator is
+`1 / sum_j exp(core[i][j] - zmax[i])`. Every additional short match in the row
+adds a positive term to that sum. At 16k there are simply more of them, so the
+needle's share shrinks even though the needle's own term is unchanged. Raising
+rtau increases the exponent gap between the needle and every short match, drives
+those terms to 0, and restores the share toward 1. `exp(-zmax)` also shrinks,
+so the denominator approaches `sum_j weight = 1`.
+
+### What the trained `rtau` values say (checked, negative result)
+
+Endpoint `softplus(log_sel_tau)` at step 19074, per DISM layer, all heads:
+`old` max 7.13 mean 0.745; `restored` max 6.02 mean 0.752; `gqa2` max 5.01 mean
+1.058; `valres-norec` max 9.95 mean 1.836. The large values sit on the **last**
+DISM layer (`old` L11 has three heads >= 2.85, `restored` one, `gqa2` none).
+
+But across the eight checkpoints that have both a checkpoint and a stored NIAH
+result, the trained tau does **not** order 16k recall:
+
+| correlation vs 16k present NLL | r |
+|---|---|
+| tau max over heads | +0.295 |
+| tau mean over heads | +0.423 |
+| max tau on layer 11 | +0.197 |
+| tau max vs 16k gain | -0.296 |
+
+So the endpoint value is not the mediator. That is consistent with the
+sensitivity being real: what matters is the **trajectory and the gradient**, not
+where tau ended up. Two consequences worth pursuing:
+
+1. **The known tau-gradient defect is now first-class, not a rounding detail.**
+   `8961651` pins the planner event route's tau gradient at 3.8e-4..1.6e-1 off
+   FP64 while the quadratic fallback is <=1.3e-5. If NIAH is this sensitive to
+   rtau, any run or resume that used the event route has a corrupted tau
+   trajectory. `restored` deliberately avoids it; `old` predates the planner
+   entirely and computed hard rows inside `dism_core` itself, so `old` and
+   `restored` differ in the tau-gradient path as well as in the objective. That
+   makes the tau path a co-equal suspect to the loss normalization (#1) for the
+   old-vs-restored NIAH gap.
+2. **Log tau, not just its effect.** `log_sel_tau` per layer/head plus the tau
+   gradient norm are not currently in the training logs, so the trajectories
+   cannot be compared after the fact. Adding them is cheap and would settle
+   whether `restored` grew tau more slowly.
+
+### Cheap tests to run next
+
+- **Test-time tau sweep on all three models.** Astra's sweep was one model; run
+  it on `old` / `restored` / `gqa2` at 8k and 16k. If raising rtau on the
+  retrieval head closes the old-vs-restored gap, the difference is calibration,
+  not a missing circuit, and the fix is a knob rather than an architecture.
+- **Direct dilution measurement.** At 4096 (fp64 reference is affordable; 16k
+  needs one head at a time) take the last DISM layer, extract `weight` and
+  compute, for the query row, the needle's share `1 / sum_j exp(core - zmax)`
+  and the number of contributing short matches. Sweep rtau and plot the share.
+  That turns Astra's statement into a measured curve per model.
+- **Interaction with `gqa_mix`.** `gqa2`'s `gqa_mix` collapsed from 0.5 to
+  0.004-0.13 by step 4000 (see the gqa2 README), so for that arm the DISM output
+  scale is partly set by a weight-decayed free parameter rather than by rtau.
+  The tau sweep may therefore behave differently on `gqa2` than on the two
+  GQA1 models; report them separately rather than pooling.
 
 One of these, with numbers:
 
