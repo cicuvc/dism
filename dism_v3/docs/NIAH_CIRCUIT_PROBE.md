@@ -365,6 +365,75 @@ where tau ended up. Two consequences worth pursuing:
   The tau sweep may therefore behave differently on `gqa2` than on the two
   GQA1 models; report them separately rather than pooling.
 
+## 10. Candidate fix: stop rtau's gradient on the hard path
+
+Proposal: detach `rtau` on hard rows so only the soft rows train it. Analysis
+before running anything.
+
+### Both paths share one scalar that does different jobs
+
+On a hard row `hard_score` is 0 for matching pairs and -inf elsewhere, so
+`core ~= k*rtau` and rtau has exactly two effects:
+
+- `weight = exp((k_j - k_max)*rtau)` — winner-take-all between the matching
+  chains, i.e. the long-vs-short contrast;
+- `fallback = exp(-k_max*rtau)` — the **no-match gate**, because the
+  denominator is `sum_j weight + fallback`. rtau is therefore the soft threshold
+  between "output ~= 0" and "normalised read".
+
+On a soft row `norm_score = raw - lse` is a real score, so `core ~= sum(norm) +
+k*rtau` and rtau instead trades chain length against match quality. Same scalar,
+structurally different role. That is the reason to suspect the shared value is
+being pulled two ways.
+
+### Two hypotheses, two different fixes
+
+- **(a) the hard-row rtau gradient is noise-dominated.** Detaching denoises it.
+  Support: §29 of `SOFT_HARD_RELAXATION.md` measured the hard path's
+  signal-to-noise at ~1% (`|g_R| ~= |g_k|/sqrt(K)`, `E[g_k] ~= 0`), and §30
+  measured a single symbol flip moving the hard loss by 0.0015%. A scalar that
+  Astra's sweep shows to be very consequential for NIAH being co-trained by a
+  1%-SNR signal is a real hazard.
+- **(b) the two paths simply want different rtau.** Then the fix is a **separate
+  `log_sel_tau_hard`** (6 extra parameters per layer) used on hard rows and at
+  inference, not a detach. Detaching is the special case that constrains
+  `tau_hard = tau_soft`; it can only win if the hard gradient is harmful rather
+  than merely different.
+
+Both are cheap. **A (detach) and B (separate tau) answer different questions;
+run both.** B strictly dominates A in expressiveness, so B >= A in achievable
+loss; if B beats A the conflict is about the value, if they tie it was noise.
+
+### Two cautions
+
+- **Do not judge on the gap alone.** The deployed path is 100% hard, so the
+  target is hard val bpb and NIAH; the gap is a diagnostic. Detaching removes the
+  hard path's only direct control of its own gate threshold, so the natural
+  failure mode is hard loss getting *worse* while the gap narrows -- and a gap
+  can also narrow by both paths getting worse. Report hard bpb, gap and NIAH, in
+  that order of authority.
+- **Schedule interaction.** `hard_prob` ramps to 0.95, so late in training only
+  ~5% of rows are soft. Detaching therefore cuts rtau's gradient sample count by
+  ~20x exactly when the run is converging, which may freeze rtau early. Consider
+  detaching only after the ramp, or keeping a soft fraction throughout.
+
+### Order of work
+
+1. **Eval-time per-head rtau sweep on `old` and `restored` at 8k/16k** (Astra did
+   one model). This gives the headroom and names the heads; hours, no training.
+   If the optimal rtau is several times the trained value, that both sizes the
+   expected gain and shows the hard-path gradient is fighting it.
+2. **Log `softplus(log_sel_tau)` per layer/head plus its gradient norm during
+   training.** Neither is logged today, so trajectories cannot be compared after
+   the fact.
+3. **Then A and B as short arms** (2-3k steps), judged on hard bpb and 8k NIAH.
+
+Directly measurable right now on real batches: `dL_hard/drtau` versus
+`dL_soft/drtau` (magnitude, sign, and the angle between them). If the hard term
+is negligible, A is a no-op and only B is interesting. Blocked only on GPU
+memory: on 2026-10-16 18:30 the box was running the `legacy` training (17.7 GB)
+plus a user transcription job (13.0 GB), leaving 1 GB free.
+
 One of these, with numbers:
 
 1. **Symbol alignment.** At 16k the needle is lost because `idx_q[i] ==
