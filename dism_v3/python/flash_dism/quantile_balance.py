@@ -55,7 +55,11 @@ def _work(x):
 
 class PricedInterpolation(torch.autograd.Function):
     """True-direction interpolation, Q log-normalizer and E_K[Q price]."""
-    CHUNK = 512
+    # Tokens per step of the eager chunk loop. Larger chunks cut the Python
+    # iteration count (n/CHUNK per layer per microbatch) at the cost of holding
+    # bigger [b,h,chunk,V] fp32 intermediates.
+    import os as _os
+    CHUNK = int(_os.environ.get('DISM_QB_CHUNK', '4096'))
 
     @staticmethod
     def forward(ctx, q, k, eq, ek, aq, ak, beta):
