@@ -40,15 +40,16 @@ __device__ __forceinline__ Scalar recompute(
     constexpr float LOG2E = 1.4426950408889634f;
     kt::rt_fl<K,Q> score;
     int64_t offset = int64_t(bh) * args.padded;
-    bool query_lse = DirectionTrue || args.direction[bh];
+    uint8_t query_lse = DirectionTrue ? 1 : args.direction[bh];
 #pragma unroll
     for (int r = 0; r < 2; ++r) {
 #pragma unroll
         for (int c = 0; c < 4; ++c) {
             auto pos = Scalar::layout(r,c,0);
             float key_bias = DirectionTrue ? 0.f : -args.k_lse[offset+k0+pos.first];
-            float x = query_lse ? -args.q_lse[offset+q0+pos.second] : key_bias;
-            float y = query_lse ? -args.q_lse[offset+q0+pos.second+4] : key_bias;
+            float extra = query_lse == 2 ? key_bias : 0.f;
+            float x = query_lse ? -args.q_lse[offset+q0+pos.second] + extra : key_bias;
+            float y = query_lse ? -args.q_lse[offset+q0+pos.second+4] + extra : key_bias;
             score.tiles[0][c/2].data[r+2*(c&1)] = {x,y};
         }
     }

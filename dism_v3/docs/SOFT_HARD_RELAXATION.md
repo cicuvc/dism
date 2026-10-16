@@ -4818,3 +4818,107 @@ buffers 均未变化。FP32 score argmax 与原 CUDA label 的最大不一致比
 输入 SHA256：`a0c7ec07720080a52116dabc51e036e4a12a3dd51b22911e376cc14a6c9cdbc3`。
 运行元数据记录 checkpoint 路径、tokenizer fingerprint、代码 hash 和源 commit。
 无生产 kernel/default 修改，无 optimizer/RNG/annealing/dataloader 状态重置。
+
+## 53. Fixed-true QB 训练实现（2026-10-16）
+
+完整数学推导单独记录在 [QUANTILE_BALANCING.md](QUANTILE_BALANCING.md)，涵盖
+容量约束、价格对偶、quantile 块最优解、soft 下界及其反向传播。
+
+本节实现的是 soft/hard 一致的在线价格校正，不是 §52 的训后 K-label-only 干预。
+Q/K 两侧独立配置 `qb_q_strength` / `qb_k_strength`，范围 [0,1]，0 表示关闭。
+两者默认都为 0，保留原执行路径、参数与 state_dict keys。
+配置与恢复约束见 [MODULE.md](MODULE.md#opt-in-quantile-balancing-fixed-true-direction)。
+没有启动正式训练或修改用户 checkpoint。
+
+### 53.1 保留下界的价格形式
+
+令 `a_q=lambda_q*b_q`、`a_k=lambda_k*b_k`，价格以 logit 为单位：
+
+```
+zq_ic = beta * dot(q_i, eq_c) - a_qc
+zk_jc = beta * dot(k_j, ek_c) - a_kc
+pq = softmax(zq); pk = softmax(zk)
+u_j = sum_c pk_jc * eq_c
+m_j = sum_c pk_jc * a_qc
+S_ij = beta * dot(q_i,u_j) - logsumexp(zq_i) - m_j
+     = sum_c pk_jc * log(pq_ic)
+     <= log(sum_c pk_jc * pq_ic)
+```
+
+hard Q/K labels 均取上述同一组 z 的 argmax。`logM=tau+S`；Q LSE 预吸收
+`-tau.detach()` 一次，m 不再吸收 tau，core 自有 dτ 计一次。价格视为 detached
+外部状态，不对 quantile 求解器反传；但 m 对 pk 的依赖参与 K/codebook 梯度。
+
+新增 `quantile_balance.PricedInterpolation`：分块（512 tokens）计算 Q LSE、
+K→Q 插值、m 和标签，反向按相同价格快照重算概率，避免保存全序列 N×V 概率。
+目前为 eager Torch 分块实现，不是 fused Triton QB interpolation。
+新增 core 可选 key bias 通路复用原两个 scalar 输入槽，计算 `QK-LQ-LK`。
+公开 direction 仍为 bool；只有显式 QB 入口将 native metadata 编成内部 mode=2，
+并验证所有 direction=true、Q LSE 已预吸收 tau、使用通用 bias-aware dispatch。
+普通 mode=0/1 与 true-specialized 路径保留；前向摘要、forward 和 backward
+recompute 都应用同一双侧标量偏置。反向同时归约 dLQ/dLK，τ 仍只累计一次。
+没有增加 shared FP32 atomic、改变 launch 默认或扩展 D/R/DV 配置。
+
+### 53.2 在线校准、分布式与恢复
+
+每层/每 head 保存 `q_price`、`k_price`、`forward_count`、`update_count` buffers；
+没有新增训练参数或 optimizer group。当前 forward 使用此前价格的独立快照，
+随后在每 `qb_update_interval` 个有梯度训练 forward 上校准，结果供后续 forward
+使用。默认 interval=16、iterations=4、samples=2048/rank、update_rate=.1。
+这是 microbatch 周期，不是 optimizer-step 周期；不是当前序列的 batchwise 分配。
+
+校准从有效输入位置等距取固定数量样本，少于样本数时重复取样。
+nanochat 使用 `targets>=0` 排除 padding/无效预测位置，底层可传 `qb_valid_mask`；
+没有 mask 时取全部输入位置。各 rank all-gather sampled scores 后对全局样本拟合，
+不平均各 rank 独立拟合的价格；空 rank 不贡献样本，全空更新跳过。
+不同 rank 固定取相同数量样本，因此这是各非空 rank 等权的样本分布。
+
+求解器支持 N/V 非整数容量，逐 head warm-start hinge-dual quantile 块更新，
+选择 reduced dual 最优迭代，随后按 update_rate 与旧价格混合并中心化。
+有限轮数、重复样本和 ties 不保证精确配额；hard usage 均衡不等价于 soft mass 均衡。
+价格使用当前 beta 的 logit 单位，温度调度改变后通过后续校准追踪，不隐式重置。
+
+`eval()` 与无梯度 forward 不更新 QB。checkpoint 严格恢复所有价格/计数器及原有
+RNG、annealing、optimizer、dataloader 状态；nanochat meta→to_empty 初始化显式清零
+新 QB buffers。没有给旧 checkpoint 自动补价格或忽略 missing keys；从旧模型启用
+QB 是显式迁移，不能冒充 exact resume。使用率探针也应用 QB 的价格和 beta。
+
+启用 QB 时配置只接受 `direction_policy=true` 且 `direction_antithetic=false`，
+运行时拒绝 direction flip；attention 和 QB 入口要求显式 `direction_true=True`，
+实际 direction tensor 含 false 也报错。当前拒绝 cached/unaligned Torch decoding、
+REINFORCE 和 `gqa_query_channels>1`。支持 `fullgraph=False` 的 hybrid 编译，QB
+插值/状态更新显式 graph break；不支持对 stateful QB forward 做 activation checkpoint
+重算。当前 nanochat 训练入口没有这种重算。
+
+### 53.3 验证与数值限制
+
+- QB 专项 **25 passed、8 strict deselected**：FP64 显式概率下界和插值梯度，
+  Q-only/K-only/双侧校正，binary quantile 与分数容量，padding/空样本，
+  双进程 Gloo 全局样本拟合，state/RNG、unsupported direction、默认无新 keys，
+  固定/packed、soft/mixed 的 D32/D64 CUDA bias oracle，完整模型/optimizer 下一步恢复，
+  eval/probe 冻结，eager backend 与实际 Inductor 连续执行不重复更新计数。
+- 原有核心/多配置/native frontend/checkpoint 回归 **144 passed**；关闭 QB 的
+  nanochat 编译恢复、direction dispatch 与 metrics 回归另有 **15 passed**。
+  首次合并日志 `qb_regression.log` 包含当时新增的 1 个严格 τ 门限失败；其余
+  161 项通过，其中 17 项为 QB 测试。后续 QB 默认与 strict 分开验证。
+- **严格诊断 7 passed、1 failed**，不标成 xfail：R32/D64/DV64、packed N512、
+  all-soft 用例的 τ relative L2 ≈ **.045945**，高于新增严格门限 .04。
+  默认沿用 `tests/gradient_acceptance.py` 已有验收策略，没有更改该策略或 kernel
+  数值精度。严格失败保留在 `test_quantile_balance.py -m strict_gradient`。
+- 原生 key bias gradient 仍为 BF16 store，query bias gradient 为 FP32；signed sum
+  会因舍入/相消不同，不能要求两者总和逐位一致。初版总量断言在 D32 fixture
+  观察到约 .000293 的差；改以各自完整梯度对独立 oracle 验证，并在 oracle 上检查
+  两个 bias 的质量守恒恒等式。这不是对生产梯度精确守恒的声明。
+- 对 packed N512、R16/D32/DV32、all-soft bias forward/backward 的独立抽测：
+  **memcheck 0 errors、synccheck 0 errors、racecheck 0 hazards**；不是全部配置、
+  长序列或多 GPU NCCL 的 sanitizer 覆盖。
+- 按本 worktree `build.py`、conda blkw、`DISM_BUILD_JOBS=2` 重建全部 8 组配置。
+  64 个相关 summary/forward/backward device 对象的 SASS 无 CALL。
+  非零 spill 仍存在：例如 R32/D64/DV64 的通用 varlen forward 为 store/load
+  28/84 bytes，varlen backward-summary 304/336，varlen backward-QK 180/224。
+  这些是本次 ptxas 静态报告，不是实测 spill 流量或相对上一版本的性能变化。
+
+原始日志/审计位于 gitignored `build/`：`qb_build.log`、`qb_tests_final.log`、
+`qb_regression.log`、`qb_nanochat_regression.log`、`qb_strict.log`、
+`qb_{memcheck,synccheck,racecheck}.log`、`qb_{sass,spill}_audit.json`。
+未评估长期训练质量、吞吐或防塌缩收益；这些需要另行训练对照。

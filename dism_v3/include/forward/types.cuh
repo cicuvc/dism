@@ -47,7 +47,7 @@ template<bool FP32Output> struct SharedT {
     } metadata;
     // Necessary WG communication only. All128 writers/readers participate.
     struct Mail { float2 value[4][32]; } mail[2];
-    bool query_lse;
+    uint8_t query_lse;
     // Warp-private output-layout staging; no cross-warp communication.
     OutputTile<FP32Output> output[8];
 };

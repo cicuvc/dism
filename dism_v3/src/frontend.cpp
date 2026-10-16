@@ -172,7 +172,7 @@ static V prepare(const V& x,bool packed,bool absorbed=false) {
     return result;
 }
 
-static py::tuple core_forward(V raw,std::optional<T> table,int64_t ctas,bool save,bool fp32,bool absorbed,bool direction_true) {
+static py::tuple core_forward(V raw,std::optional<T> table,int64_t ctas,bool save,bool fp32,bool absorbed,bool direction_true,bool qb_key_bias=false) {
     // Async planner uploads can enter the CUDA allocator concurrently. Never
     // hold the GIL across ATen/CUDA work: allocator/profiler callbacks may need
     // it while holding the allocator lock (also exercised by sanitizer).
@@ -181,6 +181,13 @@ static py::tuple core_forward(V raw,std::optional<T> table,int64_t ctas,bool sav
     precision(fp32);
     TORCH_CHECK(!table || ctas==0,"ctas is only supported for fixed execution");
     auto x=prepare(raw,table.has_value(),absorbed);
+    if (qb_key_bias) {
+        TORCH_CHECK(absorbed && !direction_true,
+                    "QB core requires preabsorbed Q LSE and generic bias-aware dispatch");
+        TORCH_CHECK(raw[9].all().item<bool>(), "QB only supports direction=true");
+        // Public direction remains bool. Mode 2 exists only in saved native operands.
+        x[10].fill_(2);
+    }
     const auto& backend=select(raw[2].size(3),raw[0].size(3),raw[4].size(3));
     int64_t b=raw[0].size(0),n=raw[0].size(1),h=raw[0].size(2);
     T a,s,boundary,out,norm,vertical;
@@ -318,7 +325,7 @@ void bind_frontend(py::module_& m) {
         TORCH_CHECK(false,"unsupported hard readout (R,DV)");
     });
     m.def("core_forward",&core_forward,py::arg("raw"),py::arg("table"),py::arg("ctas"),
-          py::arg("save"),py::arg("fp32"),py::arg("absorbed"),py::arg("direction_true")=false);
+          py::arg("save"),py::arg("fp32"),py::arg("absorbed"),py::arg("direction_true")=false,py::arg("qb_key_bias")=false);
     m.def("hard_backward",[](V x,T boundary,T lut,T norm,int64_t ctas) {
         py::gil_scoped_release release;
         TORCH_CHECK(x.size()==7 && x[0].dim()==4 && x[2].dim()==4,"invalid hard backward operands");

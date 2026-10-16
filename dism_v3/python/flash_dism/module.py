@@ -145,7 +145,8 @@ class DismAttention(nn.Module):
                  value_residual=False, vocab_temperature=1.0,
                  vocab_transvq=False, vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4, gqa_query_channels: int = 1,
-                 kv_group_size: int = 1, hard_tau_grad_scale: float = 1.0):
+                 kv_group_size: int = 1, hard_tau_grad_scale: float = 1.0,
+                 qb_q_strength=0.0, qb_k_strength=0.0, qb_iterations=4, qb_update_interval=16, qb_samples=2048, qb_update_rate=0.1):
         super().__init__()
         if min(width, heads, vocab_size, conv_size) <= 0:
             raise ValueError("width, heads, vocab_size and conv_size must be positive")
@@ -181,6 +182,16 @@ class DismAttention(nn.Module):
         # 1.0 keeps rtau trained by both paths (unchanged); 0.0 detaches it on
         # hard rows so only the soft relaxation sets it.
         self.hard_tau_grad_scale = float(hard_tau_grad_scale)
+        from .quantile_balance import QuantileBalance, validate_qb
+        validate_qb(qb_q_strength, qb_k_strength, qb_iterations, qb_update_interval, qb_samples, qb_update_rate)
+        if (qb_q_strength or qb_k_strength) and gqa_query_channels != 1:
+            raise NotImplementedError('QB does not yet support gqa_query_channels > 1')
+        # No new persistent keys or parameters in the default/off configuration.
+        self.qb = (QuantileBalance(heads * gqa_query_channels, vocab_size,
+                   q_strength=qb_q_strength, k_strength=qb_k_strength,
+                   iterations=qb_iterations, update_interval=qb_update_interval,
+                   samples=qb_samples, update_rate=qb_update_rate)
+                   if qb_q_strength or qb_k_strength else None)
         self.width, self.heads = width, heads
         # kv_group_size=2 gives heads//2 key/value heads, each queried by
         # kv_group_size distinct query heads (classic GQA head grouping).
@@ -279,6 +290,8 @@ class DismAttention(nn.Module):
         x = hidden_states
         if x.ndim != 3 or x.shape[-1] != self.width:
             raise ValueError("hidden_states must have shape [B,N,width]")
+        if self.qb is not None and not kwargs.get('direction_true', False):
+            raise ValueError('QB requires explicit fixed direction=true')
         last_state = get_layer_cache(self, past_key_values)
         options = {name: kwargs.get(name) for name in
                    ('hard_prob', 'direction', 'hard', 'hard_seed', 'generator', 'vocab_temperature')}
@@ -292,6 +305,8 @@ class DismAttention(nn.Module):
         if self.training and cached:
             raise ValueError("cached DISM inference requires eval()")
         torch_path = cached or (not self.training and (x.device.type != 'cuda' or x.shape[1] % 256 != 0))
+        if self.qb is not None and torch_path:
+            raise NotImplementedError('QB currently supports uncached aligned CUDA execution only')
         if attention_mask is not None:
             if (attention_mask.ndim != 2 or attention_mask.shape[0] != x.shape[0]
                     or attention_mask.shape[1] < x.shape[1]):
@@ -341,7 +356,8 @@ class DismAttention(nn.Module):
         output = self._forward_cuda(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen,
                                     v_first=v_first, conv_seq_idx=kwargs.get('conv_seq_idx'),
                                     share_branch_boundaries=kwargs.get('_share_branch_boundaries', False),
-                                    direction_true=kwargs.get('direction_true', False), **options)
+                                    direction_true=kwargs.get('direction_true', False),
+                                    qb_valid_mask=kwargs.get('qb_valid_mask'), **options)
         if indices is not None:
             from fla.layers.utils import pad_input
             output = pad_input(output.squeeze(0), indices, batch, length)
@@ -350,7 +366,7 @@ class DismAttention(nn.Module):
     def _forward_cuda(self, x, hard_prob=None, *, direction=None, hard=None,
                 hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None,
                 v_first=None, vocab_temperature=None, conv_seq_idx=None, direction_true=False,
-                share_branch_boundaries=False):
+                share_branch_boundaries=False, qb_valid_mask=None):
         """Default: soft training, hard evaluation; explicit flags override sampling.
 
         direction: bool [B,H] (True selects k-to-qemb, the query-LSE path).
@@ -368,6 +384,8 @@ class DismAttention(nn.Module):
         dataloader buffer that can be overwritten between forwards.
         """
         from . import voc_dism, VarlenLayout
+        if self.qb is not None and not direction_true:
+            raise ValueError('QB requires explicit fixed direction=true')
 
         if x.ndim != 3 or x.shape[-1] != self.width:
             raise ValueError("x must have shape [B,N,width]")
@@ -417,6 +435,8 @@ class DismAttention(nn.Module):
                                          device=x.device, dtype=torch.int64, generator=generator)
                 hard = triton_rand_bool((batch, self.heads), probability,
                                        device=x.device, seed=seed)
+        if direction is None and self.qb is not None:
+            direction = torch.ones((batch, self.heads), device=x.device, dtype=torch.bool)
         if direction is None:
             direction = torch.randint(2, (), device=x.device, generator=generator,
                                       dtype=torch.int32).bool().expand(batch, self.heads).contiguous()
@@ -498,7 +518,14 @@ class DismAttention(nn.Module):
             hard, direction = (self._expand_gqa(t, 1) for t in (hard, direction))
         from .reinforce import enabled, sampled_voc
         beta = self.vocab_temperature if vocab_temperature is None else vocab_temperature
-        if enabled():
+        if self.qb is not None:
+            if enabled():
+                raise NotImplementedError('QB cannot be combined with categorical REINFORCE')
+            if not compiling and layout is not None:
+                compiled_layout = layout.table.flatten()
+            output = self.qb(q, k, sq, sk, dism_v, eq, ek, tau, beta, direction, hard,
+                             cu_seqlens, compiled_layout, direction_true=direction_true, valid_mask=qb_valid_mask)
+        elif enabled():
             if self.gqa_query_channels > 1:
                 raise NotImplementedError("GQA-DISM G>1 does not support independent categorical K sampling")
             output = sampled_voc(q, k, sq, sk, dism_v, eq, ek, tau, direction=direction,

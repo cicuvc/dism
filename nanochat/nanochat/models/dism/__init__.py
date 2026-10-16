@@ -60,6 +60,13 @@ class DismConfig:
     # NIAH, so this knob trades "tau is trained by both paths" against "tau is
     # trained by the soft path only".
     hard_tau_grad_scale: float = 1.0
+    # QB is opt-in; each side uses zero strength to disable its price.
+    qb_q_strength: float = 0.0
+    qb_k_strength: float = 0.0
+    qb_iterations: int = 4
+    qb_update_interval: int = 16
+    qb_samples: int = 2048
+    qb_update_rate: float = 0.1
     # >1 groups the query heads so every kv_group_size of them share one
     # key/value head (classic GQA). Mutually exclusive with gqa_query_channels.
     kv_group_size: int = 1
@@ -78,6 +85,9 @@ class DismConfig:
         # integer attribute into a SymInt (Triton would infer an integer ABI
         # even though CE validates/converts it to float at runtime).
         self.softcap = float(self.softcap)
+        if self.qb_q_strength or self.qb_k_strength:
+            if self.direction_policy != 'true' or self.direction_antithetic:
+                raise ValueError('QB requires direction_policy=true and direction_antithetic=false')
 
 
 def _build(config):

@@ -332,7 +332,7 @@ struct LoadSharedMemoryLayouts {
             kt::sv_fl<CONFIG.getQBlockSize()> qlse;
         } Prefetch[1];
     } Vectors;
-    bool direction;
+    uint8_t direction;
 };
 
 // Include allocator alignment and both barrier rings, not just tile storage.

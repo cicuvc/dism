@@ -9,14 +9,14 @@ namespace DISM_VARIANT {
 // directly in this layout avoids a register transpose after LDSM.
 template <class KeyBias, class Shared>
 __device__ __forceinline__ void load_key_metadata(KeyBias &bias,
-                                                  const Shared &shared, bool query_lse) {
+                                                  const Shared &shared, uint8_t query_lse) {
     int strip = 2 * (kt::warp::laneid() & 3);
 #pragma unroll
     for (int block = 0; block < CONFIG.WarpKSize / 16; ++block) {
 #pragma unroll
         for (int half = 0; half < 2; ++half) {
             int column = 2 * block + half + strip * 8;
-            if (!query_lse) {
+            if (query_lse != 1) {
                 bias.data[block][half].x = -shared.klse.data[column];
                 bias.data[block][half].y = -shared.klse.data[column + 8];
             }

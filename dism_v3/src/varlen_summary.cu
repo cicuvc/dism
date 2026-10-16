@@ -49,7 +49,7 @@ __global__ __launch_bounds__(384, 1) void varlen_summary_kernel(
             prefetch_pipe.setup();
             auto prefetch =
                 prefetch_pipe.waitBuffer(PRODUCER, shared.Tiles.Prefetch, shared.Vectors.Prefetch);
-            bool query_lse = DirectionTrue || shared.direction;
+            uint8_t query_lse = DirectionTrue ? 1 : shared.direction;
             auto &vectors = prefetch.template get<1>();
             kt::rt_bf<CONFIG.WarpQSize, CONFIG.KcKeyDim> query;
             kt::rv_fl<CONFIG.WarpQSize, kt::ducks::rv_layout::ortho> query_bias;

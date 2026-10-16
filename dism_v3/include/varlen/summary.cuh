@@ -38,7 +38,7 @@ produce_packed_summary(const TmaSummarizationKernelArgs &args, LoadPipe &load_pi
     if (warp_in_group == 0) {
         bool leader = kt::warp::elect_leader();
         {
-            bool query_lse = DirectionTrue || args.direction[task.Batch * args.Head + task.Head];
+            uint8_t query_lse = DirectionTrue ? 1 : args.direction[task.Batch * args.Head + task.Head];
 
             prefetch_pipe.setup();
             auto prefetch = prefetch_pipe.waitBuffer(CONSUMER_A, shared.Tiles.Prefetch,
@@ -59,7 +59,8 @@ produce_packed_summary(const TmaSummarizationKernelArgs &args, LoadPipe &load_pi
             if (query_lse) {
                 kt::warp::load_async(vectors.qlse, args.QLseVec,
                                      {0, 0, 0, int(task.metadata)+task.QStart});
-            } else {
+            }
+            if (query_lse != 1) {
                 load_key_vector_async(vectors.preflight_k[0].klse, args.KLseVec,
                                      {0, 0, 0, int(task.metadata)});
             }
@@ -84,7 +85,7 @@ produce_packed_summary(const TmaSummarizationKernelArgs &args, LoadPipe &load_pi
                                             {0, task.begin+tile * CONFIG.WarpKSize, task.Head, 0},
                                             packet.getBarrier());
                     }
-                    if (!query_lse) {
+                    if (query_lse != 1) {
                         load_key_vector_async(meta.klse, args.KLseVec,
                                              {0, 0, 0, int(task.metadata)+tile * CONFIG.WarpKSize});
                     }

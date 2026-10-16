@@ -115,7 +115,7 @@ __global__ __launch_bounds__(384,1) void dism_backward_qk_kernel(
                 }
                 gradient.reverse_roll<false>();
                 kt::rt_bf<K,Q> soft_gradient;
-                bool query_lse=args.score.direction[task.bh];
+                uint8_t query_lse=args.score.direction[task.bh];
                 float row_lse[4][2]{};
 #pragma unroll
                 for (int r=0;r<2;++r) {
@@ -135,7 +135,7 @@ __global__ __launch_bounds__(384,1) void dism_backward_qk_kernel(
                             tau_sum+=g;
                             soft[e]=g;
                             if (query_lse) row_lse[c][e]-=soft[e];
-                            if (!query_lse) key_lse[r]-=soft[e];
+                            if (query_lse != 1) key_lse[r]-=soft[e];
                         }
                         soft_gradient.tiles[0][c/2].data[r+2*(c&1)]=
                             __floats2bfloat162_rn(soft[0],soft[1]);

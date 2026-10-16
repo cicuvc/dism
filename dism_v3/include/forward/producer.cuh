@@ -20,7 +20,7 @@ __device__ __forceinline__ void produce(const ArgsT<FP32Output>& args, SharedT<F
         auto first = prefetch.waitBuffer(0, shared.tiles.prefetch, shared.metadata.prefetch);
         auto& tiles = first.template get<0>();
         auto& metadata = first.template get<1>();
-        bool query_lse = args.direction[task.batch * args.heads + task.head];
+        uint8_t query_lse = args.direction[task.batch * args.heads + task.head];
         if (leader) {
             shared.query_lse = query_lse;
             kt::tma::expect_bytes(first.getBarrier(), sizeof(QTile) + sizeof(SQTile));
@@ -48,7 +48,7 @@ __device__ __forceinline__ void produce(const ArgsT<FP32Output>& args, SharedT<F
                 kt::tma::load_async(kv.sk, args.sk, {task.batch, tile * WarpKSize, task.head, 0}, packet.getBarrier());
                 kt::tma::load_async(kv.v, args.v, {task.batch, tile * WarpKSize, task.head, 0}, packet.getBarrier());
             }
-            if (!query_lse) {
+            if (query_lse != 1) {
                 load_key_vector_async(meta.klse, args.k_lse, {task.batch, task.head, 0, tile * WarpKSize});
             }
             kt::warp::load_async_commit_group(packet.getBarrier());

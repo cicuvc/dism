@@ -85,6 +85,9 @@ class DismLM(nn.Module):
     def __init__(self, config, *, attention_type='hybrid'):
         super().__init__()
         self.config = config
+        if (getattr(config, 'qb_q_strength', 0.) or getattr(config, 'qb_k_strength', 0.)):
+            if config.direction_policy != 'true' or config.direction_antithetic:
+                raise ValueError('QB requires direction_policy=true and direction_antithetic=false')
         if config.loss_balance not in ('document', 'token'):
             raise ValueError('loss_balance must be document or token')
         self.document_balanced_loss = config.loss_balance == 'document'
@@ -120,6 +123,12 @@ class DismLM(nn.Module):
                         gqa_query_channels=getattr(config, "gqa_query_channels", 1),
                         kv_group_size=getattr(config, "kv_group_size", 1),
                         hard_tau_grad_scale=getattr(config, "hard_tau_grad_scale", 1.0),
+                        qb_q_strength=getattr(config, "qb_q_strength", 0.0),
+                        qb_k_strength=getattr(config, "qb_k_strength", 0.0),
+                        qb_iterations=getattr(config, "qb_iterations", 4),
+                        qb_update_interval=getattr(config, "qb_update_interval", 16),
+                        qb_samples=getattr(config, "qb_samples", 2048),
+                        qb_update_rate=getattr(config, "qb_update_rate", 0.1),
                         vocab_transvq=getattr(config, "vocab_transvq", False),
                         vocab_transvq_lite=getattr(config, "vocab_transvq_lite", False),
                         vocab_transvq_map=getattr(config, "vocab_transvq_map", "linear_attn"),
@@ -245,6 +254,8 @@ class DismLM(nn.Module):
                     initialized_tables.add(id(table))
             if getattr(attn, "gqa_query_channels", 1) == 2:
                 attn.gqa_mix.fill_(0.5)
+            if getattr(attn, "qb", None) is not None:
+                attn.qb.reset_parameters()
             attn.log_sel_tau.uniform_(-4, 4)
             attn.norm.weight.fill_(1)
             if hasattr(attn, "init_gdn_parameters"):
@@ -373,11 +384,15 @@ class DismLM(nn.Module):
         return optimizer
 
     def forward(self, input_ids, targets=None, *, cu_seqlens=None, segment_ids=None, loss_reduction='mean', hard_mode=None, paired_counter=None, direction_flip=False):
+        if direction_flip and (getattr(self.config, 'qb_q_strength', 0.) or getattr(self.config, 'qb_k_strength', 0.)):
+            raise ValueError('QB does not support direction_flip')
         batch, length = input_ids.shape
         if length > self.config.sequence_len or cu_seqlens is None:
             raise ValueError('DISM nanochat adapter requires packed varlen metadata and bounded context')
         if self.config.hard_granularity != 'sequence':
             raise ValueError('CUDA DISM supports only sequence-level hard flags')
+        qb_valid_mask = ((targets >= 0).reshape(1, -1) if targets is not None and
+                         (getattr(self.config, 'qb_q_strength', 0.) or getattr(self.config, 'qb_k_strength', 0.)) else None)
         with torch.autocast('cuda', dtype=torch.bfloat16):
             # One owned identity per forward: FLA may cache chunk metadata
             # across layers, but must not reuse it after an in-place loader
@@ -433,12 +448,12 @@ class DismLM(nn.Module):
                     x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
                               hard=hard, direction=direction, use_cache=False, v_first=v_first,
                               vocab_temperature=self.vocab_temperature, conv_seq_idx=conv_seq_idx,
-                              direction_true=fixed_true, _share_branch_boundaries=True)
+                              direction_true=fixed_true, _share_branch_boundaries=True, qb_valid_mask=qb_valid_mask)
                 else:
                     x = layer(x, cu_seqlens=cu_seqlens, max_seqlen=self.config.sequence_len,
                               hard=hard, direction=direction, use_cache=False,
                               vocab_temperature=self.vocab_temperature, conv_seq_idx=conv_seq_idx,
-                              direction_true=fixed_true, _share_branch_boundaries=True)
+                              direction_true=fixed_true, _share_branch_boundaries=True, qb_valid_mask=qb_valid_mask)
             x = self.norm(x).to(torch.bfloat16)
             if targets is not None and loss_reduction == 'reinforce':
                 # Optionally-sampled DISM path: differentiable mean NLL plus a

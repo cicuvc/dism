@@ -41,7 +41,7 @@ __global__ __launch_bounds__(384, 1) void varlen_forward_kernel(
             kt::warp::rv_maps::zero(bias);
             prefetch.setup();
             auto first = prefetch.waitBuffer(2, shared.tiles.prefetch, shared.metadata.prefetch);
-            bool query_lse = DirectionTrue || shared.query_lse;
+            uint8_t query_lse = DirectionTrue ? 1 : shared.query_lse;
             auto& meta = first.template get<1>();
             kt::group<8>::load(query, first.template get<0>().q);
             kt::group<8>::load(soft_query, first.template get<0>().sq);

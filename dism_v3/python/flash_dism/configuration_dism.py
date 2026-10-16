@@ -15,6 +15,7 @@ class DismConfig(PretrainedConfig):
                  gqa_query_channels: int = 1, vocab_transvq=False,
                  kv_group_size: int = 1,
                  hard_tau_grad_scale: float = 1.0,
+                 qb_q_strength=0.0, qb_k_strength=0.0, qb_iterations=4, qb_update_interval=16, qb_samples=2048, qb_update_rate=0.1,
                  vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
                  intermediate_size=None, hidden_ratio=4., norm_eps=1e-6,
@@ -51,6 +52,15 @@ class DismConfig(PretrainedConfig):
         self.soft_k_l2_norm = bool(soft_k_l2_norm)
         self.value_residual = bool(value_residual)
         self.vocab_temperature = float(vocab_temperature)
+        from .quantile_balance import validate_qb
+        validate_qb(qb_q_strength, qb_k_strength, qb_iterations, qb_update_interval, qb_samples, qb_update_rate)
+        self.qb_q_strength = qb_q_strength
+        self.qb_k_strength = qb_k_strength
+        self.qb_iterations = qb_iterations
+        self.qb_update_interval = qb_update_interval
+        self.qb_samples = qb_samples
+        self.qb_update_rate = qb_update_rate
+
         if type(gqa_query_channels) is not int or gqa_query_channels not in (1, 2):
             raise ValueError("gqa_query_channels must be 1 or 2")
         self.gqa_query_channels = gqa_query_channels

@@ -298,9 +298,9 @@ def voc_forward(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundaries,
     return entry(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward)
 
 
-@torch.library.custom_op('flash_dism::core_forward_hybrid_v1', mutates_args=())
+@torch.library.custom_op('flash_dism::core_forward_hybrid_v2', mutates_args=())
 def _core_forward(raw: list[torch.Tensor], table: Optional[torch.Tensor], ctas: int,
-                  absorbed: bool, need_backward: bool) -> list[torch.Tensor]:
+                  absorbed: bool, need_backward: bool, qb_key_bias: bool = False) -> list[torch.Tensor]:
     from .hard_training import default_hard_planner, layout_from_table
     from .hard_forward import forward_hard
     q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau = raw
@@ -309,14 +309,14 @@ def _core_forward(raw: list[torch.Tensor], table: Optional[torch.Tensor], ctas: 
     iq_c,ik_c=iq.to(torch.int32).contiguous(),ik.to(torch.int32).contiguous()
     ticket = (default_hard_planner(q.device).submit(iq_c,ik_c,hard,tau,layout=pack)
               if need_backward and q.shape[1] else None)
-    out,norm,state = cu.core_forward(raw,table,ctas,True,False,absorbed)
+    out,norm,state = cu.core_forward(raw,table,ctas,True,False,absorbed,False,qb_key_bias)
     combined = out+forward_hard(sq.contiguous(),sk.contiguous(),v.contiguous(),iq_c,ik_c,
                                 hard.contiguous(),tau.contiguous(),layout=pack,ctas=ctas)[0] if q.shape[1] else out.clone()
     return [combined,state['vertical'],state['operands'][12],out,norm,cu.hold_training_plan(ticket)]
 
 
 @_core_forward.register_fake
-def _core_fake(raw,table,ctas,absorbed,need_backward):
+def _core_fake(raw,table,ctas,absorbed,need_backward,qb_key_bias=False):
     q,v=raw[0],raw[4]
     b,n,h,_=q.shape
     if table is None:
@@ -330,11 +330,13 @@ def _core_fake(raw,table,ctas,absorbed,need_backward):
             q.new_empty((b,h,n),dtype=torch.float32),torch.empty(1,device='cpu',dtype=torch.int64)]
 
 
-@torch.library.custom_op('flash_dism::core_backward_hybrid_v1', mutates_args=())
+@torch.library.custom_op('flash_dism::core_backward_hybrid_v2', mutates_args=())
 def _core_backward(raw: list[torch.Tensor], saved: list[torch.Tensor], table: Optional[torch.Tensor],
-                   ctas: int, absorbed: bool, dout: torch.Tensor) -> list[torch.Tensor]:
+                   ctas: int, absorbed: bool, dout: torch.Tensor, qb_key_bias: bool = False) -> list[torch.Tensor]:
     _,vertical,boundary,out,norm,handle=saved
     prepared=list(cu.prepare_operands(raw,table is not None,absorbed))
+    if qb_key_bias:
+        prepared[10].fill_(2)
     prepared.append(boundary)
     dout=dout.to(torch.bfloat16).contiguous()
     g,_=cu.core_backward(prepared,vertical,out,norm.flatten() if table is not None else norm,
@@ -353,12 +355,12 @@ def _core_backward(raw: list[torch.Tensor], saved: list[torch.Tensor], table: Op
 
 
 @_core_backward.register_fake
-def _core_backward_fake(raw,saved,table,ctas,absorbed,dout):
+def _core_backward_fake(raw,saved,table,ctas,absorbed,dout,qb_key_bias=False):
     return [torch.empty_like(raw[i]) for i in (0,1,2,3,4,5,6,11)]
 
 
 def _core_setup(ctx,inputs,output):
-    raw,table,ctx.ctas,ctx.absorbed,_=inputs
+    raw,table,ctx.ctas,ctx.absorbed,_,ctx.qb_key_bias=inputs
     ctx.packed=table is not None
     ctx.save_for_backward(*raw,*output,*([table] if ctx.packed else []))
     ctx.mark_non_differentiable(*output[1:])
@@ -367,13 +369,13 @@ def _core_setup(ctx,inputs,output):
 def _core_autograd(ctx,grads):
     saved=ctx.saved_tensors
     g=_core_backward(list(saved[:12]),list(saved[12:18]),saved[18] if ctx.packed else None,
-                      ctx.ctas,ctx.absorbed,grads[0])
-    return ([*g[:7],None,None,None,None,g[7]],None,None,None,None)
+                      ctx.ctas,ctx.absorbed,grads[0],ctx.qb_key_bias)
+    return ([*g[:7],None,None,None,None,g[7]],None,None,None,None,None)[:len(ctx.needs_input_grad)]
 
 
 _core_forward.register_autograd(_core_autograd,setup_context=_core_setup)
 
 
-def core_forward(raw,table=None,ctas=0,absorbed=False):
+def core_forward(raw,table=None,ctas=0,absorbed=False,*,qb_key_bias=False):
     need_backward=torch.is_grad_enabled() and any(raw[i].requires_grad for i in (0,1,2,3,4,5,6,11))
-    return _core_forward(list(raw),table,ctas,absorbed,need_backward)[0]
+    return _core_forward(list(raw),table,ctas,absorbed,need_backward,qb_key_bias)[0]

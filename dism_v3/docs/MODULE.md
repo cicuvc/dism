@@ -257,3 +257,66 @@ separate unequal-length documents for outputs, input and parameter gradients,
 empty documents, exact cross-document output/gradient isolation, generator
 replay, and unaligned-length/max-length rejection. Core oracle tests remain
 separate and unchanged.
+
+## Opt-in quantile balancing (fixed true direction)
+
+For the optimization and soft/hard derivation, see
+[QUANTILE_BALANCING.md](QUANTILE_BALANCING.md).
+
+Set `qb_q_strength` and `qb_k_strength` independently in the nanochat ModelSpec
+`config` (or `DismConfig` / `DismAttention`). Each is in `[0,1]`: zero disables
+that side; both zero retain the original path and state-dict schema. Example:
+
+```json
+{
+  "direction_policy": "true",
+  "direction_antithetic": false,
+  "qb_q_strength": 0.25,
+  "qb_k_strength": 0.5,
+  "qb_iterations": 4,
+  "qb_update_interval": 16,
+  "qb_samples": 2048,
+  "qb_update_rate": 0.1
+}
+```
+
+The other four values shown are defaults. Prices are per-layer/head/code,
+non-parameter FP32 buffers in logit units: `beta * dot - strength * price`.
+`qb_update_interval` counts gradient-enabled training forwards/microbatches,
+not optimizer steps. After each interval, detached current scores warm-start
+`qb_iterations` quantile coordinate updates; `qb_update_rate` blends the fitted
+prices into the saved prices. Each rank samples `qb_samples` evenly spaced
+valid positions (repeats when fewer positions are available), and all ranks
+concatenate their samples before fitting. Nanochat excludes `targets < 0`;
+callers without targets use all input positions, or may pass `qb_valid_mask`.
+Empty ranks contribute no samples. Finite iterations and ties do not guarantee
+exact equal argmax counts, and equal hard counts need not imply equal soft mass.
+
+A forward uses an owned snapshot of the **previous** prices for both soft and
+hard selection. Updates affect subsequent forwards, not the current sequence;
+backward does not refit or update prices. `eval()` freezes all QB state.
+The soft true-direction score includes the required extra key bias
+`-E_{priced K}[Q price]`, including its derivative through K probabilities.
+Tau is absorbed in Q LSE once; the key bias does not absorb another tau.
+See [SOFT_HARD_RELAXATION.md §53](SOFT_HARD_RELAXATION.md#53-fixed-true-qb-训练实现2026-10-16).
+
+Enabled QB requires `direction_policy="true"`, no antithetic direction, and no
+`direction_flip`. The low-level attention caller must explicitly provide
+`direction_true=True`; supplied direction tensors must also be all true.
+Unsupported modes fail rather than fall back to unpriced execution. This first
+implementation supports aligned fixed/packed CUDA training and evaluation,
+but rejects cached/unaligned Torch decoding, categorical REINFORCE, and
+`gqa_query_channels > 1`. Shared-KV groups retain identical K prices within a
+group. The QB interpolation/update intentionally forms an eager graph break;
+use `torch.compile(..., fullgraph=False)` as in the hybrid training loop.
+Interpolation uses bounded token chunks and recomputes probabilities in
+backward. It is not yet a fused QB interpolation kernel or a throughput claim.
+Activation-checkpoint recomputation of the stateful QB forward is unsupported;
+the current nanochat training path does not use it.
+
+QB checkpoints persist `attn.qb.{q_price,k_price,forward_count,update_count}`.
+Strict resume must restore these buffers and the existing RNG, schedule,
+optimizer and dataloader states. An old checkpoint has no QB state; enabling
+QB on it is an explicit model-spec/state migration, **not** an automatic exact
+resume. The training entry continues to reject changed specs on resume.
+No new parameters or optimizer groups are introduced.

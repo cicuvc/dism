@@ -118,7 +118,8 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
 
     Runs an eager eval-mode forward through the embedding and blocks only (the
     fused LM head is skipped). Selection for the ``q`` codebook is
-    ``argmax(softmax(q @ q_vocab.T))``; likewise for ``k``. Returns
+    ``argmax(softmax(q @ q_vocab.T))``; likewise for ``k``. Enabled QB instead
+    uses the current beta and frozen side-specific prices. Returns
     ``{layer_index: {"q": stats, "k": stats}}`` with ``counts`` a CPU list of
     vocab-size selection frequencies plus entropy (normalized), max_share and
     coverage. Traversal follows the all-hard model evaluation path, including
@@ -184,6 +185,14 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                     for start in range(0, length, chunk_size):
                         stop = min(start + chunk_size, length)
                         scores = torch.einsum("bnhd,hvd->bnhv", vec[:, start:stop], table.float())
+                        qb = getattr(attn, 'qb', None)
+                        if qb is not None:
+                            price = qb.q_price if tag == 'q' else qb.k_price[::attn.kv_group_size]
+                            strength = qb.q_strength if tag == 'q' else qb.k_strength
+                            with torch.autocast('cuda', enabled=False):
+                                scores = model.vocab_temperature * torch.einsum(
+                                    'bnhd,hvd->bnhv', vec[:, start:stop].float(),
+                                    table.to(torch.bfloat16).float()) - strength*price
                         probs = torch.softmax(scores, dim=-1).reshape(-1, vocab_size)
                         idx = probs.argmax(-1).reshape(-1, rows)
                         for head in range(rows):
@@ -210,7 +219,8 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                 hidden = layer(hidden, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen,
                                hard=hard, direction=direction, use_cache=False,
                                v_first=v_first if value_residual else None,
-                               vocab_temperature=model.vocab_temperature, conv_seq_idx=conv_seq_idx)
+                               vocab_temperature=model.vocab_temperature, conv_seq_idx=conv_seq_idx,
+                               direction_true=getattr(attn, 'qb', None) is not None)
     finally:
         model.train(was_training)
     return results

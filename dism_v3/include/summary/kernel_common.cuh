@@ -11,11 +11,13 @@ namespace DISM_VARIANT {
 // LOG2E is applied only after MMA, never to the seed alone.
 template <class Score, class QBias, class KBias>
 __device__ __forceinline__ void initialize_score(Score &score, const QBias &q_bias,
-                                                 const KBias &k_bias, bool query_lse) {
+                                                 const KBias &k_bias, uint8_t query_lse) {
     if (query_lse)
         kt::warp::rt_maps::add_row(score, {0.f}, q_bias);
     else
         kt::warp::rt_maps::add_col(score, {0.f}, k_bias);
+    // Internal mode 2: true direction with an additional key price expectation.
+    if (query_lse == 2) kt::warp::rt_maps::add_col(score, score, k_bias);
 }
 
 // Soft-only conversion. Hard training rows are skipped at the task boundary.
@@ -74,7 +76,7 @@ produce_summary_tasks(const TmaSummarizationKernelArgs &args, LoadPipe &load_pip
 #pragma unroll 1
         while (scheduler.getNextTask(task)) {
             if (args.hard_flags[task.Batch * args.Head + task.Head]) continue;
-            bool query_lse = args.direction[task.Batch * args.Head + task.Head];
+            uint8_t query_lse = args.direction[task.Batch * args.Head + task.Head];
 
             prefetch_pipe.setup();
             auto prefetch = prefetch_pipe.waitBuffer(CONSUMER_A, shared.Tiles.Prefetch,
@@ -95,7 +97,8 @@ produce_summary_tasks(const TmaSummarizationKernelArgs &args, LoadPipe &load_pip
             if (query_lse) {
                 kt::warp::load_async(vectors.qlse, args.QLseVec,
                                      {task.Batch, task.Head, 0, task.QStart});
-            } else {
+            }
+            if (query_lse != 1) {
                 load_key_vector_async(vectors.preflight_k[0].klse, args.KLseVec,
                                      {task.Batch, task.Head, 0, 0});
             }
@@ -120,7 +123,7 @@ produce_summary_tasks(const TmaSummarizationKernelArgs &args, LoadPipe &load_pip
                                             {task.Batch, tile * CONFIG.WarpKSize, task.Head, 0},
                                             packet.getBarrier());
                     }
-                    if (!query_lse) {
+                    if (query_lse != 1) {
                         load_key_vector_async(meta.klse, args.KLseVec,
                                              {task.Batch, task.Head, 0, tile * CONFIG.WarpKSize});
                     }
