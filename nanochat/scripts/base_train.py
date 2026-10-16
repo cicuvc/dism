@@ -987,6 +987,15 @@ while True:
                     log_data[f"{prefix}_coverage_pooled/layer{layer_index:02d}"] = stats.get("coverage_pooled", stats["coverage"])
                     for head_index, head_coverage in enumerate(stats.get("coverage_per_head", ())):
                         log_data[f"{prefix}_coverage_head{head_index}/layer{layer_index:02d}"] = head_coverage
+                    # Hard-assignment usage and, when quantile balancing is on,
+                    # the price magnitude. These are the quantities the QB
+                    # derivation says to watch; dual decrease alone is not
+                    # evidence that usage was equalised.
+                    for extra in ("active_codes", "usage_entropy", "effective_symbols",
+                                  "max_load", "capacity_residual",
+                                  "price_abs_mean", "price_std"):
+                        if extra in stats:
+                            log_data[f"{prefix}_{extra}/layer{layer_index:02d}"] = stats[extra]
                     counts = np.asarray(stats["counts"], dtype=np.float64)
                     log_data[f"{prefix}_hist/layer{layer_index:02d}"] = wandb.Histogram(
                         np_histogram=(counts, np.arange(counts.size + 1)))

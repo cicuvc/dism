@@ -213,6 +213,25 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                         "entropy": entropy_sum / length / torch.log(torch.tensor(float(vocab_size))).item(),
                         "max_share": max_sum / length,
                     }
+                    # Usage statistics of the *hard* (argmax) assignment, which is
+                    # what a capacity target actually constrains. max_share above
+                    # is the soft probability; max_load is the count share, and
+                    # capacity_residual is the worst per-code deviation from the
+                    # uniform capacity 1/V.
+                    share = counts / counts.sum(1, keepdim=True).clamp_min(1.0)
+                    usage_h = -(share * (share + 1e-12).log()).sum(1)
+                    norm_log = torch.log(torch.tensor(float(vocab_size),
+                                                      device=counts.device, dtype=counts.dtype))
+                    stats[tag]["active_codes"] = float(used.float().sum(1).mean())
+                    stats[tag]["usage_entropy"] = float((usage_h / norm_log).mean())
+                    stats[tag]["effective_symbols"] = float(usage_h.exp().mean())
+                    stats[tag]["max_load"] = float(share.max(1).values.mean())
+                    stats[tag]["capacity_residual"] = float(
+                        (share - 1.0 / vocab_size).abs().max(1).values.mean())
+                    if qb is not None:
+                        price = qb.q_price if tag == 'q' else qb.k_price[::attn.kv_group_size]
+                        stats[tag]["price_abs_mean"] = float(price.abs().mean())
+                        stats[tag]["price_std"] = float(price.std())
                 results[index] = stats
                 hard = torch.ones((input_ids.shape[0], heads), dtype=torch.bool, device=device)
                 direction = torch.ones((1, heads), dtype=torch.bool, device=device)
