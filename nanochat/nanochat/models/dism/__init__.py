@@ -60,6 +60,15 @@ class DismConfig:
     # NIAH, so this knob trades "tau is trained by both paths" against "tau is
     # trained by the soft path only".
     hard_tau_grad_scale: float = 1.0
+    # rtau release schedule. While the retrieval circuit is still forming, a
+    # large rtau can winner-take-all onto sparse accidental matches and starve
+    # its own gradient; once it has formed, a larger rtau raises the signal by
+    # suppressing dilution from the many short matches. tau_scale ramps from
+    # tau_schedule_floor to 1.0 over the first tau_schedule_fraction of the run
+    # (0 disables the schedule). Applied to training and eval alike, so the
+    # final steps are the deployed value.
+    tau_schedule_fraction: float = 0.0
+    tau_schedule_floor: float = 0.0
     # QB is opt-in; each side uses zero strength to disable its price.
     qb_q_strength: float = 0.0
     qb_k_strength: float = 0.0

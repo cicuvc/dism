@@ -165,6 +165,8 @@ class DismAttention(nn.Module):
             raise ValueError("vocab_temperature must be finite and positive")
         # Host schedule value, not a parameter or device buffer.
         self.vocab_temperature = float(vocab_temperature)
+        # Host-only multiplier applied to rtau; 1.0 is the deployed value.
+        self.tau_scale = 1.0
 
         if type(gqa_query_channels) is not int or gqa_query_channels not in (1, 2):
             raise ValueError("gqa_query_channels must be 1 or 2")
@@ -494,6 +496,8 @@ class DismAttention(nn.Module):
             # query side keeps an independent codebook per query head.
             ek = self._expand_gqa(ek, 0, self.kv_group_size)
         tau = F.softplus(self.log_sel_tau.float()).contiguous()
+        if self.tau_scale != 1.0:
+            tau = tau * self.tau_scale
         if self.hard_tau_grad_scale != 1.0 and hard is not None:
             # Per (row, head) hard flags; rtau is one scalar per head, so the
             # flags must agree across rows for this to be well defined.

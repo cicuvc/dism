@@ -309,6 +309,17 @@ class DismLM(nn.Module):
         beta_start = float(getattr(self.config, 'vocab_temperature_start', 1.0))
         beta_end = float(getattr(self.config, 'vocab_temperature_end', 1.0))
         self.vocab_temperature = beta_start + 0.5 * (beta_end - beta_start) * (1.0 - math.cos(math.pi * progress))
+        # rtau release schedule (see DismConfig): hold rtau small while the
+        # retrieval circuit forms, then let it reach its trained value.
+        frac = float(getattr(self.config, 'tau_schedule_fraction', 0.0) or 0.0)
+        floor = float(getattr(self.config, 'tau_schedule_floor', 0.0) or 0.0)
+        tau_scale = (floor + (1.0 - floor) * min(1.0, progress / frac)) if frac > 0.0 else 1.0
+        if tau_scale != 1.0 or getattr(self, '_tau_scale_last', None) != 1.0:
+            for layer in self.layers:
+                attn = getattr(layer, 'attn', None)
+                if attn is not None and hasattr(attn, 'tau_scale'):
+                    attn.tau_scale = tau_scale
+        self._tau_scale_last = tau_scale
 
     @torch.no_grad()
     def set_vocab_temperature(self, value):
