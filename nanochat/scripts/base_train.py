@@ -50,6 +50,7 @@ from nanochat.tokenizer import (
 )
 from nanochat.checkpoint_manager import save_checkpoint, load_checkpoint, load_rank_training_state
 from nanochat.loss_eval import evaluate_bpb, evaluate_hard_soft
+from nanochat.niah_eval import ShortNIAH, DEFAULT_DATA as NIAH_DEFAULT_DATA
 from nanochat.metrics import (
     register_residual_rms_probe,
     remove_probe,
@@ -110,6 +111,13 @@ parser.add_argument("--resume-from-step", type=int, default=-1, help="resume tra
 parser.add_argument("--eval-device-batch-size", type=int, default=None, help="Validation microbatch; defaults to training microbatch")
 parser.add_argument("--eval-every", type=int, default=250, help="evaluate val bpb every N steps (-1 = disable)")
 parser.add_argument("--eval-tokens", type=int, default=80*524288, help="number of tokens to evaluate val loss on")
+parser.add_argument("--niah-eval", action=argparse.BooleanOptionalAction, default=True,
+                    help="short paired local NIAH probe at validation steps (missing data warns and skips)")
+parser.add_argument("--niah-data", default=NIAH_DEFAULT_DATA, help="local PG19 Parquet file; never downloaded")
+parser.add_argument("--niah-contexts", type=int, nargs="+", default=[8192])
+parser.add_argument("--niah-depths", type=float, nargs="+", default=[.05,.5,.95])
+parser.add_argument("--niah-trials", type=int, default=2, help="paired trials per context/depth")
+parser.add_argument("--niah-seed", type=int, default=1234, help="private probe RNG seed; never seeds training RNG")
 parser.add_argument("--core-metric-every", type=int, default=2000, help="evaluate CORE metric every N steps (-1 = disable)")
 parser.add_argument("--core-metric-max-per-task", type=int, default=500, help="examples per task for CORE metric")
 parser.add_argument("--sample-every", type=int, default=2000, help="sample from model every N steps (-1 = disable)")
@@ -128,6 +136,8 @@ if args.eval_device_batch_size is None:
 if args.eval_device_batch_size <= 0:
     raise ValueError("eval-device-batch-size must be positive")
 user_config = vars(args).copy()  # for logging
+niah_evaluator = (ShortNIAH(args.niah_data, contexts=args.niah_contexts, depths=args.niah_depths,
+                            trials=args.niah_trials, seed=args.niah_seed) if args.niah_eval else None)
 # -----------------------------------------------------------------------------
 
 
@@ -743,6 +753,18 @@ while True:
                     handle.write(json.dumps(dict(step=step, **dual_metrics)) + "\n")
             else:
                 val_bpb = evaluate_bpb(eval_model, val_loader, eval_steps, token_bytes)
+        niah_metrics = {}
+        if niah_evaluator is not None:
+            # Independent local inputs, eager unwrapped model, rank-0 execution.
+            # This helper cannot access train_loader, val_loader or the prefetched batch.
+            with disable_fp8(orig_model):
+                niah_result = niah_evaluator.evaluate_distributed(orig_model, tokenizer)
+            niah_metrics = niah_result['metrics']
+            if master_process:
+                record = dict(step=step, **niah_result)
+                print0("NIAH_VALIDATION " + json.dumps(record))
+                with open(os.path.join(base_dir, "niah_validation.jsonl"), "a") as handle:
+                    handle.write(json.dumps(record) + "\n")
         log_cuda_memory("after_validation", step)
         print0(f"Step {step:05d} | Validation bpb: {val_bpb:.6f}")
         if val_bpb < min_val_bpb:
@@ -752,6 +774,7 @@ while True:
             "total_training_flops": flops_so_far,
             "total_training_time": total_training_time,
             "val/bpb": val_bpb,
+            **niah_metrics,
             **({"val/"+key: value for key, value in dual_metrics.items()} if dual_metrics else {}),
         })
         model.train()

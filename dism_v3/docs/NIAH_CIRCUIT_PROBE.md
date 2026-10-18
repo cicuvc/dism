@@ -1,5 +1,7 @@
 # NIAH long-range circuit probe — handoff
 
+训练 eval step 的轻量配对指标、配置与状态隔离见 [NIAH_EVAL.md](NIAH_EVAL.md)。
+
 Status: first P1/P2/P3 pass and L8/L10 head ablations completed 2026-10-16.
 Results, paired absent controls, implementation corrections and limitations:
 `SOFT_HARD_RELAXATION.md` §47. Local symbol streams: §48; single-query
