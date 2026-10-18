@@ -146,10 +146,11 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
             value_residual = getattr(config, "value_residual", False)
             for index, layer in enumerate(model.layers):
                 attn = layer.attn
-                if getattr(attn, "is_pure_gdn", False):
+                if getattr(attn, "is_pure_mixer", False):
                     if value_residual and v_first is None:
-                        from nanochat.models.dism.model import _gdn_value_first
-                        v_first = _gdn_value_first(attn, hidden, cu_seqlens, max_seqlen, conv_seq_idx)
+                        from nanochat.models.dism.model import _mixer_value_first
+                        v_first = _mixer_value_first(
+                            attn, hidden, cu_seqlens, max_seqlen, conv_seq_idx)
                         hidden = layer(hidden, cu_seqlens=cu_seqlens,
                                        max_seqlen=max_seqlen, use_cache=False, conv_seq_idx=conv_seq_idx)
                     else:

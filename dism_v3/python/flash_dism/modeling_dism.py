@@ -13,6 +13,7 @@ from .module import DismAttention
 from .hybrid import DismSwaAttention
 from .hybrid_gdn import DismGdnAttention
 from .pure_gdn import PureGdnAttention
+from .sliding_delta import DismSlidingDeltaAttention, PureSlidingDeltaAttention
 from .cache import DismCache
 from .kernels.conv1d import CausalShortConv1d
 from .kernels.linear_rmsnorm_rope import FusedLinearRMSNormRoPE
@@ -36,7 +37,9 @@ class DismBlock(nn.Module):
         self.mlp_norm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
         self.post_norm = getattr(config, 'post_norm', False)
         attention = {'hybrid': DismSwaAttention, 'dism': DismAttention,
-                     'hybrid_gdn': DismGdnAttention, 'pure_gdn': PureGdnAttention}[config.attention_type]
+                     'hybrid_gdn': DismGdnAttention, 'pure_gdn': PureGdnAttention,
+                     'hybrid_sdn': DismSlidingDeltaAttention,
+                     'pure_sdn': PureSlidingDeltaAttention}[config.attention_type]
         options = dict(head_dim=config.head_dim, value_dim=config.value_dim,
                        readout_dim=config.readout_dim, vocab_size=config.qk_vocab_size,
                        conv_size=config.conv_size, rope_theta=config.rope_theta,
@@ -60,8 +63,10 @@ class DismBlock(nn.Module):
                        vocab_transvq_lite=getattr(config, 'vocab_transvq_lite', False),
                        vocab_transvq_map=getattr(config, 'vocab_transvq_map', 'linear_attn'),
                        vocab_transvq_rank=getattr(config, 'vocab_transvq_rank', 4))
-        if config.attention_type == 'hybrid':
+        if config.attention_type in ('hybrid', 'hybrid_sdn', 'pure_sdn'):
             options['window_size'] = config.window_size
+        if config.attention_type in ('hybrid_sdn', 'pure_sdn'):
+            options['sliding_delta_chunk_size'] = config.sliding_delta_chunk_size
         self.attn = attention(config.hidden_size, config.num_heads, **options)
         self.mlp = DismMLP(config)
 

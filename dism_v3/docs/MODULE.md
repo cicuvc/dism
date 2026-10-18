@@ -258,6 +258,13 @@ empty documents, exact cross-document output/gradient isolation, generator
 replay, and unaligned-length/max-length rejection. Core oracle tests remain
 separate and unchanged.
 
+## Opt-in sliding DeltaNet mixer
+
+Set `recurrent_mixer="sliding_delta"` in the nanochat `DismConfig` to replace
+the gated delta rule in pure recurrent and DISM-hybrid layers. The default
+`"gdn"` path and existing checkpoints are unchanged. See
+[SLIDING_DELTA_NET.md](SLIDING_DELTA_NET.md).
+
 ## Opt-in quantile balancing (fixed true direction)
 
 For the optimization and soft/hard derivation, see

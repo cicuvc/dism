@@ -21,12 +21,14 @@ class DismConfig(PretrainedConfig):
                  qb_q_strength=0.0, qb_k_strength=0.0, qb_iterations=4, qb_update_interval=16, qb_samples=2048, qb_update_rate=0.1,
                  vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
+                 sliding_delta_chunk_size=32,
                  intermediate_size=None, hidden_ratio=4., norm_eps=1e-6,
                  initializer_range=.02, use_cache=True, fuse_cross_entropy=True,
                  ce_softcap=30., ce_chunk_size=None, ignore_index=-100,
                  pad_token_id=None, bos_token_id=50256, eos_token_id=50256,
                  tie_word_embeddings=False, post_norm=False, **kwargs):
-        if attention_type not in ('hybrid', 'dism', 'hybrid_gdn', 'pure_gdn'):
+        if attention_type not in ('hybrid', 'dism', 'hybrid_gdn', 'pure_gdn',
+                                  'hybrid_sdn', 'pure_sdn'):
             raise ValueError("unsupported v3 attention_type")
         if min(vocab_size, hidden_size, num_hidden_layers, num_heads) <= 0:
             raise ValueError('model dimensions must be positive')
@@ -86,6 +88,9 @@ class DismConfig(PretrainedConfig):
         self.vocab_transvq_lite = bool(vocab_transvq_lite)
         self.vocab_transvq_map = str(vocab_transvq_map)
         self.vocab_transvq_rank = int(vocab_transvq_rank)
+        if sliding_delta_chunk_size not in (16, 32, 64):
+            raise ValueError("sliding_delta_chunk_size must be 16, 32, or 64")
+        self.sliding_delta_chunk_size = sliding_delta_chunk_size
         self.intermediate_size = intermediate_size
         self.hidden_ratio = hidden_ratio
         self.norm_eps = norm_eps

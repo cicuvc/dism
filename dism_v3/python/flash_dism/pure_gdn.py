@@ -8,6 +8,7 @@ from .kernels.conv1d import CausalShortConv1d
 
 class PureGdnAttention(nn.Module):
     is_pure_gdn=True
+    is_pure_mixer=True
     gdn_raw=DismGdnAttention.gdn_raw
     init_gdn_parameters=DismGdnAttention.init_gdn_parameters
 

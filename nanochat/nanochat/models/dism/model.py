@@ -13,6 +13,7 @@ from flash_dism.kernels.linear_rmsnorm_rope import FusedLinearRMSNormRoPE
 from .conv import LinearShortConvSiLU, packed_conv_sequence_ids
 from flash_dism.kernels.fused_cross_entropy import fused_cross_entropy_unreduced
 from flash_dism.kernels.fused_ce_chunked import fused_ce_chunked, fused_ce_chunked_sum
+from fla.modules import ShortConvolution
 
 
 def packed_document_ce(hidden, weight, targets, cu_seqlens, max_seqlen, softcap,
@@ -29,10 +30,18 @@ def packed_document_ce(hidden, weight, targets, cu_seqlens, max_seqlen, softcap,
 
 
 @torch.compiler.disable
-def _gdn_value_first(attn, x, cu_seqlens, max_seqlen, conv_seq_idx=None):
-    """Value vector of the first GDN mixer, reused by later layers (value residual)."""
-    options = {'seq_idx': conv_seq_idx} if getattr(attn.gdn_v_conv, 'supports_seq_idx', False) else {}
-    return attn.gdn_v_conv(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, **options).unflatten(
+def _mixer_value_first(attn, x, cu_seqlens, max_seqlen, conv_seq_idx=None):
+    """Value vector of the first recurrent mixer, reused by later layers."""
+    if hasattr(attn, 'mixer_value_first'):
+        return attn.mixer_value_first(
+            x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen,
+            conv_seq_idx=conv_seq_idx)
+    conv = getattr(attn, 'gdn_v_conv', None)
+    if conv is None:
+        conv = attn.mixer_v_conv
+    options = ({'seq_idx': conv_seq_idx}
+               if getattr(conv, 'supports_seq_idx', False) else {})
+    return conv(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, **options).unflatten(
         -1, (attn.heads, attn.value_dim))
 
 
@@ -44,7 +53,10 @@ def _replace_convs_with_linear_fla(model, backend):
                 setattr(parent, name, LinearShortConvSiLU(
                     child.in_channels, child.out_channels, child.kernel_size, backend))
     for module in model.modules():
-        if getattr(module, "gdn_q_conv", None) is not None and getattr(module, "q_conv", None) is not None:
+        auxiliary_q_conv = getattr(module, "gdn_q_conv", None)
+        if auxiliary_q_conv is None:
+            auxiliary_q_conv = getattr(module, "sdn_q_conv", None)
+        if auxiliary_q_conv is not None and getattr(module, "q_conv", None) is not None:
             # DISM/GDN share the tied q/k input projection; compute it once if tied.
             module.share_qk_linear = True
 
@@ -85,6 +97,19 @@ class DismLM(nn.Module):
     def __init__(self, config, *, attention_type='hybrid'):
         super().__init__()
         self.config = config
+        recurrent_mixer = str(getattr(config, 'recurrent_mixer', 'gdn'))
+        if recurrent_mixer not in ('gdn', 'sliding_delta'):
+            raise ValueError("recurrent_mixer must be 'gdn' or 'sliding_delta'")
+        if recurrent_mixer == 'sliding_delta':
+            if attention_type == 'hybrid_gdn':
+                attention_type = 'hybrid_sdn'
+            elif attention_type == 'pure_gdn':
+                attention_type = 'pure_sdn'
+            else:
+                raise ValueError('sliding_delta requires the dism_gdn_hybrid architecture')
+            if getattr(config, 'gqa_query_channels', 1) != 1 or getattr(config, 'kv_group_size', 1) != 1:
+                raise NotImplementedError(
+                    'sliding_delta currently requires gqa_query_channels=1 and kv_group_size=1')
         if (getattr(config, 'qb_q_strength', 0.) or getattr(config, 'qb_k_strength', 0.)):
             if config.direction_policy != 'true' or config.direction_antithetic:
                 raise ValueError('QB requires direction_policy=true and direction_antithetic=false')
@@ -139,10 +164,12 @@ class DismLM(nn.Module):
         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
         if getattr(config, 'layer_layout', ''):
             # Dedicated-layer layout: no layer mixes DISM and GDN internally.
-            spec = {'g': 'pure_gdn', 'd': 'dism', 'h': 'hybrid_gdn'}
+            pure_type = 'pure_sdn' if recurrent_mixer == 'sliding_delta' else 'pure_gdn'
+            hybrid_type = 'hybrid_sdn' if recurrent_mixer == 'sliding_delta' else 'hybrid_gdn'
+            spec = {'g': pure_type, 'd': 'dism', 'h': hybrid_type}
             layout = str(config.layer_layout)
-            if attention_type != 'hybrid_gdn':
-                raise ValueError('layer_layout requires the hybrid_gdn architecture')
+            if attention_type not in ('hybrid_gdn', 'hybrid_sdn'):
+                raise ValueError('layer_layout requires the DISM hybrid architecture')
             if len(layout) != config.n_layer or any(ch not in spec for ch in layout):
                 raise ValueError('layer_layout must have n_layer entries drawn from g/d/h')
             blocks = []
@@ -154,19 +181,20 @@ class DismLM(nn.Module):
         elif config.alternating_gdn or config.rear_half_dism:
             if config.alternating_gdn and config.rear_half_dism:
                 raise ValueError('Choose only one mixed-layer layout')
-            if attention_type != 'hybrid_gdn' or config.n_layer%2:
+            if attention_type not in ('hybrid_gdn', 'hybrid_sdn') or config.n_layer%2:
                 raise ValueError('Alternating GDN requires an even number of GDN/hybrid layers')
             blocks=[]
             for i in range(config.n_layer):
                 layer_config=copy.copy(c)
                 if (i < config.n_layer//2 if config.rear_half_dism else i%2==0):
-                    layer_config.attention_type='pure_gdn'
+                    layer_config.attention_type=('pure_sdn' if recurrent_mixer == 'sliding_delta'
+                                                 else 'pure_gdn')
                 blocks.append(DismBlock(layer_config,i))
             self.layers=nn.ModuleList(blocks)
         else:
             self.layers = nn.ModuleList(DismBlock(c, i) for i in range(config.n_layer))
-        if config.value_residual and not getattr(self.layers[0].attn, "is_pure_gdn", False):
-            raise ValueError('value_residual requires a GDN-only first mixer layer')
+        if config.value_residual and not getattr(self.layers[0].attn, "is_pure_mixer", False):
+            raise ValueError('value_residual requires a pure recurrent first mixer layer')
         if config.conv_impl not in ("fused", "linear_fla"):
             raise ValueError(f"unsupported conv_impl {config.conv_impl!r}")
         if config.conv_impl == "linear_fla":
@@ -184,7 +212,7 @@ class DismLM(nn.Module):
         first_hybrid=None
         for i, layer in enumerate(self.layers):
             attn = layer.attn
-            if getattr(attn,"is_pure_gdn",False):continue
+            if getattr(attn,"is_pure_mixer",False):continue
             if first_hybrid is None:first_hybrid=attn
             if hasattr(attn, "tie_branch_projections"):
                 attn.tie_branch_projections()
@@ -220,6 +248,8 @@ class DismLM(nn.Module):
     def init_weights(self):
         initialized_weights = set()
         for m in self.modules():
+            if isinstance(m, ShortConvolution):
+                m.reset_parameters()
             if isinstance(m, (nn.Linear, nn.Embedding, CausalShortConv1d, FusedLinearRMSNormRoPE, LinearShortConvSiLU)):
                 if id(m.weight) not in initialized_weights:
                     nn.init.normal_(m.weight, std=.02)
@@ -241,9 +271,10 @@ class DismLM(nn.Module):
         initialized_tables = set()
         for layer in self.layers:
             attn = layer.attn
-            if getattr(attn,"is_pure_gdn",False):
+            if getattr(attn,"is_pure_mixer",False):
                 attn.norm.weight.fill_(1)
-                attn.init_gdn_parameters()
+                if hasattr(attn, 'init_gdn_parameters'):
+                    attn.init_gdn_parameters()
                 continue
             for table in (attn.q_vocab, attn.k_vocab):
                 # Consume the original per-head RNG stream, but initialize each shared parameter once.
@@ -463,9 +494,10 @@ class DismLM(nn.Module):
                     counter = paired_counter
             v_first = None
             for i, layer in enumerate(self.layers):
-                if getattr(layer.attn,"is_pure_gdn",False):
+                if getattr(layer.attn,"is_pure_mixer",False):
                     if self.config.value_residual and v_first is None:
-                        v_first = _gdn_value_first(layer.attn, x, cu_seqlens, self.config.sequence_len, conv_seq_idx)
+                        v_first = _mixer_value_first(
+                            layer.attn, x, cu_seqlens, self.config.sequence_len, conv_seq_idx)
                         x=layer(x,cu_seqlens=cu_seqlens,max_seqlen=self.config.sequence_len,use_cache=False,
                                 conv_seq_idx=conv_seq_idx)
                     elif self.config.value_residual:

@@ -493,10 +493,13 @@ class DismAttention(nn.Module):
         # top. kv_group_size>1 breaks the k tie (different output widths), so the
         # two branches are decided independently rather than off one flag.
         tied = bool(getattr(self, "share_qk_linear", False))
-        gdn_q_conv = getattr(self, "gdn_q_conv", None)
-        gdn_k_conv = getattr(self, "gdn_k_conv", None)
-        share_q = tied and gdn_q_conv is not None and self.q_conv.weight is gdn_q_conv.weight
-        share_k = tied and gdn_k_conv is not None and self.k_conv.weight is gdn_k_conv.weight
+        auxiliary_q_conv = getattr(self, "gdn_q_conv", None)
+        auxiliary_k_conv = getattr(self, "gdn_k_conv", None)
+        if auxiliary_q_conv is None:
+            auxiliary_q_conv = getattr(self, "sdn_q_conv", None)
+            auxiliary_k_conv = getattr(self, "sdn_k_conv", None)
+        share_q = tied and auxiliary_q_conv is not None and self.q_conv.weight is auxiliary_q_conv.weight
+        share_k = tied and auxiliary_k_conv is not None and self.k_conv.weight is auxiliary_k_conv.weight
         linear_q = self.q_conv.project_linear(x) if share_q else None
         linear_k = self.k_conv.project_linear(x) if share_k else None
         q = project(self.q_conv, self.head_dim, linear_q)
