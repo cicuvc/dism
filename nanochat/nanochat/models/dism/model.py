@@ -123,6 +123,8 @@ class DismLM(nn.Module):
                         gqa_query_channels=getattr(config, "gqa_query_channels", 1),
                         kv_group_size=getattr(config, "kv_group_size", 1),
                         hard_tau_grad_scale=getattr(config, "hard_tau_grad_scale", 1.0),
+                        selector_norm=getattr(config, "selector_norm", False),
+                        selector_norm_scale_init=getattr(config, "selector_norm_scale_init", 0.2),
                         qb_q_strength=getattr(config, "qb_q_strength", 0.0),
                         qb_k_strength=getattr(config, "qb_k_strength", 0.0),
                         qb_iterations=getattr(config, "qb_iterations", 4),
@@ -320,6 +322,23 @@ class DismLM(nn.Module):
                 if attn is not None and hasattr(attn, 'tau_scale'):
                     attn.tau_scale = tau_scale
         self._tau_scale_last = tau_scale
+        # Selector-normalisation scales: frozen for the first
+        # selector_norm_freeze_fraction so the selector entropy stays at the
+        # initialised (deliberately flat) level while the codebook geometry
+        # forms, then released so the model can sharpen on its own. This reuses
+        # the anneal progress, so it adds no schedule hyperparameter. The
+        # parameters exist from construction, so the optimizer schema is stable
+        # across the switch; only requires_grad flips.
+        sel_frac = float(getattr(self.config, 'selector_norm_freeze_fraction', 0.0) or 0.0)
+        sel_train = progress >= sel_frac
+        for layer in self.layers:
+            attn = getattr(layer, 'attn', None)
+            if attn is None or not getattr(attn, 'selector_norm', False):
+                continue
+            for name in ('q_out_scale', 'k_out_scale', 'q_vocab_scale', 'k_vocab_scale'):
+                p = getattr(attn, name, None)
+                if p is not None and p.requires_grad != sel_train:
+                    p.requires_grad_(sel_train)
 
     @torch.no_grad()
     def set_vocab_temperature(self, value):

@@ -48,6 +48,8 @@ class DismBlock(nn.Module):
                        gqa_query_channels=getattr(config, "gqa_query_channels", 1),
                        kv_group_size=getattr(config, "kv_group_size", 1),
                        hard_tau_grad_scale=getattr(config, "hard_tau_grad_scale", 1.0),
+                       selector_norm=getattr(config, "selector_norm", False),
+                       selector_norm_scale_init=getattr(config, "selector_norm_scale_init", 0.2),
                         qb_q_strength=getattr(config, "qb_q_strength", 0.0),
                         qb_k_strength=getattr(config, "qb_k_strength", 0.0),
                         qb_iterations=getattr(config, "qb_iterations", 4),

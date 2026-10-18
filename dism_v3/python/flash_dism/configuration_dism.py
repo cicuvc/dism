@@ -15,6 +15,9 @@ class DismConfig(PretrainedConfig):
                  gqa_query_channels: int = 1, vocab_transvq=False,
                  kv_group_size: int = 1,
                  hard_tau_grad_scale: float = 1.0,
+                 selector_norm: bool = False,
+                 selector_norm_scale_init: float = 0.2,
+                 selector_norm_freeze_fraction: float = 0.5,
                  qb_q_strength=0.0, qb_k_strength=0.0, qb_iterations=4, qb_update_interval=16, qb_samples=2048, qb_update_rate=0.1,
                  vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
@@ -60,6 +63,14 @@ class DismConfig(PretrainedConfig):
         self.qb_update_interval = qb_update_interval
         self.qb_samples = qb_samples
         self.qb_update_rate = qb_update_rate
+        # These were accepted in the signature but never stored, so every spec
+        # value for them was silently ignored (getattr fell back to the default).
+        if not 0.0 <= float(hard_tau_grad_scale) <= 1.0:
+            raise ValueError("hard_tau_grad_scale must be in [0,1]")
+        self.hard_tau_grad_scale = float(hard_tau_grad_scale)
+        self.selector_norm = bool(selector_norm)
+        self.selector_norm_scale_init = float(selector_norm_scale_init)
+        self.selector_norm_freeze_fraction = float(selector_norm_freeze_fraction)
 
         if type(gqa_query_channels) is not int or gqa_query_channels not in (1, 2):
             raise ValueError("gqa_query_channels must be 1 or 2")

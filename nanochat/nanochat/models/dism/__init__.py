@@ -69,6 +69,15 @@ class DismConfig:
     # final steps are the deployed value.
     tau_schedule_fraction: float = 0.0
     tau_schedule_floor: float = 0.0
+    # Selector normalisation: RMSNorm at the q/k conv+silu exit and at the
+    # codebook exit, each with a per-channel scale of selector_norm_scale_init.
+    # Frozen for the first selector_norm_freeze_fraction of the run, then
+    # released. Calibrated on a trained checkpoint: scale 1.0 collapses the
+    # selector to ~2 effective symbols, 0.5 gives 3.6-5.2, and ~0.35 reproduces
+    # the un-normalised level, so 0.2 starts slightly flatter than today.
+    selector_norm: bool = False
+    selector_norm_scale_init: float = 0.2
+    selector_norm_freeze_fraction: float = 0.5
     # QB is opt-in; each side uses zero strength to disable its price.
     qb_q_strength: float = 0.0
     qb_k_strength: float = 0.0

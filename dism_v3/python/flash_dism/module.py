@@ -129,6 +129,12 @@ def _salt_hard_seed(seed, layer_idx):
     return seed ^ salt
 
 
+def _rms_unit(x, eps=1e-6):
+    """RMS-normalise over the last dim (the codebook channel), fp32 maths."""
+    work = x.float()
+    return work * torch.rsqrt(work.pow(2).mean(-1, keepdim=True) + eps)
+
+
 class DismAttention(nn.Module):
     """v2-style projections/shortconv/gate with v3 signed soft readout.
 
@@ -146,7 +152,8 @@ class DismAttention(nn.Module):
                  vocab_transvq=False, vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4, gqa_query_channels: int = 1,
                  kv_group_size: int = 1, hard_tau_grad_scale: float = 1.0,
-                 qb_q_strength=0.0, qb_k_strength=0.0, qb_iterations=4, qb_update_interval=16, qb_samples=2048, qb_update_rate=0.1):
+                 qb_q_strength=0.0, qb_k_strength=0.0, qb_iterations=4, qb_update_interval=16, qb_samples=2048, qb_update_rate=0.1,
+                 selector_norm: bool = False, selector_norm_scale_init: float = 0.2):
         super().__init__()
         if min(width, heads, vocab_size, conv_size) <= 0:
             raise ValueError("width, heads, vocab_size and conv_size must be positive")
@@ -167,6 +174,23 @@ class DismAttention(nn.Module):
         self.vocab_temperature = float(vocab_temperature)
         # Host-only multiplier applied to rtau; 1.0 is the deployed value.
         self.tau_scale = 1.0
+        # Optional selector normalisation: RMSNorm at the q/k conv+silu exit and
+        # at the codebook exit, each with a per-channel elementwise scale. With
+        # the scales frozen the selector entropy is a fixed, controllable
+        # quantity instead of drifting with the q norm; releasing them later
+        # lets the model sharpen on its own.
+        self.selector_norm = bool(selector_norm)
+        if self.selector_norm:
+            # Per-channel scales shared across heads and codebook rows (64
+            # parameters each), so the selector temperature is one explicit knob.
+            _init = float(selector_norm_scale_init)
+            self.q_out_scale = nn.Parameter(torch.full((head_dim,), _init))
+            self.k_out_scale = nn.Parameter(torch.full((head_dim,), _init))
+            self.q_vocab_scale = nn.Parameter(torch.full((head_dim,), _init))
+            self.k_vocab_scale = nn.Parameter(torch.full((head_dim,), _init))
+            for _p in (self.q_out_scale, self.k_out_scale,
+                       self.q_vocab_scale, self.k_vocab_scale):
+                _p._no_weight_decay = True
 
         if type(gqa_query_channels) is not int or gqa_query_channels not in (1, 2):
             raise ValueError("gqa_query_channels must be 1 or 2")
@@ -473,6 +497,11 @@ class DismAttention(nn.Module):
         q = project(self.q_conv, self.head_dim, linear_q)
         k = project(self.k_conv, self.head_dim, linear_k, heads=self.kv_heads)
         v = project(self.v_conv, self.value_dim, heads=self.kv_heads)
+        if self.selector_norm:
+            # The scales are fp32 parameters; cast them so q/k stay bf16 (the
+            # production kernels require it).
+            q = _rms_unit(q).to(q.dtype) * self.q_out_scale.to(q.dtype)
+            k = _rms_unit(k).to(k.dtype) * self.k_out_scale.to(k.dtype)
         if self.kv_group_size > 1:
             # One shared key side queried by kv_group_size distinct query heads.
             k, v = (self._expand_gqa(t, 2, self.kv_group_size) for t in (k, v))
@@ -491,6 +520,9 @@ class DismAttention(nn.Module):
                 ek = self.k_vocab_map(self.k_vocab.float())
         else:
             eq, ek = self.q_vocab.float(), self.k_vocab.float()
+        if self.selector_norm:
+            eq = _rms_unit(eq) * self.q_vocab_scale
+            ek = _rms_unit(ek) * self.k_vocab_scale
         if self.kv_group_size > 1:
             # The shared key anchors one symbol set for the whole group; the
             # query side keeps an independent codebook per query head.
