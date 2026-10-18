@@ -265,6 +265,10 @@ the gated delta rule in pure recurrent and DISM-hybrid layers. The default
 `"gdn"` path and existing checkpoints are unchanged. See
 [SLIDING_DELTA_NET.md](SLIDING_DELTA_NET.md).
 
+Set `recurrent_mixer="sliding_path"` for the tied-key/reflector softmax PaTH
+variant; it shares the SDN feature and output parameterization. See
+[SLIDING_PATH.md](SLIDING_PATH.md).
+
 ## Opt-in quantile balancing (fixed true direction)
 
 For the optimization and soft/hard derivation, see

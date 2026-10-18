@@ -14,6 +14,7 @@ from .hybrid import DismSwaAttention
 from .hybrid_gdn import DismGdnAttention
 from .pure_gdn import PureGdnAttention
 from .sliding_delta import DismSlidingDeltaAttention, PureSlidingDeltaAttention
+from .sliding_path import DismSlidingPathAttention, PureSlidingPathAttention
 from .cache import DismCache
 from .kernels.conv1d import CausalShortConv1d
 from .kernels.linear_rmsnorm_rope import FusedLinearRMSNormRoPE
@@ -39,7 +40,9 @@ class DismBlock(nn.Module):
         attention = {'hybrid': DismSwaAttention, 'dism': DismAttention,
                      'hybrid_gdn': DismGdnAttention, 'pure_gdn': PureGdnAttention,
                      'hybrid_sdn': DismSlidingDeltaAttention,
-                     'pure_sdn': PureSlidingDeltaAttention}[config.attention_type]
+                     'pure_sdn': PureSlidingDeltaAttention,
+                     'hybrid_path': DismSlidingPathAttention,
+                     'pure_path': PureSlidingPathAttention}[config.attention_type]
         options = dict(head_dim=config.head_dim, value_dim=config.value_dim,
                        readout_dim=config.readout_dim, vocab_size=config.qk_vocab_size,
                        conv_size=config.conv_size, rope_theta=config.rope_theta,
@@ -63,10 +66,13 @@ class DismBlock(nn.Module):
                        vocab_transvq_lite=getattr(config, 'vocab_transvq_lite', False),
                        vocab_transvq_map=getattr(config, 'vocab_transvq_map', 'linear_attn'),
                        vocab_transvq_rank=getattr(config, 'vocab_transvq_rank', 4))
-        if config.attention_type in ('hybrid', 'hybrid_sdn', 'pure_sdn'):
+        if config.attention_type in ('hybrid', 'hybrid_sdn', 'pure_sdn',
+                                     'hybrid_path', 'pure_path'):
             options['window_size'] = config.window_size
         if config.attention_type in ('hybrid_sdn', 'pure_sdn'):
             options['sliding_delta_chunk_size'] = config.sliding_delta_chunk_size
+        if config.attention_type in ('hybrid_path', 'pure_path'):
+            options['sliding_path_chunk_size'] = config.sliding_delta_chunk_size
         self.attn = attention(config.hidden_size, config.num_heads, **options)
         self.mlp = DismMLP(config)
 

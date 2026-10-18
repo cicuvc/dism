@@ -498,6 +498,9 @@ class DismAttention(nn.Module):
         if auxiliary_q_conv is None:
             auxiliary_q_conv = getattr(self, "sdn_q_conv", None)
             auxiliary_k_conv = getattr(self, "sdn_k_conv", None)
+        if auxiliary_q_conv is None:
+            auxiliary_q_conv = getattr(self, "path_q_conv", None)
+            auxiliary_k_conv = getattr(self, "path_k_conv", None)
         share_q = tied and auxiliary_q_conv is not None and self.q_conv.weight is auxiliary_q_conv.weight
         share_k = tied and auxiliary_k_conv is not None and self.k_conv.weight is auxiliary_k_conv.weight
         linear_q = self.q_conv.project_linear(x) if share_q else None

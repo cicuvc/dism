@@ -142,7 +142,6 @@ class DismSlidingDeltaAttention(DismAttention):
         self.sliding_delta_chunk_size = sliding_delta_chunk_size
         if self.sliding_delta_chunk_size not in (16, 32, 64):
             raise ValueError('sliding_delta_chunk_size must be 16, 32, or 64')
-        self.mixer_v_conv = self.sdn_v_conv
         if self.value_residual:
             self.sdn_v_residual_gate = nn.Linear(width, heads)
             self.sdn_v_residual_gate._value_residual_gate = True

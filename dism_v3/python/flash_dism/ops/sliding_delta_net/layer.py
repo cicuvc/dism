@@ -198,12 +198,8 @@ class SlidingWindowDeltaNet(nn.Module):
         # autocast dtype under AMP. This also permits ordinary FP32 modules.
         return self.o_proj(o.flatten(2).to(self.o_proj.weight.dtype))
 
-    def forward(self, hidden_states, *, cu_seqlens=None):
-        """Return [B,T,hidden_size]; packed input uses B=1 and integer offsets.
-
-        Both short convolution and sliding attention obey the same document
-        boundaries. No state is read or updated by this differentiable path.
-        """
+    def _project_sequence(self, hidden_states, cu_seqlens=None):
+        """Project features with shared, validated document boundaries."""
         self._validate_input(hidden_states)
         metadata = prepare_varlen_metadata(
             cu_seqlens, batch=hidden_states.shape[0], total_tokens=hidden_states.shape[1],
@@ -220,7 +216,15 @@ class SlidingWindowDeltaNet(nn.Module):
                 cu_seqlens, batch=1, total_tokens=hidden_states.shape[1],
                 chunk_size=64, device=hidden_states.device)
             conv_indices = conv_metadata.chunk_indices
-        q, k, v, beta = self._features(hidden_states, cu, conv_indices)
+        return self._features(hidden_states, cu, conv_indices)
+
+    def forward(self, hidden_states, *, cu_seqlens=None):
+        """Return [B,T,hidden_size]; packed input uses B=1 and integer offsets.
+
+        Both short convolution and sliding attention obey the same document
+        boundaries. No state is read or updated by this differentiable path.
+        """
+        q, k, v, beta = self._project_sequence(hidden_states, cu_seqlens)
         o = sliding_window_delta_net(
             q, k, v, beta, self.window_size, chunk_size=self.chunk_size,
             scale=self.scale, write_beta=self.write_beta,

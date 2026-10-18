@@ -28,7 +28,8 @@ class DismConfig(PretrainedConfig):
                  pad_token_id=None, bos_token_id=50256, eos_token_id=50256,
                  tie_word_embeddings=False, post_norm=False, **kwargs):
         if attention_type not in ('hybrid', 'dism', 'hybrid_gdn', 'pure_gdn',
-                                  'hybrid_sdn', 'pure_sdn'):
+                                  'hybrid_sdn', 'pure_sdn',
+                                  'hybrid_path', 'pure_path'):
             raise ValueError("unsupported v3 attention_type")
         if min(vocab_size, hidden_size, num_hidden_layers, num_heads) <= 0:
             raise ValueError('model dimensions must be positive')

@@ -56,6 +56,8 @@ def _replace_convs_with_linear_fla(model, backend):
         auxiliary_q_conv = getattr(module, "gdn_q_conv", None)
         if auxiliary_q_conv is None:
             auxiliary_q_conv = getattr(module, "sdn_q_conv", None)
+        if auxiliary_q_conv is None:
+            auxiliary_q_conv = getattr(module, "path_q_conv", None)
         if auxiliary_q_conv is not None and getattr(module, "q_conv", None) is not None:
             # DISM/GDN share the tied q/k input projection; compute it once if tied.
             module.share_qk_linear = True
@@ -98,18 +100,25 @@ class DismLM(nn.Module):
         super().__init__()
         self.config = config
         recurrent_mixer = str(getattr(config, 'recurrent_mixer', 'gdn'))
-        if recurrent_mixer not in ('gdn', 'sliding_delta'):
-            raise ValueError("recurrent_mixer must be 'gdn' or 'sliding_delta'")
-        if recurrent_mixer == 'sliding_delta':
+        mixer_types = {
+            'gdn': ('pure_gdn', 'hybrid_gdn'),
+            'sliding_delta': ('pure_sdn', 'hybrid_sdn'),
+            'sliding_path': ('pure_path', 'hybrid_path'),
+        }
+        if recurrent_mixer not in mixer_types:
+            raise ValueError(
+                "recurrent_mixer must be 'gdn', 'sliding_delta', or 'sliding_path'")
+        pure_type, hybrid_type = mixer_types[recurrent_mixer]
+        if recurrent_mixer != 'gdn':
             if attention_type == 'hybrid_gdn':
-                attention_type = 'hybrid_sdn'
+                attention_type = hybrid_type
             elif attention_type == 'pure_gdn':
-                attention_type = 'pure_sdn'
+                attention_type = pure_type
             else:
-                raise ValueError('sliding_delta requires the dism_gdn_hybrid architecture')
+                raise ValueError(f'{recurrent_mixer} requires the dism_gdn_hybrid architecture')
             if getattr(config, 'gqa_query_channels', 1) != 1 or getattr(config, 'kv_group_size', 1) != 1:
                 raise NotImplementedError(
-                    'sliding_delta currently requires gqa_query_channels=1 and kv_group_size=1')
+                    f'{recurrent_mixer} currently requires gqa_query_channels=1 and kv_group_size=1')
         if (getattr(config, 'qb_q_strength', 0.) or getattr(config, 'qb_k_strength', 0.)):
             if config.direction_policy != 'true' or config.direction_antithetic:
                 raise ValueError('QB requires direction_policy=true and direction_antithetic=false')
@@ -163,12 +172,10 @@ class DismLM(nn.Module):
                         post_norm=config.post_norm)
         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
         if getattr(config, 'layer_layout', ''):
-            # Dedicated-layer layout: no layer mixes DISM and GDN internally.
-            pure_type = 'pure_sdn' if recurrent_mixer == 'sliding_delta' else 'pure_gdn'
-            hybrid_type = 'hybrid_sdn' if recurrent_mixer == 'sliding_delta' else 'hybrid_gdn'
+            # Dedicated-layer layout: no layer mixes DISM and a recurrent branch.
             spec = {'g': pure_type, 'd': 'dism', 'h': hybrid_type}
             layout = str(config.layer_layout)
-            if attention_type not in ('hybrid_gdn', 'hybrid_sdn'):
+            if attention_type not in ('hybrid_gdn', 'hybrid_sdn', 'hybrid_path'):
                 raise ValueError('layer_layout requires the DISM hybrid architecture')
             if len(layout) != config.n_layer or any(ch not in spec for ch in layout):
                 raise ValueError('layer_layout must have n_layer entries drawn from g/d/h')
@@ -181,14 +188,13 @@ class DismLM(nn.Module):
         elif config.alternating_gdn or config.rear_half_dism:
             if config.alternating_gdn and config.rear_half_dism:
                 raise ValueError('Choose only one mixed-layer layout')
-            if attention_type not in ('hybrid_gdn', 'hybrid_sdn') or config.n_layer%2:
-                raise ValueError('Alternating GDN requires an even number of GDN/hybrid layers')
+            if attention_type not in ('hybrid_gdn', 'hybrid_sdn', 'hybrid_path') or config.n_layer%2:
+                raise ValueError('Alternating recurrent layout requires an even number of layers')
             blocks=[]
             for i in range(config.n_layer):
                 layer_config=copy.copy(c)
                 if (i < config.n_layer//2 if config.rear_half_dism else i%2==0):
-                    layer_config.attention_type=('pure_sdn' if recurrent_mixer == 'sliding_delta'
-                                                 else 'pure_gdn')
+                    layer_config.attention_type=pure_type
                 blocks.append(DismBlock(layer_config,i))
             self.layers=nn.ModuleList(blocks)
         else:
