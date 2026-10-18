@@ -259,6 +259,17 @@ class DismLM(nn.Module):
             if getattr(attn, "qb", None) is not None:
                 attn.qb.reset_parameters()
             attn.log_sel_tau.uniform_(-4, 4)
+            # Parameters created with torch.full() are zeroed by to_empty() when
+            # the model is built on the meta device, so they must be re-filled
+            # here like every other parameter. Without this the selector scales
+            # stay 0, the q/e logits collapse to a constant and the symbol
+            # selection degenerates to index 0 everywhere.
+            if getattr(attn, 'selector_norm', False):
+                sel_init = float(getattr(self.config, 'selector_norm_scale_init', 0.2))
+                for _name in ('q_out_scale', 'k_out_scale', 'q_vocab_scale', 'k_vocab_scale'):
+                    _p = getattr(attn, _name, None)
+                    if _p is not None:
+                        _p.fill_(sel_init)
             attn.norm.weight.fill_(1)
             if hasattr(attn, "init_gdn_parameters"):
                 attn.init_gdn_parameters()
