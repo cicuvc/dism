@@ -31,6 +31,15 @@
     "hard_granularity": "sequence",
     "value_residual": true,
     "value_residual_gate_bias": 2.0,
+    "loss_balance": "token",
+    "legacy_loss_normalization": true,
+    "hard_tau_grad_scale": 1.0,
+    "qb_q_strength": 0.0,
+    "qb_k_strength": 0.0,
+    "conv_impl": "linear_fla",
+    "conv_backend": "cuda",
+    "tau_schedule_fraction": 0.0,
+    "tau_schedule_floor": 0.0,
     "recurrent_mixer": "sliding_delta",
     "sliding_delta_chunk_size": 32
   }
