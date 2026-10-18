@@ -123,10 +123,25 @@ class QuantileBalance(nn.Module):
         self.q_strength, self.k_strength = float(q_strength), float(k_strength)
         self.iterations, self.update_interval = iterations, update_interval
         self.samples, self.update_rate = samples, float(update_rate)
+        # Host-only evaluation knob. Training always uses the stored
+        # strengths; inference may attenuate both selector biases equally.
+        self.eval_factor = 1.0
         self.register_buffer('q_price', torch.zeros(heads, vocab, dtype=torch.float32))
         self.register_buffer('k_price', torch.zeros(heads, vocab, dtype=torch.float32))
         self.register_buffer('forward_count', torch.zeros((), dtype=torch.int64))
         self.register_buffer('update_count', torch.zeros((), dtype=torch.int64))
+
+    def set_eval_factor(self, factor):
+        """Scale both Q and K price biases during evaluation only."""
+        factor = float(factor)
+        if not math.isfinite(factor) or not 0.0 <= factor <= 1.0:
+            raise ValueError('QB eval factor must be finite and in [0,1]')
+        self.eval_factor = factor
+
+    def active_strengths(self):
+        """Return the strengths used by the current training/eval forward."""
+        factor = 1.0 if self.training else self.eval_factor
+        return self.q_strength*factor, self.k_strength*factor
 
     @torch.no_grad()
     def reset_parameters(self):
@@ -178,8 +193,9 @@ class QuantileBalance(nn.Module):
         eq = eq.to(torch.bfloat16).expand(h, -1, -1)
         ek = ek.to(torch.bfloat16).expand(h, -1, -1)
         # Own immutable snapshots: updating buffers below cannot change backward.
-        aq = self.q_price.detach().clone()*self.q_strength
-        ak = self.k_price.detach().clone()*self.k_strength
+        q_strength, k_strength = self.active_strengths()
+        aq = self.q_price.detach().clone()*q_strength
+        ak = self.k_price.detach().clone()*k_strength
         with torch.autocast(q.device.type, enabled=False):
             out, lq, m, iq, ik = PricedInterpolation.apply(q, k, eq, ek, aq, ak, float(beta))
             table = layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1])

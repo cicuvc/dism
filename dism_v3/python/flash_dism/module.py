@@ -263,6 +263,11 @@ class DismAttention(nn.Module):
             self.gqa_sq_proj = nn.Linear(width, heads * readout_dim, bias=False)
             self.gqa_mix = nn.Parameter(torch.full((heads, 2), 0.5))
 
+    def set_qb_eval_factor(self, factor):
+        """Attenuate both QB selector biases during evaluation."""
+        if self.qb is not None:
+            self.qb.set_eval_factor(factor)
+
     @staticmethod
     def _expand_gqa(tensor, head_axis, factor=2):
         """Duplicate each shared head in h*factor+g order; backward sums over g."""

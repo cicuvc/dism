@@ -300,6 +300,14 @@ The soft true-direction score includes the required extra key bias
 Tau is absorbed in Q LSE once; the key bias does not absorb another tau.
 See [SOFT_HARD_RELAXATION.md §53](SOFT_HARD_RELAXATION.md#53-fixed-true-qb-训练实现2026-10-16).
 
+For evaluation-only attenuation, call `DismLM.set_qb_eval_factor(factor)` after
+loading a checkpoint. `factor` is in `[0,1]`, defaults to `1`, and multiplies
+both effective biases (`qb_q_strength*q_price` and
+`qb_k_strength*k_price`) without changing the saved prices or checkpoint
+schema. Training forwards always use factor `1`; `0` removes QB bias from both
+the soft and hard eval selectors, while the codebooks and remaining QB state
+stay unchanged.
+
 Enabled QB requires `direction_policy="true"`, no antithetic direction, and no
 `direction_flip`. The low-level attention caller must explicitly provide
 `direction_true=True`; supplied direction tensors must also be all true.

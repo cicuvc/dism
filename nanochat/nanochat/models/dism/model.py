@@ -359,6 +359,16 @@ class DismLM(nn.Module):
             raise ValueError('vocab_temperature must be finite and positive')
         self.vocab_temperature = value
 
+    def set_qb_eval_factor(self, factor):
+        """Scale stored QB selector biases in eval; training remains unchanged."""
+        factor = float(factor)
+        if not math.isfinite(factor) or not 0.0 <= factor <= 1.0:
+            raise ValueError('QB eval factor must be finite and in [0,1]')
+        for layer in self.layers:
+            attn = getattr(layer, 'attn', None)
+            if attn is not None and hasattr(attn, 'set_qb_eval_factor'):
+                attn.set_qb_eval_factor(factor)
+
     def get_device(self):
         return self.embedding.weight.device
 

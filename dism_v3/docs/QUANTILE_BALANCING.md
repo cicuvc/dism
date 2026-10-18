@@ -587,3 +587,34 @@ K-only。至少记录：
 
 后续验证需包括小问题 relaxed 最优解对照、ties/非整数容量、κ=0 禁用、
 有限 κ 列更新正确性，以及 soft 下界、梯度和 checkpoint/RNG 状态回归。
+
+## 10. 推理时缩放 QB bias（2026-10-19）
+
+QB 的实际 bias 是 `strength * price`。为区分“训练时 QB 改变了解码器状态”
+与“eval 时价格仍在压长尾匹配”，新增 host-only
+`DismLM.set_qb_eval_factor(f)`：只在 `eval()` 前向中把 Q/K 两侧强度同时
+乘以 `f∈[0,1]`。训练前向恒用 `f=1`；保存的 `q_price/k_price`、checkpoint
+schema、codebook 和 optimizer state 都不改变。`f=0` 等价于移除两侧 QB
+bias，但不是重新训练一个无 QB 模型。
+
+在 QB strength=0.5、无 τ schedule 的 72M checkpoint 上做了同一
+checkpoint、同一 NIAH 样本流的配对扫描（16 trials；ctx 8192/16384；
+depth 0.05/0.5/0.95）。主要结果：
+
+| factor | margin@8k | margin@16k | mean margin | mean gain | mean present NLL |
+|---:|---:|---:|---:|---:|---:|
+| 1.00 | 0.571 | 0.425 | 0.498 | 0.767 | 2.521 |
+| 0.90 | 0.542 | **0.441** | 0.491 | 0.776 | 2.514 |
+| 0.75 | **0.574** | 0.377 | 0.476 | **0.794** | **2.499** |
+| 0.50 | 0.430 | 0.351 | 0.390 | 0.735 | 2.551 |
+| 0.25 | 0.389 | 0.287 | 0.338 | 0.600 | 2.696 |
+| 0.00 | 0.373 | 0.269 | 0.321 | 0.576 | 2.724 |
+
+结论：减弱 QB bias **不是**恢复长程 recall 的稳定旋钮。`f=0` 明显更差；
+`f=0.9` 的 16k margin 只高 0.016 而 8k 更低；`f=0.75` 的平均 gain/present
+NLL 更好，但 prior-invariant margin 平均仍低于 `f=1`，且 16k 明确变差，
+说明增益主要来自先验/输出标定而非检索。由于 checkpoint 是在 QB bias 存在
+时训练的，`f<1` 同时还引入了 selector 几何与推理价格之间的 train/eval
+mismatch；因此这条曲线不能用来推断“从头少加 QB 会保留更多 recall”。
+若要改变 QB 对长程能力的影响，应改训练目标或价格生成机制，而不是仅把
+已训练价格压低。

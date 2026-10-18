@@ -73,6 +73,25 @@ def test_price_state_replay_no_rng_or_parameters():
         clone.load_state_dict({},strict=True)
 
 
+def test_eval_factor_scales_q_and_k_bias_without_state_change():
+    module = QuantileBalance(2,8,q_strength=.5,k_strength=.7,samples=32)
+    module.q_price.copy_(torch.arange(16,dtype=torch.float32).reshape(2,8))
+    module.k_price.copy_(-2*module.q_price)
+    saved = copy.deepcopy(module.state_dict())
+    module.train()
+    module.set_eval_factor(.25)
+    assert module.active_strengths() == (.5,.7)
+    module.eval()
+    assert module.active_strengths() == pytest.approx((.125,.175))
+    module.set_eval_factor(0.)
+    assert module.active_strengths() == (0.,0.)
+    for name,value in saved.items():
+        torch.testing.assert_close(module.state_dict()[name],value,atol=0,rtol=0)
+    for bad in (-.1,1.1,float('nan')):
+        with pytest.raises(ValueError):
+            module.set_eval_factor(bad)
+
+
 @pytest.mark.parametrize('packed', [False,True])
 @pytest.mark.parametrize('mixed', [False,True])
 @pytest.mark.parametrize('config', [(16,32,32),(32,64,64)])
