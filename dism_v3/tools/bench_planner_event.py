@@ -214,6 +214,8 @@ def eager(fn,samples):
 
 
 def build_plan(module,device,host,compact,warps):
+    if warps == 0:
+        warps = None  # Preserve the consumer's width16=2, otherwise=4 default.
     if compact:
         return module.CompactFusedHardPrefillBackward.from_compact(device,num_warps=warps)
     source=HardPrefillBackward.from_native(device,mma_precision='bf16')
@@ -281,7 +283,8 @@ def main():
     ap.add_argument('--baseline',default=BASE,help='Pinned source revision for paired diagnostics')
     ap.add_argument('--variants',nargs='+',choices=['baseline','current','reuse','reorder','split2','split3','separate','combined','split3_combined',*ALGORITHM_VARIANTS],default=['baseline','reuse','reorder','split2','split3','separate'])
     ap.add_argument('--chunks',nargs='+',type=int,choices=[8,16,32,64],default=[16,32,64])
-    ap.add_argument('--warps',nargs='+',type=int,choices=[2,4,8],default=[2,4,8])
+    ap.add_argument('--warps',nargs='+',type=int,choices=[0,2,4,8],default=[2,4,8],
+                    help='0 uses the unchanged per-bucket consumer defaults')
     ap.add_argument('--shapes',nargs='+',default=['32x64','64x64','64x32'])
     ap.add_argument('--cases',nargs='+',default=['1x1x65:repeat','1x1x512:repeat','2x6x2048:repeat','2x6x2048:random'])
     ap.add_argument('--compact',nargs='+',type=int,default=[0,1])

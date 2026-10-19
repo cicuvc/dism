@@ -1,5 +1,9 @@
 # Planner/event hard backward performance
 
+The follow-on [algorithm analysis](PLANNER_BACKWARD_ALGORITHM_ANALYSIS.md)
+uses `8d47ebf` as its baseline and examines event-level identities, operation and
+traffic counts, parallel scans, persistent recurrence, and the one-pair fast path.
+
 Baseline: `2eb846ae92cc92fdc2572e5f1b36e098823fcdac` (the repaired tau
 implementation). Hardware: RTX 5090 / sm120, conda `blkw`, PyTorch
 2.13.0+cu130, Triton 3.7.1. This work optimizes the repaired implementation;
