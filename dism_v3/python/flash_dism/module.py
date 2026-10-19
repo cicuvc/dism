@@ -151,7 +151,8 @@ class DismAttention(nn.Module):
                  value_residual=False, vocab_temperature=1.0,
                  vocab_transvq=False, vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
-                 pq_vocab_sizes=(), gqa_query_channels: int = 1,
+                 pq_vocab_sizes=(), vocab_head_pairing: str = "",
+                 gqa_query_channels: int = 1,
                  kv_group_size: int = 1, hard_tau_grad_scale: float = 1.0,
                  qb_q_strength=0.0, qb_k_strength=0.0, qb_iterations=4, qb_update_interval=16, qb_samples=2048, qb_update_rate=0.1,
                  selector_norm: bool = False, selector_norm_scale_init: float = 0.2):
@@ -204,6 +205,19 @@ class DismAttention(nn.Module):
         if heads % kv_group_size:
             raise ValueError("heads must be divisible by kv_group_size")
         self.kv_group_size = kv_group_size
+        self.vocab_head_pairing = str(vocab_head_pairing)
+        if self.vocab_head_pairing not in ('', 'swap_halves'):
+            raise ValueError("vocab_head_pairing must be '' or 'swap_halves'")
+        if self.vocab_head_pairing:
+            if gqa_query_channels != 1 or kv_group_size != 1:
+                raise NotImplementedError(
+                    'vocab_head_pairing requires gqa_query_channels=1 and kv_group_size=1')
+            if heads % 2:
+                raise ValueError('vocab_head_pairing requires an even head count')
+            if pq_vocab_sizes:
+                raise NotImplementedError('vocab_head_pairing cannot be combined with PQ')
+            if vocab_transvq:
+                raise NotImplementedError('vocab_head_pairing cannot be combined with TransVQ')
         from .pq_vocab import codebook_shape, validate_sizes
         self.pq_vocab_sizes = (validate_sizes(
             pq_vocab_sizes, vocab_size=vocab_size, head_dim=head_dim)
@@ -253,8 +267,10 @@ class DismAttention(nn.Module):
             q_shape = codebook_shape(heads, self.pq_vocab_sizes, head_dim)
             k_shape = codebook_shape(self.kv_heads, self.pq_vocab_sizes, head_dim)
         else:
-            q_shape = (heads, vocab_size, head_dim)
-            k_shape = (self.kv_heads, vocab_size, head_dim)
+            q_tables = heads//2 if self.vocab_head_pairing else heads
+            k_tables = self.kv_heads//2 if self.vocab_head_pairing else self.kv_heads
+            q_shape = (q_tables, vocab_size, head_dim)
+            k_shape = (k_tables, vocab_size, head_dim)
         self.q_vocab = nn.Parameter(F.silu(torch.randn(q_shape, dtype=torch.float32)))
         self.k_vocab = nn.Parameter(F.silu(torch.randn(k_shape, dtype=torch.float32)))
         self.log_sel_tau = nn.Parameter(torch.empty(heads).uniform_(-4, 4))
@@ -552,6 +568,11 @@ class DismAttention(nn.Module):
                 ek = self.k_vocab_map(self.k_vocab.float())
         else:
             eq, ek = self.q_vocab.float(), self.k_vocab.float()
+        if self.vocab_head_pairing:
+            from .vocab_roles import expand_qk_vocab
+            eq, ek = expand_qk_vocab(
+                eq, ek, self.vocab_head_pairing,
+                heads=self.heads, kv_heads=self.kv_heads)
         if self.selector_norm:
             eq = _rms_unit(eq) * self.q_vocab_scale
             ek = _rms_unit(ek) * self.k_vocab_scale

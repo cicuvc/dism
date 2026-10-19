@@ -174,6 +174,11 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                         table_k = attn.k_vocab_map(attn.k_vocab.float())
                 else:
                     table_q, table_k = attn.q_vocab, attn.k_vocab
+                if getattr(attn, 'vocab_head_pairing', ''):
+                    from flash_dism.vocab_roles import expand_qk_vocab
+                    table_q, table_k = expand_qk_vocab(
+                        table_q, table_k, attn.vocab_head_pairing,
+                        heads=heads, kv_heads=kv_heads)
                 stats = {}
                 pq_sizes = tuple(getattr(attn, 'pq_vocab_sizes', ()))
                 for tag, vec, table, rows in (("q", q, table_q, heads),

@@ -96,6 +96,9 @@ class DismConfig:
     # Optional product-quantised q/k codebook. Empty keeps the dense V-way
     # vocabulary; (16,32) preserves V=512 with two 32-dimensional groups.
     pq_vocab_sizes: tuple[int, ...] = ()
+    # Compact head-paired q/k tables. "swap_halves" keeps H/2 Q tables and H/2
+    # K tables; second-half heads use the paired tables in swapped roles.
+    vocab_head_pairing: str = ""
     # Recurrent half of the hybrid: the original gated delta rule or the
     # gate-free sliding-window DeltaNet. The two use the same layout symbols.
     recurrent_mixer: str = "gdn"

@@ -275,6 +275,10 @@ variant; it shares the SDN feature and output parameterization. See
 32-dimensional factors. The DISM core is unchanged. See
 [PQ_VOCAB_TRAINING.md](PQ_VOCAB_TRAINING.md).
 
+`vocab_head_pairing="swap_halves"` stores `H/2` Q and `H/2` K tables and uses
+the paired tables in swapped roles for the second half of heads. See
+[VOCAB_HEAD_PAIRING.md](VOCAB_HEAD_PAIRING.md).
+
 ## Opt-in quantile balancing (fixed true direction)
 
 For the optimization and soft/hard derivation, see

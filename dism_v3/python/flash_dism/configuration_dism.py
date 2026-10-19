@@ -22,6 +22,7 @@ class DismConfig(PretrainedConfig):
                  vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
                  pq_vocab_sizes=(),
+                 vocab_head_pairing="",
                  sliding_delta_chunk_size=32,
                  intermediate_size=None, hidden_ratio=4., norm_eps=1e-6,
                  initializer_range=.02, use_cache=True, fuse_cross_entropy=True,
@@ -94,6 +95,9 @@ class DismConfig(PretrainedConfig):
         self.pq_vocab_sizes = (validate_sizes(
             pq_vocab_sizes, vocab_size=qk_vocab_size, head_dim=head_dim)
             if pq_vocab_sizes else ())
+        if vocab_head_pairing not in ('', 'swap_halves'):
+            raise ValueError("vocab_head_pairing must be '' or 'swap_halves'")
+        self.vocab_head_pairing = str(vocab_head_pairing)
         if sliding_delta_chunk_size not in (16, 32, 64):
             raise ValueError("sliding_delta_chunk_size must be 16, 32, or 64")
         self.sliding_delta_chunk_size = sliding_delta_chunk_size

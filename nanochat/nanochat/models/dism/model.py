@@ -122,6 +122,11 @@ class DismLM(nn.Module):
         if (getattr(config, 'qb_q_strength', 0.) or getattr(config, 'qb_k_strength', 0.)):
             if config.direction_policy != 'true' or config.direction_antithetic:
                 raise ValueError('QB requires direction_policy=true and direction_antithetic=false')
+        if getattr(config, 'vocab_head_pairing', ''):
+            if any((config.vocab_share_qk, config.vocab_share_heads, config.vocab_share_layers)):
+                raise ValueError('vocab_head_pairing is mutually exclusive with vocab sharing')
+            if config.n_head % 2:
+                raise ValueError('vocab_head_pairing requires an even n_head')
         if config.loss_balance not in ('document', 'token'):
             raise ValueError('loss_balance must be document or token')
         self.document_balanced_loss = config.loss_balance == 'document'
@@ -170,6 +175,7 @@ class DismLM(nn.Module):
                         vocab_transvq_map=getattr(config, "vocab_transvq_map", "linear_attn"),
                         vocab_transvq_rank=getattr(config, "vocab_transvq_rank", 4),
                         pq_vocab_sizes=getattr(config, "pq_vocab_sizes", ()),
+                        vocab_head_pairing=getattr(config, "vocab_head_pairing", ""),
                         post_norm=config.post_norm)
         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
         if getattr(config, 'layer_layout', ''):
