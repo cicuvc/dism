@@ -18,6 +18,23 @@ from .hard_backward_scan import HardPrefillBackward, _query_backward, _key_backw
 
 
 @tr.jit
+def _bf16_fp32_dot(a, b):
+    """FP32 contraction with an exact BF16 left operand and FP32 right operand.
+
+    Retain three BF16 components of the carried/weighted FP32 operand. Two
+    components fail the cancellation regression. Add the small products before
+    the high product so they are not individually lost in its accumulator.
+    Callers must establish that a is a promoted BF16 source vector.
+    """
+    hi = b.to(tl.bfloat16)
+    residual = b - hi.to(tl.float32)
+    lo = residual.to(tl.bfloat16)
+    tiny = (residual - lo.to(tl.float32)).to(tl.bfloat16)
+    low = tl.dot(a.to(tl.bfloat16), tiny) + tl.dot(a.to(tl.bfloat16), lo)
+    return tl.dot(a.to(tl.bfloat16), hi, low)
+
+
+@tr.jit
 def _chunk_backward(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, IDS,
                            OFFSETS, ROWS, PREFIX, WEIGHT, DLOG, LENGTH,
                            R: tl.constexpr, DV: tl.constexpr, C: tl.constexpr,
@@ -27,6 +44,10 @@ def _chunk_backward(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, IDS,
     # LOCAL marks a compact bucket arena: the program id is the block index
     # inside that arena and the arena itself is a padded plan of width C, so
     # chunk*C addressing and the per-block tau slot both stay valid unchanged.
+    COMPENSATED: tl.constexpr = (BF16 and SQ.dtype.element_ty == tl.bfloat16
+                                and SK.dtype.element_ty == tl.bfloat16
+                                and V.dtype.element_ty == tl.bfloat16
+                                and DO.dtype.element_ty == tl.bfloat16)
     local = tl.program_id(0)
     if LOCAL:
         chunk = local
@@ -88,7 +109,11 @@ def _chunk_backward(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, IDS,
         ks = tl.where(key, w*tl.exp(tl.minimum(last-p, 0.)), 0.)
         h = tl.load(H + pos + r[:, None]*DV + d[None, :],
                     (r[:, None] < R) & (d[None, :] < DV), 0)
-        if BF16:
+        if COMPENSATED:
+            # One accurate contraction supplies both vector and tau readouts.
+            hq = _bf16_fp32_dot(do, tl.trans(h))
+            tq = hq
+        elif BF16:
             hq = tl.dot(do.to(tl.bfloat16), tl.trans(h).to(tl.bfloat16))
             # Tau's query/key terms can be O(match length) larger than their
             # sum. Do not contract their carried states through BF16: the two
@@ -105,7 +130,11 @@ def _chunk_backward(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, IDS,
                       query[:, None] & (r[None, :] < R), sem="relaxed")
         g = tl.load(G + pos + r[:, None]*DV + d[None, :],
                     (r[:, None] < R) & (d[None, :] < DV), 0)
-        if BF16:
+        if COMPENSATED:
+            # One accurate contraction supplies both vector and tau readouts.
+            hk = _bf16_fp32_dot(v, tl.trans(g))
+            tk = hk
+        elif BF16:
             hk = tl.dot(v.to(tl.bfloat16), tl.trans(g).to(tl.bfloat16))
             tk = tl.dot(v, tl.trans(g), input_precision="tf32x3")
         else:
@@ -132,6 +161,10 @@ def _chunk_summaries(SQ, SK, V, DO, H, G, A, CHUNKS, ROWS, PREFIX,
                      WEIGHT, LENGTH, RESET, R: tl.constexpr, DV: tl.constexpr,
                      C: tl.constexpr, BR: tl.constexpr, BD: tl.constexpr,
                      BF16: tl.constexpr):
+    COMPENSATED: tl.constexpr = (BF16 and SQ.dtype.element_ty == tl.bfloat16
+                                and SK.dtype.element_ty == tl.bfloat16
+                                and V.dtype.element_ty == tl.bfloat16
+                                and DO.dtype.element_ty == tl.bfloat16)
     idx = tl.program_id(0)
     chunk = tl.load(CHUNKS + idx).to(tl.int64)
     t, r, d = tl.arange(0, C), tl.arange(0, BR), tl.arange(0, BD)
@@ -151,8 +184,13 @@ def _chunk_summaries(SQ, SK, V, DO, H, G, A, CHUNKS, ROWS, PREFIX,
     qs = tl.where(query, w*tl.exp(p), 0.)
     # These states also feed cancellation-sensitive tau contractions. Keep
     # weighted operands in FP32 even when vector readouts use BF16 MMAs.
-    h = tl.dot(tl.trans(sk*ks[:, None]), v, input_precision="tf32x3")
-    g = tl.dot(tl.trans(sq), do*qs[:, None], input_precision="tf32x3")
+    if COMPENSATED:
+        # Put the exact BF16 vector on the left of each compensated dot.
+        h = tl.trans(_bf16_fp32_dot(tl.trans(v), sk*ks[:, None]))
+        g = _bf16_fp32_dot(tl.trans(sq), do*qs[:, None])
+    else:
+        h = tl.dot(tl.trans(sk*ks[:, None]), v, input_precision="tf32x3")
+        g = tl.dot(tl.trans(sq), do*qs[:, None], input_precision="tf32x3")
     pos = idx.to(tl.int64)*R*DV + r[:, None]*DV + d[None, :]
     mask = (r[:, None] < R) & (d[None, :] < DV)
     tl.store(H + pos, h, mask)
