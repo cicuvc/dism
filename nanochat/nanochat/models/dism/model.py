@@ -223,6 +223,9 @@ class DismLM(nn.Module):
 
     def _tie_vocabularies(self):
         first_hybrid=None
+        layer_groups={}
+        hybrid_index=0
+        group_size=int(getattr(self.config, 'vocab_layer_group_size', 1))
         for i, layer in enumerate(self.layers):
             attn = layer.attn
             if getattr(attn,"is_pure_mixer",False):continue
@@ -234,6 +237,10 @@ class DismLM(nn.Module):
                     table = getattr(attn, name)
                     if table.ndim == 3:
                         setattr(attn, name, nn.Parameter(table[0].detach().clone()))
+            group_anchor = layer_groups.setdefault(hybrid_index//group_size, attn)
+            if group_size > 1 and group_anchor is not attn:
+                attn.q_vocab = group_anchor.q_vocab
+                attn.k_vocab = group_anchor.k_vocab
             if self.config.vocab_share_layers and attn is not first_hybrid:
                 attn.q_vocab = first_hybrid.q_vocab
                 attn.k_vocab = first_hybrid.k_vocab
@@ -246,6 +253,7 @@ class DismLM(nn.Module):
                     attn.k_vocab_map = attn.q_vocab_map
             attn.q_vocab._no_weight_decay = True
             attn.k_vocab._no_weight_decay = True
+            hybrid_index += 1
 
     def _apply(self, fn, recurse=True):
         result = super()._apply(fn, recurse=recurse)

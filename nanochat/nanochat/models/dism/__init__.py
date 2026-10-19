@@ -33,6 +33,10 @@ class DismConfig:
     vocab_share_qk: bool = False
     vocab_share_heads: bool = False
     vocab_share_layers: bool = False
+    # >1 aliases q/k codebooks across that many consecutive DISM layers:
+    # groups of 2 produce layer pairs 6/7, 8/9, 10/11 in the baseline layout.
+    # Head identities remain independent within each shared layer group.
+    vocab_layer_group_size: int = 1
     soft_qk_rope: bool = False
     shared_readout: bool = False
     soft_k_l2_norm: bool = False
@@ -116,6 +120,13 @@ class DismConfig:
         self.softcap = float(self.softcap)
         if isinstance(self.pq_vocab_sizes, list):
             self.pq_vocab_sizes = tuple(self.pq_vocab_sizes)
+        if (isinstance(self.vocab_layer_group_size, bool)
+                or not isinstance(self.vocab_layer_group_size, int)
+                or self.vocab_layer_group_size < 1):
+            raise ValueError('vocab_layer_group_size must be a positive integer')
+        if self.vocab_share_layers and self.vocab_layer_group_size != 1:
+            raise ValueError(
+                'vocab_share_layers and vocab_layer_group_size are mutually exclusive')
         if self.qb_q_strength or self.qb_k_strength:
             if self.direction_policy != 'true' or self.direction_antithetic:
                 raise ValueError('QB requires direction_policy=true and direction_antithetic=false')

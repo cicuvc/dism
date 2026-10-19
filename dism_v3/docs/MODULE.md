@@ -279,6 +279,9 @@ variant; it shares the SDN feature and output parameterization. See
 the paired tables in swapped roles for the second half of heads. See
 [VOCAB_HEAD_PAIRING.md](VOCAB_HEAD_PAIRING.md).
 
+`vocab_layer_group_size=2` aliases same-head Q/K codebooks across consecutive
+DISM layer pairs. See [VOCAB_LAYER_SHARING.md](VOCAB_LAYER_SHARING.md).
+
 ## Opt-in quantile balancing (fixed true direction)
 
 For the optimization and soft/hard derivation, see
