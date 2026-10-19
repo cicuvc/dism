@@ -29,6 +29,15 @@ def inspect_kernel(kernel, directory):
                 calls=len(re.findall(r'\bCALL(?:\.|\s)', sass)),
                 local_loads=len(re.findall(r'\bLDL(?:\.|\s)', sass)),
                 local_stores=len(re.findall(r'\bSTL(?:\.|\s)', sass)),
+                # Static instruction sites, not dynamic transactions. In
+                # particular, branches/loops and predicates change execution
+                # counts; shared_bytes above is capacity, not traffic.
+                mma_instructions=len(re.findall(r'\bHMMA(?:\.|\s)', sass)),
+                global_atomics=len(re.findall(r'\b(?:ATOMG|REDG)(?:\.|\s)', sass)),
+                shared_loads=len(re.findall(r'\b(?:LDS|LDSM)(?:\.|\s)', sass)),
+                shared_stores=len(re.findall(r'\bSTS(?:\.|\s)', sass)),
+                global_loads=len(re.findall(r'\bLDG(?:\.|\s)', sass)),
+                global_stores=len(re.findall(r'\bSTG(?:\.|\s)', sass)),
                 shared_atomics=len(re.findall(r'\b(?:ATOMS|REDS)(?:\.|\s)', sass)))
 
 

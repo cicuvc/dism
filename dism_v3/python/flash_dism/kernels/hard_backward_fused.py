@@ -35,6 +35,36 @@ def _bf16_fp32_dot(a, b):
 
 
 @tr.jit
+def _single_pair(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, PREFIX, WEIGHT,
+                 DLOG, pos, stream, ki, qi, R: tl.constexpr, DV: tl.constexpr,
+                 BR: tl.constexpr, BD: tl.constexpr, BF16: tl.constexpr):
+    # One key followed by one query: the masked pair matrix has one entry.
+    # Keep the baseline BF16 vector-rounding sites and combine derivatives
+    # before contracting tau. Only exact BF16 source vectors take this path.
+    r, d = tl.arange(0, BR), tl.arange(0, BD)
+    sq = tl.load(SQ+qi*R+r, r < R, 0).to(tl.float32)
+    sk = tl.load(SK+ki*R+r, r < R, 0).to(tl.float32)
+    v = tl.load(V+ki*DV+d, d < DV, 0).to(tl.float32)
+    do = tl.load(DO+qi*DV+d, d < DV, 0).to(tl.float32)
+    if BF16:
+        sq, sk = sq.to(tl.bfloat16).to(tl.float32), sk.to(tl.bfloat16).to(tl.float32)
+        v, do = v.to(tl.bfloat16).to(tl.float32), do.to(tl.bfloat16).to(tl.float32)
+    p0, p1 = tl.load(PREFIX+pos), tl.load(PREFIX+pos+1)
+    w0, w1 = tl.load(WEIGHT+pos), tl.load(WEIGHT+pos+1)
+    pair = tl.exp(tl.minimum(p1-p0, 0.))*w1*w0
+    ds = tl.sum(do*v, 0)*pair
+    score = tl.sum(sq*sk, 0)
+    tau = ds*score*(tl.load(DLOG+pos)+tl.load(DLOG+pos+1))
+    sp = score*pair
+    if BF16:
+        ds, sp = ds.to(tl.bfloat16).to(tl.float32), sp.to(tl.bfloat16).to(tl.float32)
+    tl.atomic_add(DSQ+qi*R+r, ds*sk, r < R, sem="relaxed")
+    tl.atomic_add(DSK+ki*R+r, ds*sq, r < R, sem="relaxed")
+    tl.atomic_add(DV_OUT+ki*DV+d, sp*do, d < DV, sem="relaxed")
+    tl.store(TAU+stream, tau)
+
+
+@tr.jit
 def _chunk_backward(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, IDS,
                            OFFSETS, ROWS, PREFIX, WEIGHT, DLOG, LENGTH,
                            R: tl.constexpr, DV: tl.constexpr, C: tl.constexpr,
@@ -58,102 +88,115 @@ def _chunk_backward(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, IDS,
             chunk = tl.load(OFFSETS + stream)
         else:
             chunk = tl.load(CHUNKS + local).to(tl.int64)
-    K: tl.constexpr = C if BC == 0 else BC
-    t, r, d = tl.arange(0, K), tl.arange(0, BR), tl.arange(0, BD)
-    length = tl.load(LENGTH + chunk)
-    row = tl.load(ROWS + chunk*C + t)
-    p = tl.load(PREFIX + chunk*C + t)
-    w = tl.load(WEIGHT + chunk*C + t)
-    dw = tl.load(DLOG + chunk*C + t)
-    key, query = (t < length) & (row >= 0), (t < length) & (row < 0)
-    ki, qi = tl.where(key, row, 0), tl.where(query, -row-1, 0)
-    sq = tl.load(SQ + qi[:, None]*R + r[None, :], query[:, None] & (r[None, :] < R), 0).to(tl.float32)
-    sk = tl.load(SK + ki[:, None]*R + r[None, :], key[:, None] & (r[None, :] < R), 0).to(tl.float32)
-    v = tl.load(V + ki[:, None]*DV + d[None, :], key[:, None] & (d[None, :] < DV), 0).to(tl.float32)
-    do = tl.load(DO + qi[:, None]*DV + d[None, :], query[:, None] & (d[None, :] < DV), 0).to(tl.float32)
-    valid = query[:, None] & key[None, :] & (t[:, None] > t[None, :])
-    pair = tl.where(valid, tl.exp(tl.minimum(p[:, None]-p[None, :], 0.))*w[:, None]*w[None, :], 0.)
-    if BF16:
-        ds = tl.dot(do.to(tl.bfloat16), tl.trans(v).to(tl.bfloat16))*pair
-        score = tl.dot(sq.to(tl.bfloat16), tl.trans(sk).to(tl.bfloat16))
+    # This CTA-uniform branch removes padded matrix work, not atomic updates.
+    # General/mixed storage and every multi chunk retain their original path.
+    if CHUNKS is None and COMPENSATED:
+        length = tl.load(LENGTH + chunk)
+        row0, row1 = tl.load(ROWS+chunk*C), tl.load(ROWS+chunk*C+1)
+        one_pair = (length == 2) & (row0 >= 0) & (row1 < 0)
     else:
-        ds = tl.dot(do, tl.trans(v), input_precision="tf32x3")*pair
-        score = tl.dot(sq, tl.trans(sk), input_precision="tf32x3")
-    # Consume the two FP32 pair matrices early to limit their live ranges.
-    # Tau uses dS before the BF16 cast applied to vector MMAs.
-    dtau = tl.sum(tl.sum(ds*score*(dw[:, None]+dw[None, :]), 1), 0)
-    if BF16:
-        dv = tl.dot(tl.trans((score*pair).to(tl.bfloat16)), do.to(tl.bfloat16))
+        one_pair = False
+        row0, row1 = 0, -1
+    if one_pair:
+        _single_pair(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, PREFIX, WEIGHT,
+                     DLOG, chunk*C, stream, row0, -row1-1, R, DV, BR, BD, BF16)
     else:
-        dv = tl.dot(tl.trans(score*pair), do, input_precision="tf32x3")
-    tl.atomic_add(DV_OUT + ki[:, None]*DV + d[None, :], dv,
-                  key[:, None] & (d[None, :] < DV), sem="relaxed")
-    if BF16:
-        ds_mma = ds.to(tl.bfloat16)
-        dsq = tl.dot(ds_mma, sk.to(tl.bfloat16))
-    else:
-        dsq = tl.dot(ds, sk, input_precision="tf32x3")
-    tl.atomic_add(DSQ + qi[:, None]*R + r[None, :], dsq,
-                  query[:, None] & (r[None, :] < R), sem="relaxed")
-    if BF16:
-        dsk = tl.dot(tl.trans(ds_mma), sq.to(tl.bfloat16))
-    else:
-        dsk = tl.dot(tl.trans(ds), sq, input_precision="tf32x3")
-    tl.atomic_add(DSK + ki[:, None]*R + r[None, :], dsk,
-                  key[:, None] & (r[None, :] < R), sem="relaxed")
-    if CHUNKS is not None:
-        pos = tl.program_id(0).to(tl.int64)*R*DV
-        last = tl.sum(tl.where(t == length-1, p, 0.), 0)
-        reset = tl.load(RESET + chunk)
-        qs = tl.where(query & (reset == 0), w*tl.exp(p), 0.)
-        ks = tl.where(key, w*tl.exp(tl.minimum(last-p, 0.)), 0.)
-        h = tl.load(H + pos + r[:, None]*DV + d[None, :],
-                    (r[:, None] < R) & (d[None, :] < DV), 0)
-        if COMPENSATED:
-            # One accurate contraction supplies both vector and tau readouts.
-            hq = _bf16_fp32_dot(do, tl.trans(h))
-            tq = hq
-        elif BF16:
-            hq = tl.dot(do.to(tl.bfloat16), tl.trans(h).to(tl.bfloat16))
-            # Tau's query/key terms can be O(match length) larger than their
-            # sum. Do not contract their carried states through BF16: the two
-            # independently rounded terms no longer cancel.
-            tq = tl.dot(do, tl.trans(h), input_precision="tf32x3")
-        else:
-            hq = tl.dot(do, tl.trans(h), input_precision="tf32x3")
-            tq = hq
-        hq *= qs[:, None]
-        # Factor the scalar outside the inner reduction to avoid rounding each
-        # matrix element before the cancellation-sensitive tau contraction.
-        dtau += tl.sum(dw*tl.sum(sq*tq, 1)*qs, 0)
-        tl.atomic_add(DSQ + qi[:, None]*R + r[None, :], hq,
-                      query[:, None] & (r[None, :] < R), sem="relaxed")
-        g = tl.load(G + pos + r[:, None]*DV + d[None, :],
-                    (r[:, None] < R) & (d[None, :] < DV), 0)
-        if COMPENSATED:
-            # One accurate contraction supplies both vector and tau readouts.
-            hk = _bf16_fp32_dot(v, tl.trans(g))
-            tk = hk
-        elif BF16:
-            hk = tl.dot(v.to(tl.bfloat16), tl.trans(g).to(tl.bfloat16))
-            tk = tl.dot(v, tl.trans(g), input_precision="tf32x3")
-        else:
-            hk = tl.dot(v, tl.trans(g), input_precision="tf32x3")
-            tk = hk
-        hk *= ks[:, None]
-        dtau += tl.sum(dw*tl.sum(sk*tk, 1)*ks, 0)
-        tl.atomic_add(DSK + ki[:, None]*R + r[None, :], hk,
-                      key[:, None] & (r[None, :] < R), sem="relaxed")
+        K: tl.constexpr = C if BC == 0 else BC
+        t, r, d = tl.arange(0, K), tl.arange(0, BR), tl.arange(0, BD)
+        length = tl.load(LENGTH + chunk)
+        row = tl.load(ROWS + chunk*C + t)
+        p = tl.load(PREFIX + chunk*C + t)
+        w = tl.load(WEIGHT + chunk*C + t)
+        dw = tl.load(DLOG + chunk*C + t)
+        key, query = (t < length) & (row >= 0), (t < length) & (row < 0)
+        ki, qi = tl.where(key, row, 0), tl.where(query, -row-1, 0)
+        sq = tl.load(SQ + qi[:, None]*R + r[None, :], query[:, None] & (r[None, :] < R), 0).to(tl.float32)
+        sk = tl.load(SK + ki[:, None]*R + r[None, :], key[:, None] & (r[None, :] < R), 0).to(tl.float32)
+        v = tl.load(V + ki[:, None]*DV + d[None, :], key[:, None] & (d[None, :] < DV), 0).to(tl.float32)
+        do = tl.load(DO + qi[:, None]*DV + d[None, :], query[:, None] & (d[None, :] < DV), 0).to(tl.float32)
+        valid = query[:, None] & key[None, :] & (t[:, None] > t[None, :])
+        pair = tl.where(valid, tl.exp(tl.minimum(p[:, None]-p[None, :], 0.))*w[:, None]*w[None, :], 0.)
         if BF16:
-            hv = tl.dot(sk.to(tl.bfloat16), g.to(tl.bfloat16))
+            ds = tl.dot(do.to(tl.bfloat16), tl.trans(v).to(tl.bfloat16))*pair
+            score = tl.dot(sq.to(tl.bfloat16), tl.trans(sk).to(tl.bfloat16))
         else:
-            hv = tl.dot(sk, g, input_precision="tf32x3")
-        tl.atomic_add(DV_OUT + ki[:, None]*DV + d[None, :], hv*ks[:, None],
+            ds = tl.dot(do, tl.trans(v), input_precision="tf32x3")*pair
+            score = tl.dot(sq, tl.trans(sk), input_precision="tf32x3")
+        # Consume the two FP32 pair matrices early to limit their live ranges.
+        # Tau uses dS before the BF16 cast applied to vector MMAs.
+        dtau = tl.sum(tl.sum(ds*score*(dw[:, None]+dw[None, :]), 1), 0)
+        if BF16:
+            dv = tl.dot(tl.trans((score*pair).to(tl.bfloat16)), do.to(tl.bfloat16))
+        else:
+            dv = tl.dot(tl.trans(score*pair), do, input_precision="tf32x3")
+        tl.atomic_add(DV_OUT + ki[:, None]*DV + d[None, :], dv,
                       key[:, None] & (d[None, :] < DV), sem="relaxed")
-    if CHUNKS is None:
-        tl.store(TAU + stream, dtau)
-    else:
-        tl.atomic_add(TAU + stream, dtau, sem="relaxed")
+        if BF16:
+            ds_mma = ds.to(tl.bfloat16)
+            dsq = tl.dot(ds_mma, sk.to(tl.bfloat16))
+        else:
+            dsq = tl.dot(ds, sk, input_precision="tf32x3")
+        tl.atomic_add(DSQ + qi[:, None]*R + r[None, :], dsq,
+                      query[:, None] & (r[None, :] < R), sem="relaxed")
+        if BF16:
+            dsk = tl.dot(tl.trans(ds_mma), sq.to(tl.bfloat16))
+        else:
+            dsk = tl.dot(tl.trans(ds), sq, input_precision="tf32x3")
+        tl.atomic_add(DSK + ki[:, None]*R + r[None, :], dsk,
+                      key[:, None] & (r[None, :] < R), sem="relaxed")
+        if CHUNKS is not None:
+            pos = tl.program_id(0).to(tl.int64)*R*DV
+            last = tl.sum(tl.where(t == length-1, p, 0.), 0)
+            reset = tl.load(RESET + chunk)
+            qs = tl.where(query & (reset == 0), w*tl.exp(p), 0.)
+            ks = tl.where(key, w*tl.exp(tl.minimum(last-p, 0.)), 0.)
+            h = tl.load(H + pos + r[:, None]*DV + d[None, :],
+                        (r[:, None] < R) & (d[None, :] < DV), 0)
+            if COMPENSATED:
+                # One accurate contraction supplies both vector and tau readouts.
+                hq = _bf16_fp32_dot(do, tl.trans(h))
+                tq = hq
+            elif BF16:
+                hq = tl.dot(do.to(tl.bfloat16), tl.trans(h).to(tl.bfloat16))
+                # Tau's query/key terms can be O(match length) larger than their
+                # sum. Do not contract their carried states through BF16: the two
+                # independently rounded terms no longer cancel.
+                tq = tl.dot(do, tl.trans(h), input_precision="tf32x3")
+            else:
+                hq = tl.dot(do, tl.trans(h), input_precision="tf32x3")
+                tq = hq
+            hq *= qs[:, None]
+            # Factor the scalar outside the inner reduction to avoid rounding each
+            # matrix element before the cancellation-sensitive tau contraction.
+            dtau += tl.sum(dw*tl.sum(sq*tq, 1)*qs, 0)
+            tl.atomic_add(DSQ + qi[:, None]*R + r[None, :], hq,
+                          query[:, None] & (r[None, :] < R), sem="relaxed")
+            g = tl.load(G + pos + r[:, None]*DV + d[None, :],
+                        (r[:, None] < R) & (d[None, :] < DV), 0)
+            if COMPENSATED:
+                # One accurate contraction supplies both vector and tau readouts.
+                hk = _bf16_fp32_dot(v, tl.trans(g))
+                tk = hk
+            elif BF16:
+                hk = tl.dot(v.to(tl.bfloat16), tl.trans(g).to(tl.bfloat16))
+                tk = tl.dot(v, tl.trans(g), input_precision="tf32x3")
+            else:
+                hk = tl.dot(v, tl.trans(g), input_precision="tf32x3")
+                tk = hk
+            hk *= ks[:, None]
+            dtau += tl.sum(dw*tl.sum(sk*tk, 1)*ks, 0)
+            tl.atomic_add(DSK + ki[:, None]*R + r[None, :], hk,
+                          key[:, None] & (r[None, :] < R), sem="relaxed")
+            if BF16:
+                hv = tl.dot(sk.to(tl.bfloat16), g.to(tl.bfloat16))
+            else:
+                hv = tl.dot(sk, g, input_precision="tf32x3")
+            tl.atomic_add(DV_OUT + ki[:, None]*DV + d[None, :], hv*ks[:, None],
+                          key[:, None] & (d[None, :] < DV), sem="relaxed")
+        if CHUNKS is None:
+            tl.store(TAU + stream, dtau)
+        else:
+            tl.atomic_add(TAU + stream, dtau, sem="relaxed")
 
 
 @tr.jit

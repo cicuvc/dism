@@ -29,6 +29,9 @@ SOURCE = 'dism_v3/python/flash_dism/kernels/hard_backward_fused.py'
 
 
 def variant_source(source, variant):
+    from planner_algorithm_variants import ALGORITHM_VARIANTS, algorithm_source
+    if variant in ALGORITHM_VARIANTS:
+        return algorithm_source(source, variant)
     if variant == 'split3_combined':
         return variant_source(variant_source(source, 'combined'), 'split3')
     if variant in ('reuse', 'split2', 'split3'):
@@ -271,9 +274,12 @@ def diagnostic_c8(planner, labels, tau, compact):
 
 
 def main():
+    global BASE
+    from planner_algorithm_variants import ALGORITHM_VARIANTS
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--output',type=Path,required=True)
-    ap.add_argument('--variants',nargs='+',choices=['baseline','current','reuse','reorder','split2','split3','separate','combined','split3_combined'],default=['baseline','reuse','reorder','split2','split3','separate'])
+    ap.add_argument('--baseline',default=BASE,help='Pinned source revision for paired diagnostics')
+    ap.add_argument('--variants',nargs='+',choices=['baseline','current','reuse','reorder','split2','split3','separate','combined','split3_combined',*ALGORITHM_VARIANTS],default=['baseline','reuse','reorder','split2','split3','separate'])
     ap.add_argument('--chunks',nargs='+',type=int,choices=[8,16,32,64],default=[16,32,64])
     ap.add_argument('--warps',nargs='+',type=int,choices=[2,4,8],default=[2,4,8])
     ap.add_argument('--shapes',nargs='+',default=['32x64','64x64','64x32'])
@@ -282,6 +288,7 @@ def main():
     ap.add_argument('--samples',type=int,default=15)
     ap.add_argument('--references',action='store_true')
     args=ap.parse_args()
+    BASE = subprocess.check_output(['git','rev-parse',args.baseline],cwd=ROOT,text=True).strip()
     if not any(args.output.resolve().is_relative_to(p) for p in (ROOT/'build',ROOT/'dism_v3/build')):
         ap.error('output must be inside an ignored worktree build directory')
     args.output.parent.mkdir(parents=True,exist_ok=True)
@@ -354,6 +361,11 @@ def main():
                                     ref=references['dense_fp64_tau']
                                     row['tau_fp64']=ref.tolist()
                                     row['tau_error_fp64']=float((actual['rtau'].cpu().double()-ref).norm()/ref.norm().clamp_min(1e-30))
+                                    try:
+                                        torch.testing.assert_close(actual['rtau'].cpu().double(), ref.double(), rtol=2e-4, atol=2e-6)
+                                        row['tau_fp64_gate_failure']=None
+                                    except AssertionError as exc:
+                                        row['tau_fp64_gate_failure']=str(exc)
                                 for kind in ('quadratic','fp64'):
                                     if kind in references:
                                         row['error_vs_'+kind]={k:float((actual[k].detach().cpu().double().reshape(-1)-v.double()).norm()/v.double().norm().clamp_min(1e-30)) for k,v in references[kind].items()}
@@ -378,7 +390,7 @@ def main():
                                 row['full']=measure(lambda:plan.backward(*xs),args.samples,inner=1 if plan.matrix_snapshot_bytes>128*2**20 else 8)
                                 # Record actual stage calls with persistent argument buffers.
                                 records=[]; originals={}
-                                for attr in ('_chunk_backward','_chunk_summaries','_summary_scan','_boundary_tau'):
+                                for attr in ('_chunk_backward','_chunk_summaries','_summary_scan','_boundary_tau','_query_backward','_key_backward'):
                                     if hasattr(module,attr):
                                         originals[attr]=getattr(module,attr); setattr(module,attr,Recorder(originals[attr],records))
                                 try: plan.backward(*xs)
