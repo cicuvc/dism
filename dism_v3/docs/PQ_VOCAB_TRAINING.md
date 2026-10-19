@@ -5,6 +5,11 @@ two factorised symbols, `512 = 16 x 32`. The dense `[H,512,64]` codebook is
 replaced by `[H,2,32,32]`; the first factor uses 16 of 32 allocated rows, the
 second uses all 32.
 
+The same implementation also supports `1024 = 32 x 32`. Because group storage
+is padded to the maximum group size, `16x32` and `32x32` have identical codebook
+parameters; only the first group's inactive tail changes and hard labels use a
+1024-way mixed-radix index.
+
 ## Configuration
 
 ```json
