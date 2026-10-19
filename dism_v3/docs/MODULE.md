@@ -282,6 +282,10 @@ the paired tables in swapped roles for the second half of heads. See
 `vocab_layer_group_size=2` aliases same-head Q/K codebooks across consecutive
 DISM layer pairs. See [VOCAB_LAYER_SHARING.md](VOCAB_LAYER_SHARING.md).
 
+Token-id or hashed-token symbol anchors and their possible training schemes are
+recorded in [TOKEN_ANCHORED_DISM.md](TOKEN_ANCHORED_DISM.md). This is currently
+design-only and does not change the default path.
+
 ## Opt-in quantile balancing (fixed true direction)
 
 For the optimization and soft/hard derivation, see
