@@ -176,8 +176,10 @@ class DismLM(nn.Module):
                         vocab_transvq_rank=getattr(config, "vocab_transvq_rank", 4),
                         pq_vocab_sizes=getattr(config, "pq_vocab_sizes", ()),
                         vocab_head_pairing=getattr(config, "vocab_head_pairing", ""),
+                        gdn_b_bias=getattr(config, "gdn_b_bias", False),
                         post_norm=config.post_norm)
         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
+        layer_intermediate_sizes = tuple(getattr(config, 'layer_intermediate_sizes', ()))
         if getattr(config, 'layer_layout', ''):
             # Dedicated-layer layout: no layer mixes DISM and a recurrent branch.
             spec = {'g': pure_type, 'd': 'dism', 'h': hybrid_type}
@@ -190,6 +192,8 @@ class DismLM(nn.Module):
             for i, ch in enumerate(layout):
                 layer_config = copy.copy(c)
                 layer_config.attention_type = spec[ch]
+                if layer_intermediate_sizes:
+                    layer_config.intermediate_size = layer_intermediate_sizes[i]
                 blocks.append(DismBlock(layer_config, i))
             self.layers = nn.ModuleList(blocks)
         elif config.alternating_gdn or config.rear_half_dism:
@@ -200,12 +204,22 @@ class DismLM(nn.Module):
             blocks=[]
             for i in range(config.n_layer):
                 layer_config=copy.copy(c)
+                if layer_intermediate_sizes:
+                    layer_config.intermediate_size = layer_intermediate_sizes[i]
                 if (i < config.n_layer//2 if config.rear_half_dism else i%2==0):
                     layer_config.attention_type=pure_type
                 blocks.append(DismBlock(layer_config,i))
             self.layers=nn.ModuleList(blocks)
         else:
-            self.layers = nn.ModuleList(DismBlock(c, i) for i in range(config.n_layer))
+            if layer_intermediate_sizes:
+                blocks = []
+                for i in range(config.n_layer):
+                    layer_config = copy.copy(c)
+                    layer_config.intermediate_size = layer_intermediate_sizes[i]
+                    blocks.append(DismBlock(layer_config, i))
+                self.layers = nn.ModuleList(blocks)
+            else:
+                self.layers = nn.ModuleList(DismBlock(c, i) for i in range(config.n_layer))
         if config.value_residual and not getattr(self.layers[0].attn, "is_pure_mixer", False):
             raise ValueError('value_residual requires a pure recurrent first mixer layer')
         if config.conv_impl not in ("fused", "linear_fla"):

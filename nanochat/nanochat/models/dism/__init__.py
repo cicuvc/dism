@@ -50,6 +50,10 @@ class DismConfig:
     selector_beta2: float = 0.0
     value_residual: bool = False
     value_residual_gate_bias: float = 2.0
+    # Optional GDN beta-projection bias, used only for explicit parameter matching.
+    gdn_b_bias: bool = False
+    # Optional per-layer SwiGLU intermediate sizes. Empty keeps intermediate_size.
+    layer_intermediate_sizes: tuple[int, ...] = ()
     conv_impl: str = "fused"
     conv_backend: str = "cuda"
     gqa_query_channels: int = 1
@@ -120,6 +124,16 @@ class DismConfig:
         self.softcap = float(self.softcap)
         if isinstance(self.pq_vocab_sizes, list):
             self.pq_vocab_sizes = tuple(self.pq_vocab_sizes)
+        if isinstance(self.layer_intermediate_sizes, list):
+            self.layer_intermediate_sizes = tuple(self.layer_intermediate_sizes)
+        if self.layer_intermediate_sizes:
+            if len(self.layer_intermediate_sizes) != self.n_layer:
+                raise ValueError('layer_intermediate_sizes must have n_layer entries')
+            if any(isinstance(x, bool) or not isinstance(x, int) or x <= 0
+                   for x in self.layer_intermediate_sizes):
+                raise ValueError('layer_intermediate_sizes must contain positive integers')
+        if not isinstance(self.gdn_b_bias, bool):
+            raise TypeError('gdn_b_bias must be bool')
         if (isinstance(self.vocab_layer_group_size, bool)
                 or not isinstance(self.vocab_layer_group_size, int)
                 or self.vocab_layer_group_size < 1):

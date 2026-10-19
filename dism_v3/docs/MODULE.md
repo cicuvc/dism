@@ -289,6 +289,9 @@ design-only and does not change the default path.
 Q/K feature coupling, shareqk failure evidence and the residual-width scaling
 hypothesis are recorded in [VOCAB_COUPLING.md](VOCAB_COUPLING.md).
 
+The parameter-matched pure-GDN valres control is documented in
+[GDN_ONLY_CONTROL.md](GDN_ONLY_CONTROL.md).
+
 ## Opt-in quantile balancing (fixed true direction)
 
 For the optimization and soft/hard derivation, see

@@ -12,7 +12,8 @@ class PureGdnAttention(nn.Module):
     gdn_raw=DismGdnAttention.gdn_raw
     init_gdn_parameters=DismGdnAttention.init_gdn_parameters
 
-    def __init__(self,width,heads,*,head_dim=64,value_dim=64,conv_size=4,value_residual=False,**kwargs):
+    def __init__(self,width,heads,*,head_dim=64,value_dim=64,conv_size=4,value_residual=False,
+                 gdn_b_bias=False,**kwargs):
         super().__init__()
         from fla.modules import FusedRMSNormGated
         self.width,self.heads,self.head_dim,self.value_dim=width,heads,head_dim,value_dim
@@ -21,7 +22,7 @@ class PureGdnAttention(nn.Module):
         self.gdn_k_conv=CausalShortConv1d(width,heads*head_dim,conv_size)
         self.gdn_v_conv=CausalShortConv1d(width,heads*value_dim,conv_size)
         self.gdn_a_proj=nn.Linear(width,heads,bias=False)
-        self.gdn_b_proj=nn.Linear(width,heads,bias=False)
+        self.gdn_b_proj=nn.Linear(width,heads,bias=gdn_b_bias)
         self.gdn_A_log=nn.Parameter(torch.empty(heads))
         self.gdn_dt_bias=nn.Parameter(torch.empty(heads))
         self.gdn_A_log._no_weight_decay=True;self.gdn_dt_bias._no_weight_decay=True
