@@ -21,6 +21,7 @@ class DismConfig(PretrainedConfig):
                  qb_q_strength=0.0, qb_k_strength=0.0, qb_iterations=4, qb_update_interval=16, qb_samples=2048, qb_update_rate=0.1,
                  vocab_transvq_lite=False,
                  vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
+                 pq_vocab_sizes=(),
                  sliding_delta_chunk_size=32,
                  intermediate_size=None, hidden_ratio=4., norm_eps=1e-6,
                  initializer_range=.02, use_cache=True, fuse_cross_entropy=True,
@@ -89,6 +90,10 @@ class DismConfig(PretrainedConfig):
         self.vocab_transvq_lite = bool(vocab_transvq_lite)
         self.vocab_transvq_map = str(vocab_transvq_map)
         self.vocab_transvq_rank = int(vocab_transvq_rank)
+        from .pq_vocab import validate_sizes
+        self.pq_vocab_sizes = (validate_sizes(
+            pq_vocab_sizes, vocab_size=qk_vocab_size, head_dim=head_dim)
+            if pq_vocab_sizes else ())
         if sliding_delta_chunk_size not in (16, 32, 64):
             raise ValueError("sliding_delta_chunk_size must be 16, 32, or 64")
         self.sliding_delta_chunk_size = sliding_delta_chunk_size

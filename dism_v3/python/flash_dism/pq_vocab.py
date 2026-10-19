@@ -33,6 +33,26 @@ import torch
 from .emb_kernel import interp_embeddings
 
 
+def validate_sizes(sizes, *, vocab_size, head_dim):
+    """Validate the initial training-only product-quantised codebook contract."""
+    sizes = tuple(int(size) for size in sizes)
+    if not sizes or any(size < 2 for size in sizes):
+        raise ValueError('pq_vocab_sizes must contain group sizes >= 2')
+    if math.prod(sizes) != vocab_size:
+        raise ValueError('product(pq_vocab_sizes) must equal qk_vocab_size')
+    if head_dim % len(sizes):
+        raise ValueError('head_dim must be divisible by len(pq_vocab_sizes)')
+    group_dim = head_dim // len(sizes)
+    if group_dim not in (32, 64):
+        raise ValueError('factorised group dimension must be 32 or 64')
+    return sizes
+
+
+def codebook_shape(heads, sizes, head_dim):
+    sizes = tuple(sizes)
+    return heads, len(sizes), max(sizes), head_dim//len(sizes)
+
+
 def _check(vocab, sizes):
     if vocab.dim() != 4 or vocab.shape[1] != len(sizes):
         raise ValueError('codebook must be [H, len(sizes), Smax, dg]')

@@ -65,7 +65,8 @@ class DismBlock(nn.Module):
                        vocab_transvq=getattr(config, 'vocab_transvq', False),
                        vocab_transvq_lite=getattr(config, 'vocab_transvq_lite', False),
                        vocab_transvq_map=getattr(config, 'vocab_transvq_map', 'linear_attn'),
-                       vocab_transvq_rank=getattr(config, 'vocab_transvq_rank', 4))
+                       vocab_transvq_rank=getattr(config, 'vocab_transvq_rank', 4),
+                       pq_vocab_sizes=getattr(config, 'pq_vocab_sizes', ()))
         if config.attention_type in ('hybrid', 'hybrid_sdn', 'pure_sdn',
                                      'hybrid_path', 'pure_path'):
             options['window_size'] = config.window_size

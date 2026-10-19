@@ -100,6 +100,8 @@ class HardInferenceEngine:
     def __init__(self, model, prefill_engine, *, capacity, planner_backend="cpu"):
         if getattr(model.config, "recurrent_mixer", "gdn") != "gdn":
             raise NotImplementedError("hard inference currently supports only the GDN recurrent mixer")
+        if getattr(model.config, "pq_vocab_sizes", ()):
+            raise NotImplementedError("hard inference does not yet support product-quantised DISM vocabularies")
         if getattr(model.config, "gqa_query_channels", 1) > 1:
             raise NotImplementedError("GQA-DISM G>1 is not supported by hard inference")
         if getattr(model.config, "kv_group_size", 1) > 1:

@@ -93,6 +93,9 @@ class DismConfig:
     vocab_transvq_map: str = "linear_attn"
     vocab_transvq_rank: int = 4
     vocab_transvq_separate_qk: bool = False
+    # Optional product-quantised q/k codebook. Empty keeps the dense V-way
+    # vocabulary; (16,32) preserves V=512 with two 32-dimensional groups.
+    pq_vocab_sizes: tuple[int, ...] = ()
     # Recurrent half of the hybrid: the original gated delta rule or the
     # gate-free sliding-window DeltaNet. The two use the same layout symbols.
     recurrent_mixer: str = "gdn"
@@ -108,6 +111,8 @@ class DismConfig:
         # integer attribute into a SymInt (Triton would infer an integer ABI
         # even though CE validates/converts it to float at runtime).
         self.softcap = float(self.softcap)
+        if isinstance(self.pq_vocab_sizes, list):
+            self.pq_vocab_sizes = tuple(self.pq_vocab_sizes)
         if self.qb_q_strength or self.qb_k_strength:
             if self.direction_policy != 'true' or self.direction_antithetic:
                 raise ValueError('QB requires direction_policy=true and direction_antithetic=false')

@@ -175,6 +175,7 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                 else:
                     table_q, table_k = attn.q_vocab, attn.k_vocab
                 stats = {}
+                pq_sizes = tuple(getattr(attn, 'pq_vocab_sizes', ()))
                 for tag, vec, table, rows in (("q", q, table_q, heads),
                                               ("k", k, table_k, kv_heads)):
                     # Per-head counts: q_vocab/k_vocab are [heads, V, D] with independent
@@ -185,17 +186,40 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                     max_sum = 0.0
                     for start in range(0, length, chunk_size):
                         stop = min(start + chunk_size, length)
-                        scores = torch.einsum("bnhd,hvd->bnhv", vec[:, start:stop], table.float())
                         qb = getattr(attn, 'qb', None)
-                        if qb is not None:
-                            price = qb.q_price if tag == 'q' else qb.k_price[::attn.kv_group_size]
-                            strength = qb.q_strength if tag == 'q' else qb.k_strength
-                            with torch.autocast('cuda', enabled=False):
+                        if pq_sizes:
+                            from flash_dism.pq_vocab import strides
+                            group_dim = attn.head_dim // len(pq_sizes)
+                            code = torch.arange(vocab_size, device=device)
+                            full_logp = None
+                            idx_flat = torch.zeros(
+                                (vec.shape[0], stop-start, rows),
+                                device=device, dtype=torch.long)
+                            for group, (size, step) in enumerate(zip(
+                                    pq_sizes, strides(pq_sizes))):
                                 scores = model.vocab_temperature * torch.einsum(
-                                    'bnhd,hvd->bnhv', vec[:, start:stop].float(),
-                                    table.to(torch.bfloat16).float()) - strength*price
-                        probs = torch.softmax(scores, dim=-1).reshape(-1, vocab_size)
-                        idx = probs.argmax(-1).reshape(-1, rows)
+                                    "bnhd,hvd->bnhv",
+                                    vec[:, start:stop, :, group*group_dim:(group+1)*group_dim],
+                                    table[:, group, :size].float())
+                                logp = torch.log_softmax(scores, dim=-1)
+                                positions = (code // step) % size
+                                contribution = logp[..., positions]
+                                full_logp = (contribution if full_logp is None
+                                             else full_logp + contribution)
+                                idx_flat += logp.argmax(-1) * step
+                            probs = full_logp.exp().reshape(-1, vocab_size)
+                            idx = idx_flat.reshape(-1, rows)
+                        else:
+                            scores = torch.einsum("bnhd,hvd->bnhv", vec[:, start:stop], table.float())
+                            if qb is not None:
+                                price = qb.q_price if tag == 'q' else qb.k_price[::attn.kv_group_size]
+                                strength = qb.q_strength if tag == 'q' else qb.k_strength
+                                with torch.autocast('cuda', enabled=False):
+                                    scores = model.vocab_temperature * torch.einsum(
+                                        'bnhd,hvd->bnhv', vec[:, start:stop].float(),
+                                        table.to(torch.bfloat16).float()) - strength*price
+                            probs = torch.softmax(scores, dim=-1).reshape(-1, vocab_size)
+                            idx = probs.argmax(-1).reshape(-1, rows)
                         for head in range(rows):
                             counts[head] += torch.bincount(idx[:, head], minlength=vocab_size).double()
                         entropy_sum += float(-(probs * (probs + 1e-12).log()).sum(-1).mean()) * (stop - start)

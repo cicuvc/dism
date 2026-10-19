@@ -169,6 +169,7 @@ class DismLM(nn.Module):
                         vocab_transvq_lite=getattr(config, "vocab_transvq_lite", False),
                         vocab_transvq_map=getattr(config, "vocab_transvq_map", "linear_attn"),
                         vocab_transvq_rank=getattr(config, "vocab_transvq_rank", 4),
+                        pq_vocab_sizes=getattr(config, "pq_vocab_sizes", ()),
                         post_norm=config.post_norm)
         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
         if getattr(config, 'layer_layout', ''):
@@ -282,12 +283,20 @@ class DismLM(nn.Module):
                 if hasattr(attn, 'init_gdn_parameters'):
                     attn.init_gdn_parameters()
                 continue
+            pq_sizes = tuple(getattr(attn, 'pq_vocab_sizes', ()))
             for table in (attn.q_vocab, attn.k_vocab):
                 # Consume the original per-head RNG stream, but initialize each shared parameter once.
                 # The shared key codebook with kv_group_size>1 has fewer rows; the
                 # draw keeps its width so the RNG counter is unchanged either way.
-                draw = F.silu(torch.randn((attn.heads, attn.q_vocab.shape[-2], attn.head_dim),
-                                          device=table.device, dtype=table.dtype))
+                if pq_sizes:
+                    draw = F.silu(torch.randn(
+                        (attn.heads, len(pq_sizes), max(pq_sizes),
+                         attn.head_dim//len(pq_sizes)),
+                        device=table.device, dtype=table.dtype))
+                else:
+                    draw = F.silu(torch.randn(
+                        (attn.heads, attn.q_vocab.shape[-2], attn.head_dim),
+                        device=table.device, dtype=table.dtype))
                 if id(table) not in initialized_tables:
                     table.copy_(draw[0] if table.ndim == 2 else draw[:table.shape[0]])
                     initialized_tables.add(id(table))

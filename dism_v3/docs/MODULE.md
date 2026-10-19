@@ -269,6 +269,12 @@ Set `recurrent_mixer="sliding_path"` for the tied-key/reflector softmax PaTH
 variant; it shares the SDN feature and output parameterization. See
 [SLIDING_PATH.md](SLIDING_PATH.md).
 
+## Opt-in product-quantised q/k vocabulary
+
+`pq_vocab_sizes=[16,32]` keeps a 512-code capacity while storing two
+32-dimensional factors. The DISM core is unchanged. See
+[PQ_VOCAB_TRAINING.md](PQ_VOCAB_TRAINING.md).
+
 ## Opt-in quantile balancing (fixed true direction)
 
 For the optimization and soft/hard derivation, see

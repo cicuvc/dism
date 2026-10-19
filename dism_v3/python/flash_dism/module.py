@@ -150,7 +150,8 @@ class DismAttention(nn.Module):
                  rope_theta=10000.0, qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
                  value_residual=False, vocab_temperature=1.0,
                  vocab_transvq=False, vocab_transvq_lite=False,
-                 vocab_transvq_map="linear_attn", vocab_transvq_rank=4, gqa_query_channels: int = 1,
+                 vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
+                 pq_vocab_sizes=(), gqa_query_channels: int = 1,
                  kv_group_size: int = 1, hard_tau_grad_scale: float = 1.0,
                  qb_q_strength=0.0, qb_k_strength=0.0, qb_iterations=4, qb_update_interval=16, qb_samples=2048, qb_update_rate=0.1,
                  selector_norm: bool = False, selector_norm_scale_init: float = 0.2):
@@ -203,6 +204,19 @@ class DismAttention(nn.Module):
         if heads % kv_group_size:
             raise ValueError("heads must be divisible by kv_group_size")
         self.kv_group_size = kv_group_size
+        from .pq_vocab import codebook_shape, validate_sizes
+        self.pq_vocab_sizes = (validate_sizes(
+            pq_vocab_sizes, vocab_size=vocab_size, head_dim=head_dim)
+            if pq_vocab_sizes else ())
+        if self.pq_vocab_sizes:
+            if gqa_query_channels != 1 or kv_group_size != 1:
+                raise NotImplementedError('PQ vocab requires gqa_query_channels=1 and kv_group_size=1')
+            if selector_norm:
+                raise NotImplementedError('PQ vocab does not yet support selector_norm')
+            if vocab_transvq:
+                raise NotImplementedError('PQ vocab cannot be combined with TransVQ')
+            if qb_q_strength or qb_k_strength:
+                raise NotImplementedError('PQ vocab does not yet support QB prices')
         if not (0.0 <= float(hard_tau_grad_scale) <= 1.0):
             raise ValueError("hard_tau_grad_scale must be in [0,1]")
         # 1.0 keeps rtau trained by both paths (unchanged); 0.0 detaches it on
@@ -233,9 +247,16 @@ class DismAttention(nn.Module):
         self.sq_proj = nn.Linear(width, heads * readout_dim, bias=False)
         self.sk_proj = nn.Linear(width, self.kv_heads * readout_dim, bias=False)
         # Store effective codewords directly: SiLU shapes only initialization,
-        # not the trainable parameter space or its backward Jacobian.
-        self.q_vocab = nn.Parameter(F.silu(torch.randn(heads, vocab_size, head_dim, dtype=torch.float32)))
-        self.k_vocab = nn.Parameter(F.silu(torch.randn(self.kv_heads, vocab_size, head_dim, dtype=torch.float32)))
+        # not the trainable parameter space or its backward Jacobian. Factorised
+        # codebooks use [H, groups, max_group, head_dim/groups].
+        if self.pq_vocab_sizes:
+            q_shape = codebook_shape(heads, self.pq_vocab_sizes, head_dim)
+            k_shape = codebook_shape(self.kv_heads, self.pq_vocab_sizes, head_dim)
+        else:
+            q_shape = (heads, vocab_size, head_dim)
+            k_shape = (self.kv_heads, vocab_size, head_dim)
+        self.q_vocab = nn.Parameter(F.silu(torch.randn(q_shape, dtype=torch.float32)))
+        self.k_vocab = nn.Parameter(F.silu(torch.randn(k_shape, dtype=torch.float32)))
         self.log_sel_tau = nn.Parameter(torch.empty(heads).uniform_(-4, 4))
         for parameter in (self.q_vocab, self.k_vocab, self.log_sel_tau):
             parameter._no_weight_decay = True
@@ -565,7 +586,14 @@ class DismAttention(nn.Module):
             hard, direction = (self._expand_gqa(t, 1) for t in (hard, direction))
         from .reinforce import enabled, sampled_voc
         beta = self.vocab_temperature if vocab_temperature is None else vocab_temperature
-        if self.qb is not None:
+        if self.pq_vocab_sizes:
+            from .pq_voc_forward import pq_voc_forward
+            if not compiling and layout is not None:
+                compiled_layout = layout.table.flatten()
+            output = pq_voc_forward(
+                q, k, sq, sk, dism_v, eq, ek, tau, beta, direction, hard,
+                cu_seqlens, compiled_layout, sizes=self.pq_vocab_sizes)
+        elif self.qb is not None:
             if enabled():
                 raise NotImplementedError('QB cannot be combined with categorical REINFORCE')
             if not compiling and layout is not None:
