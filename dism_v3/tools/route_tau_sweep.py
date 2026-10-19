@@ -1,12 +1,13 @@
-"""Sweep the maximal match length and compare the two dispatch routes on rtau.
+"""Sweep symbol-block length and compare the two dispatch routes on rtau.
 
 Diagnostic for the mismatch found by dism_v3/tests/test_hard_route_consistency.py:
-the quadratic fallback matches the FP64 oracle to ~1e-6 while the planner event
-route is off by 2e-3..6e-2, only in the tau gradient, and only when the symbol
-streams are identical everywhere (maximal match runs).
+the original BF16 event route had percent-scale tau error on long matching
+streams while the quadratic fallback matched the FP64 oracle to about 1e-6.
 
-Labels here are alternating blocks of `block` equal symbols, so the longest
-common suffix length is ~block. Everything else is held fixed.
+Labels here are alternating blocks of `block` equal symbols. This changes event
+topology; it does not cap the common suffix (the diagonal still matches all N
+tokens). Planner chunks count events, not tokens. Everything else is fixed.
+Use `detailed` for all six gradient components against both quadratic and FP64.
 """
 import sys
 from pathlib import Path
@@ -21,8 +22,8 @@ from flash_dism import dism_core                                      # noqa: E4
 from flash_dism.hard_training import AsyncHardPlanner, shutdown_hard_planners  # noqa: E402
 from test_hard_training import oracle                                 # noqa: E402
 
-INDEX = (2, 3, 4, 11)
-NAMES = ('sq_vec', 'sk_vec', 'v', 'rtau')
+INDEX = (0, 1, 2, 3, 4, 11)
+NAMES = ('q_vec', 'k_vec', 'sq_vec', 'sk_vec', 'v', 'rtau')
 
 
 def make(block, n=512, b=2, h=2, tau=0.5, seed=918):
@@ -39,12 +40,13 @@ def make(block, n=512, b=2, h=2, tau=0.5, seed=918):
         ik = iq.clone()
     hard = torch.ones((b, h), dtype=torch.bool, device='cuda')
     direction = torch.zeros((b, h), dtype=torch.bool, device='cuda')
-    t = torch.tensor([tau, tau], device='cuda', requires_grad=True)
+    t = torch.full((h,), tau, device='cuda', dtype=torch.float32, requires_grad=True)
     return (q, k, sq, sk, v, lq, lk, iq, ik, direction, hard, t)
 
 
-def grads(xs, policy, do, chunk_size=64):
-    with AsyncHardPlanner(backward_policy=policy, workers=2, chunk_size=chunk_size) as planner:
+def grads(xs, policy, do, chunk_size=64, precision='bf16', compact=True):
+    with AsyncHardPlanner(backward_policy=policy, workers=2, chunk_size=chunk_size,
+                          mma_precision=precision, compact=compact) as planner:
         out = dism_core(*xs, hard_planner=planner)
         g = torch.autograd.grad(out, [xs[i] for i in INDEX], do, allow_unused=True)
     return {n: (torch.zeros_like(xs[i]) if gi is None else gi)
@@ -55,9 +57,59 @@ def rel(a, b):
     return ((a.double() - b.double()).norm() / b.double().norm().clamp_min(1e-30)).item()
 
 
+def metrics(actual, reference):
+    """Signed bias is mean(actual-reference); undefined zero ratios stay N/A."""
+    a, b = actual.detach().double().flatten(), reference.detach().double().flatten()
+    an, bn = a.norm().item(), b.norm().item()
+    return dict(cosine=(float(a @ b)/(an*bn) if an and bn else None),
+                relative_l2=((a-b).norm().item()/bn if bn else None),
+                norm_ratio=(an/bn if bn else None),
+                signed_bias=(a-b).mean().item(), max_abs=(a-b).abs().max().item())
+
+
+def detailed():
+    """One fixed hard row, two heads, a 512-token matching suffix; <100 MiB."""
+    xs = make(512, b=1)
+    torch.manual_seed(77)
+    do = (torch.randn_like(xs[4])*.2).contiguous()
+    refs = [x.detach().double().requires_grad_() if x.requires_grad else x for x in xs]
+    expected = oracle(refs, None)
+    og = torch.autograd.grad(expected, [refs[i] for i in INDEX], do.double(), allow_unused=True)
+    truth = {name: torch.zeros_like(xs[i]) if g is None else g
+             for name, i, g in zip(NAMES, INDEX, og)}
+    quadratic = grads(xs, 'quadratic', do)
+    print('route component comparison cosine relative_l2 norm_ratio signed_bias max_abs')
+    for precision, compact in (('bf16', True), ('bf16', False), ('tf32x3', True)):
+        actual = grads(xs, 'event', do, precision=precision, compact=compact)
+        for comparison, reference in (('quadratic', quadratic), ('FP64', truth)):
+            for name in NAMES:
+                values = metrics(actual[name], reference[name])
+                formatted = ' '.join('N/A' if v is None else f'{v:.9e}' for v in values.values())
+                print(f'{precision}/compact={compact} {name} {comparison} {formatted}')
+    for name in NAMES:
+        values = metrics(quadratic[name], truth[name])
+        formatted = ' '.join('N/A' if v is None else f'{v:.9e}' for v in values.values())
+        print(f'quadratic {name} FP64 {formatted}')
+    with AsyncHardPlanner(backward_policy='event', workers=2) as planner:
+        out = dism_core(*xs, hard_planner=planner)
+        print('forward vs FP64', metrics(out, expected))
+        ticket = planner.submit(xs[7], xs[8], xs[10], xs[11])
+        prepared = ticket.future.result()
+        offsets = prepared.host.multi['offsets']
+        spans = offsets[1:]-offsets[:-1]
+        print('plan statistics', prepared.host.statistics)
+        print('max chunks per stream', int(spans.max()) if spans.numel() else 1)
+    print('peak allocated MiB', torch.cuda.max_memory_allocated()/2**20)
+    shutdown_hard_planners()
+
+
 def main():
+    torch.set_num_threads(1)
+    if len(sys.argv) > 1 and sys.argv[1] == 'detailed':
+        detailed()
+        return
     if len(sys.argv) > 1 and sys.argv[1] == 'chunk':
-        print(f'{"chunk":>6} {"block":>6} {"run/chunk":>10} {"tau event-vs-quad":>18}')
+        print(f'{"chunk":>6} {"block":>6} {"block/chunk":>11} {"tau event-vs-quad":>18}')
         for chunk in (16, 32, 64):
             for block in (16, 32, 64, 128, 256, 512):
                 xs = make(block)

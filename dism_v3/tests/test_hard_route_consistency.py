@@ -25,10 +25,11 @@ import torch
 from flash_dism import dism_core
 from flash_dism.hard_training import AsyncHardPlanner, shutdown_hard_planners
 from test_hard_training import inputs, oracle
+from gradient_acceptance import assert_gradient
 
 
-NAMES = ('sq_vec', 'sk_vec', 'v', 'rtau')
-INDEX = (2, 3, 4, 11)
+NAMES = ('q_vec', 'k_vec', 'sq_vec', 'sk_vec', 'v', 'rtau')
+INDEX = (0, 1, 2, 3, 4, 11)
 # Tight enough to see a route bias that the oracle gates would hide. The
 # reference and both kernels accumulate in FP32/BF16, so this is not bitwise
 # exact, but a shared-input mismatch above this is a real discrepancy.
@@ -41,8 +42,9 @@ def _relative(a, b):
     return (a.double() - b.double()).norm() / denom
 
 
-def _route_grads(xs, layout, policy, do, chunk_size=64):
-    with AsyncHardPlanner(backward_policy=policy, workers=2, chunk_size=chunk_size) as planner:
+def _route_grads(xs, layout, policy, do, chunk_size=64, compact=True):
+    with AsyncHardPlanner(backward_policy=policy, workers=2, chunk_size=chunk_size,
+                          compact=compact) as planner:
         out = dism_core(*xs, layout=layout, hard_planner=planner)
         grads = torch.autograd.grad(out, [xs[i] for i in INDEX], do,
                                     allow_unused=True)
@@ -51,11 +53,14 @@ def _route_grads(xs, layout, policy, do, chunk_size=64):
 
 
 def _compare(packed, mode, pattern, block=None, chunk_size=64, tight=True,
-             tau_value=None):
+             tau_value=None, compact=True):
     xs, layout = inputs(packed, mode, pattern)
+    if pattern == 'no-match':
+        xs[7].zero_()
+        xs[8].fill_(1)
     if block is not None:
-        # Same-length runs of one symbol, so the longest common suffix is the
-        # block length and streams can span several planner chunks.
+        # Constant-symbol blocks change stream topology. The identical labels
+        # still match along the whole diagonal, including across block changes.
         n = xs[0].shape[1]
         pattern_ids = ((torch.arange(n, device='cuda') // block) % 2).to(torch.int32)
         xs = list(xs)
@@ -74,7 +79,7 @@ def _compare(packed, mode, pattern, block=None, chunk_size=64, tight=True,
         reference_shape = dism_core(*xs, layout=layout, hard_planner=planner)
     do = (torch.randn_like(reference_shape) * .2).contiguous()
 
-    event = _route_grads(xs, layout, 'event', do, chunk_size)
+    event = _route_grads(xs, layout, 'event', do, chunk_size, compact)
     quadratic = _route_grads(xs, layout, 'quadratic', do, chunk_size)
 
     refs = [x.detach().double().requires_grad_() if x.requires_grad else x for x in xs]
@@ -83,6 +88,11 @@ def _compare(packed, mode, pattern, block=None, chunk_size=64, tight=True,
         expected, [refs[i] for i in INDEX], do.double(), allow_unused=True)
     truth = {name: (torch.zeros_like(xs[i]) if g is None else g)
              for name, i, g in zip(NAMES, INDEX, oracle_grads)}
+    torch.testing.assert_close(reference_shape.float(), expected.float(), atol=.008, rtol=.025)
+    assert _relative(reference_shape, expected) < .01
+    for name in NAMES:
+        assert_gradient(event[name], truth[name], name)
+        assert_gradient(quadratic[name], truth[name], name)
 
     rows = []
     for name in NAMES:
@@ -114,19 +124,27 @@ def test_dispatch_route_does_not_change_the_hard_gradient(packed, mode):
 
 
 @pytest.mark.parametrize('chunk_size,block', [(64, 512), (64, 256), (32, 256), (16, 512)])
-@pytest.mark.xfail(strict=True, reason=(
-    'Known defect: the planner event route returns a wrong tau gradient once a '
-    'stream spans more than one planner chunk. Measured event-vs-quadratic '
-    'relative L2 on rtau grows with the chunk count: 1 chunk 1e-7, 4 chunks '
-    '4e-4..1.5e-2, 8 chunks 5e-2, 32 chunks 1.6e-1, while the quadratic '
-    'fallback stays within 1.3e-5 of the FP64 oracle. sq/sk/v agree between '
-    'routes to bf16 rounding at every run length, so the defect is tau-only. '
-    'Long runs dominate the tau gradient (~s times their weight sensitivity), '
-    'so this hits the part of dtau with the largest contribution. Verified by '
-    'dism_v3/build/route_tau_sweep.py.'))
-def test_multi_chunk_streams_route_invariant(chunk_size, block):
+@pytest.mark.parametrize('compact', [True, False])
+def test_multi_chunk_streams_route_invariant(chunk_size, block, compact):
     try:
-        _compare(False, 'hard', 'random', block=block, chunk_size=chunk_size,
-                 tau_value=0.5)
+        event, quadratic, truth = _compare(
+            False, 'hard', 'random', block=block, chunk_size=chunk_size,
+            tau_value=0.5, compact=compact)
+        # Also constrain relative error, so the absolute elementwise allowance
+        # cannot hide a cancellation-sensitive small shared tau gradient.
+        assert _relative(event['rtau'], quadratic['rtau']) < REL_L2
+        assert _relative(event['rtau'], truth['rtau']) < REL_L2
+    finally:
+        shutdown_hard_planners()
+
+
+@pytest.mark.parametrize('packed,pattern,tau', [
+    (False, 'no-match', .5), (True, 'no-match', .5),
+    (False, 'repeat', 0.), (True, 'repeat', .5),
+    (False, 'repeat', -.5), (True, 'repeat', -.5),
+])
+def test_route_edge_cases(packed, pattern, tau):
+    try:
+        _compare(packed, 'hard', pattern, chunk_size=32, tau_value=tau)
     finally:
         shutdown_hard_planners()

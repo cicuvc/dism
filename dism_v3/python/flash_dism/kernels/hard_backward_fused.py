@@ -90,20 +90,29 @@ def _chunk_backward(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, IDS,
                     (r[:, None] < R) & (d[None, :] < DV), 0)
         if BF16:
             hq = tl.dot(do.to(tl.bfloat16), tl.trans(h).to(tl.bfloat16))
+            # Tau's query/key terms can be O(match length) larger than their
+            # sum. Do not contract their carried states through BF16: the two
+            # independently rounded terms no longer cancel.
+            tq = tl.dot(do, tl.trans(h), input_precision="tf32x3")
         else:
             hq = tl.dot(do, tl.trans(h), input_precision="tf32x3")
+            tq = hq
         hq *= qs[:, None]
-        dtau += tl.sum(dw*tl.sum(sq*hq, 1), 0)
+        # Factor the scalar outside the inner reduction to avoid rounding each
+        # matrix element before the cancellation-sensitive tau contraction.
+        dtau += tl.sum(dw*tl.sum(sq*tq, 1)*qs, 0)
         tl.atomic_add(DSQ + qi[:, None]*R + r[None, :], hq,
                       query[:, None] & (r[None, :] < R), sem="relaxed")
         g = tl.load(G + pos + r[:, None]*DV + d[None, :],
                     (r[:, None] < R) & (d[None, :] < DV), 0)
         if BF16:
             hk = tl.dot(v.to(tl.bfloat16), tl.trans(g).to(tl.bfloat16))
+            tk = tl.dot(v, tl.trans(g), input_precision="tf32x3")
         else:
             hk = tl.dot(v, tl.trans(g), input_precision="tf32x3")
+            tk = hk
         hk *= ks[:, None]
-        dtau += tl.sum(dw*tl.sum(sk*hk, 1), 0)
+        dtau += tl.sum(dw*tl.sum(sk*tk, 1)*ks, 0)
         tl.atomic_add(DSK + ki[:, None]*R + r[None, :], hk,
                       key[:, None] & (r[None, :] < R), sem="relaxed")
         if BF16:
@@ -140,12 +149,10 @@ def _chunk_summaries(SQ, SK, V, DO, H, G, A, CHUNKS, ROWS, PREFIX,
     last = tl.sum(tl.where(t == length-1, p, 0.), 0)
     ks = tl.where(key, w*tl.exp(tl.minimum(last-p, 0.)), 0.)
     qs = tl.where(query, w*tl.exp(p), 0.)
-    if BF16:
-        h = tl.dot(tl.trans((sk*ks[:, None]).to(tl.bfloat16)), v.to(tl.bfloat16))
-        g = tl.dot(tl.trans(sq).to(tl.bfloat16), (do*qs[:, None]).to(tl.bfloat16))
-    else:
-        h = tl.dot(tl.trans(sk*ks[:, None]), v, input_precision="tf32x3")
-        g = tl.dot(tl.trans(sq), do*qs[:, None], input_precision="tf32x3")
+    # These states also feed cancellation-sensitive tau contractions. Keep
+    # weighted operands in FP32 even when vector readouts use BF16 MMAs.
+    h = tl.dot(tl.trans(sk*ks[:, None]), v, input_precision="tf32x3")
+    g = tl.dot(tl.trans(sq), do*qs[:, None], input_precision="tf32x3")
     pos = idx.to(tl.int64)*R*DV + r[:, None]*DV + d[None, :]
     mask = (r[:, None] < R) & (d[None, :] < DV)
     tl.store(H + pos, h, mask)

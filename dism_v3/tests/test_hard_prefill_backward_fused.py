@@ -96,6 +96,34 @@ def test_reset_between_chunks_and_nonidentity_stream_ids(chunk_size):
         FusedHardPrefillBackward.from_plan(source, packed['offsets'], host_lengths=[0])
 
 
+@pytest.mark.parametrize('events', [15, 16, 17, 32, 33, 64])
+def test_bf16_tau_cancellation_at_chunk_boundaries(events):
+    # A single stream whose physical pair derivative is 256 - 255.5 = .5.
+    # This isolates the carried-state contractions from SAM/normalizer algebra.
+    # Width counts events, not tokens: include exact and partial final chunks.
+    c, n = 16, (events+1)//2
+    e = np.arange(events)
+    rows = np.where(e % 2 == 0, e//2, -(e//2)-1)
+    decay = np.ones(events)
+    decay[0] = 0.
+    p = Program(np.array([0, events]), rows, decay, np.full(events, 1/n),
+                np.where(e % 2 == 0, 256., -255.5), np.zeros(n), np.zeros(n))
+    packed = pack_program(p, c)
+    source = HardPrefillBackward([0]*n, [1]*n, 0., chunk_size=c,
+                                mma_precision='bf16')
+    source.program, source.packed, source.streams = p, packed, 1
+    source.data = {k: torch.as_tensor(v, device='cuda') for k, v in packed.items()}
+    plan = FusedHardPrefillBackward.from_plan(source, packed['offsets'])
+    assert len(packed['lengths']) == (events+c-1)//c
+    rng = np.random.default_rng(123)
+    xs = [torch.tensor(rng.normal(size=(n, d)), device='cuda').bfloat16()
+          for d in (32, 32, 64, 64)]
+    actual = plan.backward(*xs)
+    _, expected, _ = p.evaluate(*[x.float().cpu().double().numpy() for x in xs])
+    torch.testing.assert_close(actual['rtau'].cpu().double(),
+                               torch.as_tensor(expected[3]), rtol=2e-4, atol=2e-6)
+
+
 @pytest.mark.parametrize('precision', ['bf16', 'tf32x3'])
 @pytest.mark.parametrize('tau', [-2., 0., .5, 2., 16.])
 def test_c64_training_dimensions(precision, tau):
