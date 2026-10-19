@@ -50,3 +50,25 @@ vocabularies.
 - Warm throughput is approximately `192k tokens/s` on the local RTX 5090.
 - Excluding `pq_vocab_sizes` and the explicit default recurrent-mixer fields,
   the model config is byte-for-byte equivalent to the restored valres A control.
+
+## PQ 16x32 final diagnostics
+
+The completed 72M run reached hard/soft BPB `1.183111/1.172432`, with
+`gap_bpb=0.010678`. This is close to the restored valres baseline on in-domain
+language modeling, but the gap is substantially larger.
+
+Offline NIAH used the same 16-trial paired protocol and seeds for
+2k/8k/16k contexts and depths `0.05/0.5/0.95`. Margins are
+`counterfactual_nll - present_nll`:
+
+| context | PQ16x32 mean margin | valres A mean margin | delta | PQ mean gain | A mean gain |
+|---:|---:|---:|---:|---:|---:|
+| 2048 | 0.545 | 0.856 | -0.311 | 0.915 | 1.303 |
+| 8192 | 0.376 | 0.612 | -0.236 | 0.686 | 0.947 |
+| 16384 | 0.025 | 0.406 | -0.381 | 0.312 | 0.691 |
+
+The deficit is strongest at the hardest retrieval point. At 16k/d0.95 the PQ
+margin is `-0.076` versus `0.716` for A, and present token accuracy is `0.135`
+versus `0.469`. This is consistent with product matching imposing a
+conjunctive (`prod_g a_g`) match probability and therefore shrinking the
+effective suffix-chain reach in long contexts. NIAH, not BPB, exposes the loss.
