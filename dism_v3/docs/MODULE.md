@@ -286,6 +286,9 @@ Token-id or hashed-token symbol anchors and their possible training schemes are
 recorded in [TOKEN_ANCHORED_DISM.md](TOKEN_ANCHORED_DISM.md). This is currently
 design-only and does not change the default path.
 
+Q/K feature coupling, shareqk failure evidence and the residual-width scaling
+hypothesis are recorded in [VOCAB_COUPLING.md](VOCAB_COUPLING.md).
+
 ## Opt-in quantile balancing (fixed true direction)
 
 For the optimization and soft/hard derivation, see
