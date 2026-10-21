@@ -23,6 +23,8 @@ class DismConfig(PretrainedConfig):
         readout_l2_norm=False,
         soft_k_l2_norm=False,
         value_residual=False,
+        mxfp8=False,
+        mxfp8_projections=True,
         vocab_temperature=1.0,
         intermediate_size=None,
         hidden_ratio=4.0,
@@ -71,6 +73,8 @@ class DismConfig(PretrainedConfig):
         self.readout_l2_norm = bool(readout_l2_norm)
         self.soft_k_l2_norm = bool(soft_k_l2_norm)
         self.value_residual = bool(value_residual)
+        self.mxfp8 = bool(mxfp8)
+        self.mxfp8_projections = bool(mxfp8_projections)
         self.vocab_temperature = float(vocab_temperature)
         self.intermediate_size = intermediate_size
         self.hidden_ratio = hidden_ratio

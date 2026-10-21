@@ -415,4 +415,10 @@ if __name__ == "__main__":
         for p in cuda_files:
             target.add_cuda(p, flags + ['-Wno-unknown-cuda-version','-Xcuda-ptxas','-v'], archs)
 
-    sys.exit(0 if build(target) else 1)
+    core_ok = build(target)
+    mxfp8_ok = True
+    if os.environ.get('DISM_BUILD_MXFP8', '1') == '1':
+        sys.path.insert(0, str(Path('python').resolve()))
+        from flash_mxfp8.build import build_all
+        mxfp8_ok = build_all()
+    sys.exit(0 if core_ok and mxfp8_ok else 1)

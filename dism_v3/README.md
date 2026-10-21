@@ -18,6 +18,10 @@ packed-sequence training, and SAM-based full-hard prefill/decoding.
 | `inference.HardDismPrefill` | CPU SAM planning + Triton prefill | Hard labels and BNHD readout/V |
 | `inference.HardDismDecoder` | SAM snapshot/tail decoding | Hard labels and BNHD readout/V |
 
+The optional SM120 MXFP8 training path replaces SwiGLU and q/k/v/sq/sk
+projections while keeping the DISM/GDN kernels, embedding, LM head and
+`o_proj` in BF16. See [MXFP8 training](docs/MXFP8_TRAINING.md).
+
 DISM accumulates matches along diagonals. For matching score `logM`, its causal
 recurrence and output are:
 

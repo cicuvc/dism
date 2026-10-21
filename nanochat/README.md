@@ -15,6 +15,10 @@ context2048. The first six layers are pure GDN; the last six are GDN+DISM,
 sharing Q/K input-linear weights while retaining independent convolution
 filters and V paths. The model is post-norm and has no SWA branch.
 
+`configs/sequence_true_72m_valres_mxfp8.json` is the SM120 mixed-precision
+variant. It keeps embedding, LM head and `o_proj` in BF16, rounds the FFN width
+to 2560, and runs SwiGLU plus q/k/v/sq/sk projections through MXFP8.
+
 Direction is fixed true. One training forward uses one hard flag per packed
 training row/head/layer, shared by all 2048 tokens in that row, including
 across documents. Hard probability rises linearly to the configured
@@ -160,6 +164,11 @@ python -m scripts.base_train \
 19074 × 131072 = 2,500,000,000 packed tokens.
 Batch64 reflects the remote GPU, not a local memory-fit guarantee. Use a new
 W&B identity, never overwrite the historical run. This cleanup starts no jobs.
+For SM120 MXFP8 training, select
+`configs/sequence_true_72m_valres_mxfp8.json`; it enables FP8 SwiGLU and
+q/k/v/sq/sk projections plus `FusedAdamWMXFP8`.
+`configs/sequence_true_125m_valres_mxfp8_ffnonly.json` is the faster 512-wide
+candidate: MXFP8 FFN with BF16 QKV/sq/sk projections.
 
 ## Resume and testing
 

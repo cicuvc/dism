@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 build/
+dism_v3/python/flash_mxfp8/_libs/
 dist/
 *.egg-info/
 artifacts/

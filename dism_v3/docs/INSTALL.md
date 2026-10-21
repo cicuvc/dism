@@ -36,7 +36,9 @@ This branch does not build or import an SWA variant. Install native dependencies
 suitable for your Torch/CUDA versions before installing offline.
 
 The installer invokes `build.py`, retaining its incremental cache and default
-eight R/D/DV configurations with fixed/varlen instances. Existing controls work:
+eight R/D/DV configurations with fixed/varlen instances. It also builds the
+optional SM120 MXFP8 GEMM/SwiGLU libraries by default; set
+`DISM_BUILD_MXFP8=0` to skip them. Existing controls work:
 
 ```bash
 DISM_BUILD_JOBS=4 python -m pip install --no-build-isolation -e ./dism_v3

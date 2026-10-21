@@ -14,7 +14,11 @@ from flash_dism.kernels.fused_cross_entropy import fused_cross_entropy_unreduced
 from flash_dism.kernels.fused_ce_chunked import fused_ce_chunked, fused_ce_chunked_sum
 from fla.modules import ShortConvolution
 
-from .conv import LinearShortConvSiLU, packed_conv_sequence_ids
+from .conv import (
+    LinearShortConvSiLU,
+    MXFP8LinearShortConvSiLU,
+    packed_conv_sequence_ids,
+)
 
 
 def packed_document_ce(hidden, weight, targets, cu_seqlens, max_seqlen, softcap,
@@ -51,15 +55,16 @@ def _mixer_value_first(attn, x, cu_seqlens, max_seqlen, conv_seq_idx=None):
     ).unflatten(-1, (attn.heads, attn.value_dim))
 
 
-def _replace_convs_with_linear_fla(model):
+def _replace_convs_with_linear_fla(model, *, mxfp8=False):
     """Install the selected linear+depthwise FLA convolution frontend."""
+    conv_type = MXFP8LinearShortConvSiLU if mxfp8 else LinearShortConvSiLU
     for parent in model.modules():
         for name, child in list(parent.named_children()):
             if isinstance(child, CausalShortConv1d):
                 setattr(
                     parent,
                     name,
-                    LinearShortConvSiLU(
+                    conv_type(
                         child.in_channels,
                         child.out_channels,
                         child.kernel_size,
@@ -127,8 +132,13 @@ class DismLM(nn.Module):
             value_residual=True,
             vocab_temperature=config.vocab_temperature,
             post_norm=True,
+            mxfp8=config.mxfp8,
+            mxfp8_projections=config.mxfp8_projections,
         )
-        self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
+        core_dtype = torch.bfloat16 if config.mxfp8 else None
+        self.embedding = nn.Embedding(
+            config.vocab_size, config.n_embd, dtype=core_dtype
+        )
         blocks = []
         for i in range(config.n_layer):
             layer_config = c
@@ -140,10 +150,15 @@ class DismLM(nn.Module):
         self.layers = nn.ModuleList(blocks)
         if not getattr(self.layers[0].attn, "is_pure_mixer", False):
             raise ValueError("value residual requires a pure GDN first layer")
-        _replace_convs_with_linear_fla(self)
+        _replace_convs_with_linear_fla(
+            self,
+            mxfp8=config.mxfp8 and config.mxfp8_projections,
+        )
         self._mark_no_decay()
         self.norm = nn.RMSNorm(config.n_embd, eps=1e-6)
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(
+            config.n_embd, config.vocab_size, bias=False, dtype=core_dtype
+        )
         self.register_buffer("training_step", torch.zeros((), dtype=torch.int64))
         self.register_buffer("rng_counter", torch.zeros((), dtype=torch.int64))
         self.register_buffer("hard_probability", torch.zeros((), dtype=torch.float32))
@@ -167,6 +182,9 @@ class DismLM(nn.Module):
     def load_state_dict(self, state_dict, strict=True, assign=False):
         result = super().load_state_dict(state_dict, strict=strict, assign=assign)
         self._mark_no_decay()
+        if self.config.mxfp8 and self.get_device().type == "cuda":
+            from flash_mxfp8 import refresh_fp8_modules
+            refresh_fp8_modules(self)
         return result
 
     @torch.no_grad()
@@ -232,6 +250,28 @@ class DismLM(nn.Module):
         for module in self.modules():
             if getattr(module, "_value_residual_gate", False):
                 nn.init.constant_(module.bias, gate_bias)
+        if self.config.mxfp8:
+            from flash_mxfp8 import MXFP8Linear, MXFP8SwiGLU, refresh_fp8_modules
+            from flash_mxfp8.tk_mxfp8_down import MXFP8DownProjection
+
+            initialized_mxfp8 = set(initialized_weights)
+            for module in self.modules():
+                if isinstance(module, MXFP8SwiGLU):
+                    tensors = (
+                        module.gate_weight,
+                        module.up_weight,
+                        module.down_proj.weight,
+                    )
+                elif isinstance(module, (MXFP8Linear, MXFP8DownProjection)):
+                    tensors = (module.weight,)
+                else:
+                    continue
+                for parameter in tensors:
+                    if id(parameter) not in initialized_mxfp8:
+                        nn.init.normal_(parameter, std=0.02)
+                        initialized_mxfp8.add(id(parameter))
+            if self.get_device().type == "cuda":
+                refresh_fp8_modules(self)
 
     @torch.no_grad()
     def set_training_step(self, step):
@@ -302,13 +342,28 @@ class DismLM(nn.Module):
             dict(params=decay, weight_decay=config.weight_decay, kind="adamw"),
             dict(params=no_decay, weight_decay=0.0, kind="adamw"),
         ]
-        optimizer = torch.optim.AdamW(
-            groups,
-            lr=config.matrix_lr,
-            betas=(0.9, 0.95),
-            eps=1e-8,
-            fused=self.get_device().type == "cuda",
-        )
+        if self.config.mxfp8_optimizer:
+            from flash_mxfp8 import FusedAdamWMXFP8, bind_fp8_optimizer
+
+            optimizer = FusedAdamWMXFP8(
+                groups,
+                lr=config.matrix_lr,
+                betas=(0.9, 0.95),
+                eps=1e-8,
+            )
+            bind_fp8_optimizer(self, optimizer)
+        else:
+            from flash_mxfp8 import bind_fp8_optimizer
+
+            optimizer = torch.optim.AdamW(
+                groups,
+                lr=config.matrix_lr,
+                betas=(0.9, 0.95),
+                eps=1e-8,
+                fused=self.get_device().type == "cuda",
+            )
+            if self.config.mxfp8:
+                bind_fp8_optimizer(self, optimizer)
         for group in optimizer.param_groups:
             group["initial_lr"] = group["lr"]
         return optimizer

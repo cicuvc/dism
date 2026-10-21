@@ -28,7 +28,10 @@ class PureGdnAttention(nn.Module):
         self.g_proj_down=nn.Linear(width,max(1,width//8))
         self.g_proj_up=nn.Linear(max(1,width//8),heads*value_dim)
         self.norm=FusedRMSNormGated(value_dim,eps=1e-5)
-        self.o_proj=nn.Linear(heads*value_dim,width)
+        self.o_proj=nn.Linear(
+            heads*value_dim,width,
+            dtype=torch.bfloat16 if kwargs.get('mxfp8',False) else None,
+        )
         if self.value_residual:
             self.gdn_v_residual_gate=nn.Linear(width,heads)
             self.gdn_v_residual_gate._value_residual_gate=True

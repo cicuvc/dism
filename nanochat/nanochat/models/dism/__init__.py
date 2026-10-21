@@ -33,6 +33,9 @@ class DismConfig:
     post_norm: bool = True
     value_residual: bool = True
     value_residual_gate_bias: float = 2.0
+    mxfp8: bool = False
+    mxfp8_projections: bool = False
+    mxfp8_optimizer: bool = False
 
     def __post_init__(self):
         self.softcap = float(self.softcap)
@@ -48,6 +51,22 @@ class DismConfig:
             raise ValueError("the selected DISM architecture requires post_norm=True")
         if not self.value_residual:
             raise ValueError("the selected DISM architecture requires value_residual=True")
+        if self.mxfp8 and self.intermediate_size % 64:
+            raise ValueError("mxfp8 requires intermediate_size divisible by 64")
+        if self.mxfp8 and (
+            self.n_embd % 64
+            or (self.n_head * self.head_dim) % 64
+            or (self.n_head * self.value_dim) % 64
+            or (self.n_head * self.readout_dim) % 64
+        ):
+            raise ValueError(
+                "mxfp8 requires model, Q/K/V and readout projection widths "
+                "divisible by 64"
+            )
+        if self.mxfp8_optimizer and not self.mxfp8:
+            raise ValueError("mxfp8_optimizer requires mxfp8=True")
+        if self.mxfp8_projections and not self.mxfp8:
+            raise ValueError("mxfp8_projections requires mxfp8=True")
         if not 0.0 <= self.hard_prob_max <= 1.0:
             raise ValueError("hard_prob_max must be in [0,1]")
         if not 0.0 <= self.tau_schedule_fraction <= 1.0:

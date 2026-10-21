@@ -13,6 +13,13 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from flash_mxfp8.core import quantize_weight
+from flash_mxfp8.tk_mxfp8_linear import (
+    _BackwardState as _MXFP8LinearBackwardState,
+    _ForwardState as _MXFP8LinearForwardState,
+    _MXFP8LinearFunction,
+)
+
 
 @torch.library.custom_op('nanochat_dism::shortconv_cuda_v1', mutates_args=())
 def _cuda_shortconv(hidden: torch.Tensor, weight: torch.Tensor,
@@ -122,3 +129,139 @@ class LinearShortConvSiLU(nn.Module):
         if input_state is not None:
             raise NotImplementedError("linear_fla conv does not support cached decoding state")
         return self.depthwise_silu(self.project_linear(x), cu_seqlens=cu_seqlens, seq_idx=seq_idx)
+
+
+class MXFP8LinearShortConvSiLU(LinearShortConvSiLU):
+    """Linear projection on MXFP8 tensor cores, then the CUDA short conv."""
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        backend="cuda",
+        *,
+        forward_config=None,
+        dx_config=None,
+        dw_config=None,
+        raster_group=13,
+    ):
+        super().__init__(in_channels, out_channels, kernel_size, backend)
+        tuned = {
+            (384, 384): (106, 13, 10),
+            (512, 512): (67, 14, 10),
+        }.get((in_channels, out_channels))
+        forward_config = (tuned[0] if tuned else 8) if forward_config is None else forward_config
+        dx_config = (tuned[1] if tuned else 12) if dx_config is None else dx_config
+        dw_config = (tuned[2] if tuned else 12) if dw_config is None else dw_config
+        self.forward_config = forward_config
+        self.dx_config = dx_config
+        self.dw_config = dw_config
+        self.raster_group = raster_group
+        self.register_buffer(
+            "_weight_fp8",
+            torch.empty(0, dtype=torch.float8_e4m3fn, device=self.weight.device),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_weight_scale",
+            torch.empty(0, dtype=torch.uint8, device=self.weight.device),
+            persistent=False,
+        )
+        self._synced_version = -1
+        self._fp8_dirty = True
+        self._forward_states = {}
+        self._backward_states = {}
+        if self.weight.device.type == "cuda":
+            self.refresh_fp8_weight()
+
+    def refresh_fp8_weight(self):
+        if not self.weight.is_cuda:
+            raise RuntimeError("MXFP8 projection requires CUDA")
+        with torch.no_grad():
+            self._weight_fp8, self._weight_scale = quantize_weight(
+                self.weight.detach()
+            )
+        self._synced_version = self.weight._version
+        self._fp8_dirty = False
+        return self
+
+    def refresh_fp8_weights(self):
+        return self.refresh_fp8_weight()
+
+    def mark_fp8_dirty(self):
+        self._fp8_dirty = True
+        return self
+
+    def mark_fp8_synced(self):
+        self._synced_version = self.weight._version
+        self._fp8_dirty = False
+        return self
+
+    def fp8_parameter_bindings(self):
+        return ((self.weight, self._weight_fp8, self._weight_scale),)
+
+    def _sync_if_needed(self):
+        if self._fp8_dirty or self._synced_version != self.weight._version:
+            self.refresh_fp8_weight()
+
+    def _forward_state(self, x):
+        key = (
+            x.device.index,
+            tuple(x.shape),
+            self.forward_config,
+            self.raster_group,
+        )
+        state = self._forward_states.get(key)
+        if state is None:
+            state = _MXFP8LinearForwardState(
+                x,
+                self._weight_fp8,
+                self._weight_scale,
+                self.forward_config,
+                self.raster_group,
+            )
+            self._forward_states[key] = state
+        return state
+
+    def _backward_state(
+        self,
+        dy,
+        x_column,
+        x_column_scale,
+        weight_fp8,
+        weight_scale,
+    ):
+        key = (
+            dy.device.index,
+            tuple(dy.shape),
+            tuple(x_column.shape),
+            self.dx_config,
+            self.dw_config,
+            self.raster_group,
+        )
+        state = self._backward_states.get(key)
+        if state is None:
+            state = _MXFP8LinearBackwardState(
+                dy,
+                x_column,
+                x_column_scale,
+                weight_fp8,
+                weight_scale,
+                self.dx_config,
+                self.dw_config,
+                self.raster_group,
+            )
+            self._backward_states[key] = state
+        return state
+
+    @torch.compiler.disable
+    def project_linear(self, x):
+        self._sync_if_needed()
+        shape = x.shape
+        out = _MXFP8LinearFunction.apply(
+            x.to(torch.bfloat16).reshape(-1, self.in_channels).contiguous(),
+            self.weight,
+            self,
+        )
+        return out.reshape(*shape[:-1], self.out_channels)

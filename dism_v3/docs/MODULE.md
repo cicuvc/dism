@@ -62,3 +62,10 @@ same BNHD q/k and codebook buffers as the core.
 No SWA, SDN, PaTH, GQA, TransVQ, PQ, quantile-balance, selector-normalization,
 cross-head/layer vocabulary sharing, categorical REINFORCE, or alternate
 readout interfaces remain in this branch.
+
+## MXFP8 boundary
+
+`DismMLP` can use `flash_mxfp8.MXFP8SwiGLU`. The q/k/v short-convolution
+frontend has an MXFP8 linear variant, while its depthwise convolution and the
+downstream DISM/GDN math remain BF16. `sq_proj`/`sk_proj` can use
+`flash_mxfp8.MXFP8Linear`. `o_proj` remains the common BF16 output path.

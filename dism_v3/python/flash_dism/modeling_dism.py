@@ -20,11 +20,43 @@ from .kernels.linear_rmsnorm_rope import FusedLinearRMSNormRoPE
 class DismMLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
-        self.up_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
-        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+        self.mxfp8 = bool(getattr(config, "mxfp8", False))
+        if self.mxfp8:
+            from flash_mxfp8 import MXFP8SwiGLU
+            tuned = {
+                (384, 2560): (8, 12, 11, 70, 12, 11),
+                (512, 3968): (8, 12, 14, 67, 17, 12),
+            }.get((config.hidden_size, config.intermediate_size))
+            self.mxfp8_mlp = MXFP8SwiGLU(
+                config.hidden_size,
+                config.intermediate_size,
+                config.hidden_size,
+                device=None,
+                forward_config=tuned[0] if tuned else 1,
+                dx_config=tuned[1] if tuned else 5,
+                wgrad_config=tuned[2] if tuned else 12,
+                down_forward_config=tuned[3] if tuned else 70,
+                down_dx_config=tuned[4] if tuned else 12,
+                down_dw_config=tuned[5] if tuned else 12,
+            )
+        else:
+            self.gate_proj = nn.Linear(
+                config.hidden_size, config.intermediate_size, bias=False
+            )
+            self.up_proj = nn.Linear(
+                config.hidden_size, config.intermediate_size, bias=False
+            )
+            self.down_proj = nn.Linear(
+                config.intermediate_size, config.hidden_size, bias=False
+            )
 
     def forward(self, x):
+        if self.mxfp8:
+            shape = x.shape
+            out = self.mxfp8_mlp(
+                x.to(torch.bfloat16).reshape(-1, x.shape[-1])
+            )
+            return out.reshape(shape)
         return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
 
 
@@ -34,6 +66,7 @@ class DismBlock(nn.Module):
         self.attn_norm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
         self.mlp_norm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
         self.post_norm = getattr(config, 'post_norm', False)
+        self.mxfp8 = bool(getattr(config, 'mxfp8', False))
         attention = {
             'dism': DismAttention,
             'hybrid_gdn': DismGdnAttention,
@@ -47,6 +80,8 @@ class DismBlock(nn.Module):
                        soft_k_l2_norm=config.soft_k_l2_norm,
                        value_residual=getattr(config, 'value_residual', False),
                        vocab_temperature=getattr(config, 'vocab_temperature', 1.0),
+                       mxfp8=getattr(config, 'mxfp8', False),
+                       mxfp8_projections=getattr(config, 'mxfp8_projections', True),
                        )
         self.attn = attention(config.hidden_size, config.num_heads, **options)
         self.mlp = DismMLP(config)
@@ -55,6 +90,10 @@ class DismBlock(nn.Module):
         if self.post_norm:
             branch, _, _ = self.attn(hidden_states, **kwargs)
             hidden_states = self.attn_norm(hidden_states + branch)
+            if self.mxfp8:
+                hidden_states = hidden_states.to(torch.bfloat16)
+                output = self.mlp_norm(hidden_states + self.mlp(hidden_states))
+                return output.to(torch.bfloat16)
             return self.mlp_norm(hidden_states + self.mlp(hidden_states))
         branch, _, _ = self.attn(self.attn_norm(hidden_states), **kwargs)
         hidden_states = hidden_states + branch

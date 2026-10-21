@@ -67,7 +67,8 @@ class DismAttention(nn.Module):
     def __init__(self, width, heads, *, head_dim=64, value_dim=64,
                  readout_dim=32, vocab_size=512, conv_size=4, layer_idx=None,
                  rope_theta=10000.0, qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
-                 value_residual=False, vocab_temperature=1.0):
+                 value_residual=False, vocab_temperature=1.0, mxfp8=False,
+                 mxfp8_projections=True):
         super().__init__()
         if min(width, heads, vocab_size, conv_size) <= 0:
             raise ValueError("width, heads, vocab_size and conv_size must be positive")
@@ -82,6 +83,8 @@ class DismAttention(nn.Module):
         self.qknorm_eps = float(qknorm_eps)
         self.readout_l2_norm = bool(readout_l2_norm)
         self.soft_k_l2_norm = bool(soft_k_l2_norm)
+        self.mxfp8 = bool(mxfp8)
+        self.mxfp8_projections = self.mxfp8 and bool(mxfp8_projections)
         if not math.isfinite(vocab_temperature) or vocab_temperature <= 0:
             raise ValueError("vocab_temperature must be finite and positive")
         # Host schedule value, not a parameter or device buffer.
@@ -98,8 +101,29 @@ class DismAttention(nn.Module):
         self.q_conv = CausalShortConv1d(width, heads * head_dim, conv_size)
         self.k_conv = CausalShortConv1d(width, self.kv_heads * head_dim, conv_size)
         self.v_conv = CausalShortConv1d(width, self.kv_heads * value_dim, conv_size)
-        self.sq_proj = nn.Linear(width, heads * readout_dim, bias=False)
-        self.sk_proj = nn.Linear(width, self.kv_heads * readout_dim, bias=False)
+        if self.mxfp8_projections:
+            from flash_mxfp8 import MXFP8Linear
+            tuned = {
+                (384, 192): (53, 17, 10),
+                (512, 256): (67, 13, 10),
+            }.get((width, heads * readout_dim))
+            self.sq_proj = MXFP8Linear(
+                width,
+                heads * readout_dim,
+                forward_config=tuned[0] if tuned else 8,
+                dx_config=tuned[1] if tuned else 2,
+                dw_config=tuned[2] if tuned else 0,
+            )
+            self.sk_proj = MXFP8Linear(
+                width,
+                self.kv_heads * readout_dim,
+                forward_config=tuned[0] if tuned else 8,
+                dx_config=tuned[1] if tuned else 2,
+                dw_config=tuned[2] if tuned else 0,
+            )
+        else:
+            self.sq_proj = nn.Linear(width, heads * readout_dim, bias=False)
+            self.sk_proj = nn.Linear(width, self.kv_heads * readout_dim, bias=False)
         q_shape = (heads, vocab_size, head_dim)
         k_shape = (self.kv_heads, vocab_size, head_dim)
         self.q_vocab = nn.Parameter(F.silu(torch.randn(q_shape, dtype=torch.float32)))
@@ -110,7 +134,11 @@ class DismAttention(nn.Module):
         self.g_proj_down = nn.Linear(width, max(1, width // 8))
         self.g_proj_up = nn.Linear(max(1, width // 8), heads * value_dim)
         self.norm = FusedRMSNormGated(value_dim, eps=1e-5)
-        self.o_proj = nn.Linear(heads * value_dim, width)
+        self.o_proj = nn.Linear(
+            heads * value_dim,
+            width,
+            dtype=torch.bfloat16 if mxfp8 else None,
+        )
         self.value_residual = bool(value_residual)
         if self.value_residual:
             # Per-head, data-dependent gate: v_first + (v - v_first) * sigmoid(g).
@@ -315,8 +343,15 @@ class DismAttention(nn.Module):
             v = value_residual_mix(v, v_first, self.v_residual_gate(x))
         if q.dtype != torch.bfloat16:
             raise ValueError("use CUDA BF16 autocast; the production kernels require BF16")
-        sq = self._activate_readout(self.sq_proj(x))
-        sk = self._activate_readout(self.sk_proj(x), is_key=True, heads=self.kv_heads)
+        readout_input = x.to(torch.bfloat16) if self.mxfp8_projections else x
+        readout_q = self.sq_proj(readout_input.reshape(-1, self.width)).reshape(
+            batch, length, self.heads * self.readout_dim
+        )
+        readout_k = self.sk_proj(readout_input.reshape(-1, self.width)).reshape(
+            batch, length, self.kv_heads * self.readout_dim
+        )
+        sq = self._activate_readout(readout_q)
+        sk = self._activate_readout(readout_k, is_key=True, heads=self.kv_heads)
         # No runtime codebook activation; interpolation owns the BF16 cast.
         eq, ek = self.q_vocab.float(), self.k_vocab.float()
         tau = F.softplus(self.log_sel_tau.float()).contiguous()

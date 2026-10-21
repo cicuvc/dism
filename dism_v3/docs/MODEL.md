@@ -16,6 +16,9 @@ baseline and its scaling variants.
   and deployed inference use integer argmax symbols.
 - Direction is fixed true. Hard/soft sampling is one flag per packed training
   row and head.
+- The optional SM120 MXFP8 path replaces SwiGLU and q/k/v/sq/sk projections;
+  `o_proj`, embedding, LM head and all DISM/GDN kernels remain BF16. See
+  [MXFP8 training](MXFP8_TRAINING.md).
 
 ## Retained attention types
 
