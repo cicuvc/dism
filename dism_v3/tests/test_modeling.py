@@ -2,11 +2,12 @@ import pytest
 import torch
 from torch.nn import functional as F
 from transformers import AutoConfig, AutoModelForCausalLM
-from flash_dism import DismConfig, DismForCausalLM, DismSwaAttention
+from flash_dism import DismAttention, DismConfig, DismForCausalLM
 from flash_dism.modeling_dism import next_token_labels
 
 
 def tiny_config(**kwargs):
+    kwargs.setdefault('attention_type', 'dism')
     return DismConfig(vocab_size=128, hidden_size=32, num_hidden_layers=2,
                       num_heads=2, head_dim=32, value_dim=32, readout_dim=16,
                       qk_vocab_size=16, intermediate_size=64,
@@ -26,7 +27,7 @@ def test_label_boundaries():
 def test_cpu_cache_and_save_load(tmp_path):
     torch.manual_seed(10)
     model = DismForCausalLM(tiny_config()).eval()
-    assert isinstance(model.model.layers[0].attn, DismSwaAttention)
+    assert isinstance(model.model.layers[0].attn, DismAttention)
     assert model.lm_head.weight is not model.get_input_embeddings().weight
     ids = torch.randint(0, 128, (1, 9))
     direction = torch.tensor([[True, False]])

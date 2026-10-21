@@ -110,8 +110,8 @@ def test_model_reuses_one_sequence_map_across_all_convolutions(monkeypatch):
     from nanochat.models import ModelSpec, build_model
     config = dict(sequence_len=512, vocab_size=128, n_layer=4, n_head=2,
                   n_embd=64, intermediate_size=128, head_dim=32, value_dim=32,
-                  readout_dim=16, qk_vocab_size=32, rear_half_dism=True,
-                  value_residual=True, conv_impl='linear_fla', conv_backend='cuda')
+                  readout_dim=16, qk_vocab_size=32,
+                  value_residual=True)
     model = build_model(ModelSpec('dism_gdn_hybrid', 1, config)).cuda().eval()
     model.init_weights()
     ids = torch.randint(128, (2, 512), device='cuda')

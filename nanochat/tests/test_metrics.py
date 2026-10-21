@@ -8,13 +8,12 @@ from nanochat.models import ModelSpec, build_model
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 
 
-def make_model(value_residual, conv_impl):
+def make_model():
     torch.manual_seed(51)
     config = dict(sequence_len=512, vocab_size=128, n_layer=4, n_head=2,
                   n_embd=64, intermediate_size=128, head_dim=32, value_dim=32,
-                  readout_dim=16, qk_vocab_size=32, rear_half_dism=True,
-                  post_norm=True, direction_policy='true', hard_granularity='sequence',
-                  value_residual=value_residual, conv_impl=conv_impl)
+                  readout_dim=16, qk_vocab_size=32,
+                  post_norm=True, value_residual=True)
     model = build_model(ModelSpec('dism_gdn_hybrid', 1, config)).cuda()
     model.init_weights()
     ids = torch.randint(128, (2, 512), device='cuda')
@@ -23,11 +22,9 @@ def make_model(value_residual, conv_impl):
     return model, ids, cu
 
 
-@pytest.mark.parametrize('conv_impl', ['fused', 'linear_fla'])
-@pytest.mark.parametrize('value_residual', [False, True])
 @pytest.mark.parametrize('training', [False, True])
-def test_probe_matches_all_hard_eval_and_preserves_state(conv_impl, value_residual, training):
-    model, ids, cu = make_model(value_residual, conv_impl)
+def test_probe_matches_all_hard_eval_and_preserves_state(training):
+    model, ids, cu = make_model()
     model.eval()
     captures = []
     def capture(layer, args, kwargs, output):
@@ -61,7 +58,7 @@ def test_probe_matches_all_hard_eval_and_preserves_state(conv_impl, value_residu
             if index >= 2:
                 assert actual[2]['hard'].shape == (2, 2)
                 assert actual[2]['hard'].all()
-            if value_residual and index > 0:
+            if index > 0:
                 torch.testing.assert_close(actual[2]['v_first'], reference[2]['v_first'],
                                            rtol=0, atol=0)
         assert set(stats) == {2, 3}
@@ -84,7 +81,7 @@ def test_probe_matches_all_hard_eval_and_preserves_state(conv_impl, value_residu
 
 
 def test_probe_restores_training_mode_on_error():
-    model, ids, cu = make_model(True, 'linear_fla')
+    model, ids, cu = make_model()
     model.train()
     counter = model.rng_counter.clone()
     def fail(*args):

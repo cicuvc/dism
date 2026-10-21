@@ -5,7 +5,6 @@ from .forward import forward_core
 from .backward import backward_core, dism_core as _fixed_core
 from .voc import voc_dism as _fixed_voc
 from .module import DismAttention
-from .hybrid import DismSwaAttention
 from .cache import DismCache
 from .configuration_dism import DismConfig
 from .modeling_dism import DismModel, DismForCausalLM
@@ -57,6 +56,6 @@ def voc_dism(*args, direction, hard, cu_seqlens=None, layout=None, ctas=0, beta=
     return _fixed_voc(*args,direction=direction,hard=hard,ctas=ctas,beta=beta,hard_planner=hard_planner)
 
 
-__all__ = ['DismConfig','DismModel','DismForCausalLM','DismAttention','DismSwaAttention','DismCache','dism_core','voc_dism','forward_core','backward_core',
+__all__ = ['DismConfig','DismModel','DismForCausalLM','DismAttention','DismCache','dism_core','voc_dism','forward_core','backward_core',
            'forward_varlen','backward_varlen','VarlenLayout','supported_configs',
            'dism_core_varlen','voc_dism_varlen']

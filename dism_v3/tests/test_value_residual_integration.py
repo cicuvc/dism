@@ -153,7 +153,7 @@ def test_dism_caller_compiles_without_extra_graphs(monkeypatch):
                           requires_grad=True)
     hard = torch.tensor([[True, False]], device="cuda")
     direction = torch.tensor([[True, False]], device="cuda")
-    counter = CompileCounterWithBackend("inductor")
+    counter = CompileCounter()
     compiled = torch.compile(model, backend=counter, fullgraph=True, dynamic=True)
     # 256-aligned packed boundaries, including a different document count.
     packs = ([0, 256, 512], [0, 256, 256, 512], [0, 512])

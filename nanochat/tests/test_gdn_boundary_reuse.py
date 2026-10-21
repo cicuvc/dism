@@ -23,9 +23,8 @@ def test_compiled_gdn_metadata_shared_per_forward_not_across_mutation(monkeypatc
     torch.manual_seed(173)
     config = dict(sequence_len=512, vocab_size=128, n_layer=4, n_head=2,
                   n_embd=64, intermediate_size=128, head_dim=32, value_dim=32,
-                  readout_dim=16, qk_vocab_size=32, rear_half_dism=True,
-                  value_residual=True, conv_impl='linear_fla', conv_backend='cuda',
-                  direction_policy='true')
+                  readout_dim=16, qk_vocab_size=32,
+                  value_residual=True)
     model = build_model(ModelSpec('dism_gdn_hybrid', 1, config)).cuda().train()
     model.init_weights()
     ids = torch.randint(128, (2, 512), device='cuda')
@@ -40,7 +39,8 @@ def test_compiled_gdn_metadata_shared_per_forward_not_across_mutation(monkeypatc
             calls.clear()
             fresh = False
             counter = model.rng_counter.clone()
-            actual = compiled(ids, cu_seqlens=cu, hard_mode=False)
+            model.hard_probability.zero_()
+            actual = compiled(ids, cu_seqlens=cu)
             assert len(calls) == 4
             shared = calls[0][0]
             assert shared is not cu and shared is not previous
@@ -54,7 +54,8 @@ def test_compiled_gdn_metadata_shared_per_forward_not_across_mutation(monkeypatc
             # Force the old cache-miss behavior without changing kernel math.
             fresh = True
             model.rng_counter.copy_(counter)
-            expected = compiled(ids, cu_seqlens=cu, hard_mode=False)
+            model.hard_probability.zero_()
+            expected = compiled(ids, cu_seqlens=cu)
             expected.float().square().mean().backward()
             torch.testing.assert_close(actual, expected, rtol=0, atol=0)
             for n, p in model.named_parameters():

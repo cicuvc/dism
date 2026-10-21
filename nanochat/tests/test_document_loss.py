@@ -104,32 +104,3 @@ def _distributed_worker(rank, world, rendezvous, empty_rank):
 def test_two_rank_unequal_document_counts(tmp_path, empty_rank):
     mp.spawn(_distributed_worker,
              args=(2, 'file://' + str(tmp_path/'rendezvous'), empty_rank), nprocs=2, join=True)
-
-
-@pytest.mark.parametrize('alpha', [0., .3, 1.])
-@pytest.mark.parametrize('antithetic', [False, True])
-def test_explicit_dual_path_counts_documents_once(alpha, antithetic):
-    from types import SimpleNamespace
-    from nanochat.dual_loss import dual_loss_backward
-    p = torch.nn.Parameter(torch.tensor(.7, dtype=torch.float64))
-    original = SimpleNamespace(rng_counter=torch.zeros((), dtype=torch.int64),
-                               config=SimpleNamespace(direction_antithetic=antithetic))
-    def model(x, y, *, hard_mode, direction_flip, paired_counter, loss_reduction, **kw):
-        assert loss_reduction == 'document_sum'
-        count = torch.tensor(y)
-        return (p+x+int(hard_mode)+.1*int(direction_flip)).square()*count, count
-    step = DocumentLossAccumulator(2, 'cpu')
-    for x, count in ((.2, 2), (.9, 5)):
-        dual_loss_backward(model, original, x, count, None, None, alpha, 2,
-                           document_step=step)
-    actual = step.finalize([p])
-    assert original.rng_counter.item() == 2
-    assert step.count.item() == 7
-    q = p.detach().clone().requires_grad_()
-    flips = (0, 1) if antithetic else (0,)
-    expected = sum((q+x+hard+.1*flip).square()*count*weight/len(flips)
-                   for x, count in ((.2, 2), (.9, 5))
-                   for hard, weight in ((0, 1-alpha), (1, alpha)) for flip in flips)/7
-    expected.backward()
-    torch.testing.assert_close(p.grad, q.grad, rtol=1e-12, atol=1e-12)
-    torch.testing.assert_close(actual.double(), expected.detach(), rtol=1e-7, atol=1e-7)

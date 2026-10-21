@@ -35,7 +35,7 @@ separate from prefill output computation. Tau is fixed over cache lifetime.
 This is an explicit operator backend, not an implicit replacement for
 `DismAttention.forward(use_cache=True)` or nanochat generation. Model adapters
 must supply the original projections, labels, readout transforms, convolution
-states, GDN/SWA states and output gate. No model defaults are changed here.
+states, GDN state and output gate. No model defaults are changed here.
 
 Low-level `GpuPlannerCache.step` has a reused output allocation and supports
 graph replay between rebuilds. Call `check_status` to check device errors;

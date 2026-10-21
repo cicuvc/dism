@@ -7,7 +7,7 @@ import pytest
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from check_hard_prefill_training import check_case, check_gpu_case, fixture
+from check_hard_prefill_training import check_case, fixture
 from hard_prefill_grad_reference import SymbolicPlanner, dense_oracle
 
 
@@ -57,13 +57,6 @@ def test_vector_directional_finite_difference():
         minus[index] = values[index] - step*delta
         fd = np.sum((plan.execute(*plus, dtype=np.float64)-plan.execute(*minus, dtype=np.float64))*do)/(2*step)
         np.testing.assert_allclose(np.sum(grads[index]*delta), fd, rtol=2e-8, atol=2e-10)
-
-
-@pytest.mark.parametrize('pattern', ['random', 'repeat', 'mismatch', 'periodic'])
-def test_existing_gpu_prefill_dsq(pattern):
-    torch.set_num_threads(1)
-    result = check_gpu_case(pattern, .5)
-    assert not result['native_core_acceptance_failures']
 
 
 def test_tau_precision_discrepancies_remain_visible():

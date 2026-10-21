@@ -1,9 +1,11 @@
 """Benchmark-only fused -> linear/FLA checkpoint conversion; never writes training state."""
 import copy
+from dataclasses import fields
 
 import torch
 from nanochat.models.spec import ModelSpec
 from nanochat.models import optimizer_schema_fingerprint
+from nanochat.models.dism import DismConfig
 
 
 def mapped_name(name):
@@ -20,8 +22,11 @@ def convert(spec, model_state, optim_state, schema):
     if spec.config.get('conv_impl', 'fused') != 'fused':
         raise ValueError('conversion requires a fused source checkpoint')
     original_fingerprint = optimizer_schema_fingerprint(schema)
+    retained = {field.name for field in fields(DismConfig)}
+    target_config = {name: value for name, value in spec.config.items()
+                     if name in retained}
     target_spec = ModelSpec(spec.architecture, spec.architecture_version,
-                           dict(spec.config, conv_impl='linear_fla', conv_backend='cuda'))
+                            target_config)
     converted = {mapped_name(n): to_fla(v) if n.endswith('.conv_weight') else v
                  for n, v in model_state.items()}
     if len(converted) != len(model_state):

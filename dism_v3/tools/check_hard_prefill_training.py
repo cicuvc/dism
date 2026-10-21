@@ -148,7 +148,7 @@ def check_gpu_case(pattern, tau, n=256):
     for direction in (False, True):
         inputs = (dummy, dummy, sq[None, :, None], sk[None, :, None], v[None, :, None],
                   lse, lse, iq, ik, torch.tensor([[direction]], device='cuda'),
-                  torch.ones((1, 1, n), device='cuda', dtype=torch.bool),
+                  torch.ones((1, 1), device='cuda', dtype=torch.bool),
                   torch.tensor([tau], device='cuda', dtype=torch.float32))
         y, _, state = forward_core(*inputs, save_state=True)
         g = backward_core(state, do[None, :, None].contiguous())

@@ -1,48 +1,60 @@
-"""Hugging Face configuration for the DISM v3 decoder-only model."""
+"""Hugging Face configuration for the selected DISM v3 model."""
 from transformers import PretrainedConfig
 
 
 class DismConfig(PretrainedConfig):
-    model_type = 'dism_v3'
-    keys_to_ignore_at_inference = ['past_key_values']
+    model_type = "dism_v3"
+    keys_to_ignore_at_inference = ["past_key_values"]
 
-    def __init__(self, vocab_size=50257, hidden_size=256, num_hidden_layers=12,
-                 num_heads=4, head_dim=64, value_dim=64, readout_dim=32,
-                 qk_vocab_size=512, attention_type='hybrid', window_size=128,
-                 conv_size=4, rope_theta=10000., qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
-                 value_residual=False,
-                 vocab_temperature=1.0,
-                 gqa_query_channels: int = 1, vocab_transvq=False,
-                 kv_group_size: int = 1,
-                 hard_tau_grad_scale: float = 1.0,
-                 selector_norm: bool = False,
-                 selector_norm_scale_init: float = 0.2,
-                 selector_norm_freeze_fraction: float = 0.5,
-                 qb_q_strength=0.0, qb_k_strength=0.0, qb_iterations=4, qb_update_interval=16, qb_samples=2048, qb_update_rate=0.1,
-                 vocab_transvq_lite=False,
-                 vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
-                 pq_vocab_sizes=(),
-                 vocab_head_pairing="",
-                 gdn_b_bias=False,
-                 sliding_delta_chunk_size=32,
-                 intermediate_size=None, hidden_ratio=4., norm_eps=1e-6,
-                 initializer_range=.02, use_cache=True, fuse_cross_entropy=True,
-                 ce_softcap=30., ce_chunk_size=None, ignore_index=-100,
-                 pad_token_id=None, bos_token_id=50256, eos_token_id=50256,
-                 tie_word_embeddings=False, post_norm=False, **kwargs):
-        if attention_type not in ('hybrid', 'dism', 'hybrid_gdn', 'pure_gdn',
-                                  'hybrid_sdn', 'pure_sdn',
-                                  'hybrid_path', 'pure_path'):
+    def __init__(
+        self,
+        vocab_size=50257,
+        hidden_size=256,
+        num_hidden_layers=12,
+        num_heads=4,
+        head_dim=64,
+        value_dim=64,
+        readout_dim=32,
+        qk_vocab_size=512,
+        attention_type="hybrid_gdn",
+        conv_size=4,
+        rope_theta=10000.0,
+        qknorm_eps=1e-6,
+        readout_l2_norm=False,
+        soft_k_l2_norm=False,
+        value_residual=False,
+        vocab_temperature=1.0,
+        intermediate_size=None,
+        hidden_ratio=4.0,
+        norm_eps=1e-6,
+        initializer_range=0.02,
+        use_cache=True,
+        fuse_cross_entropy=True,
+        ce_softcap=30.0,
+        ce_chunk_size=None,
+        ignore_index=-100,
+        pad_token_id=None,
+        bos_token_id=50256,
+        eos_token_id=50256,
+        tie_word_embeddings=False,
+        post_norm=False,
+        **kwargs,
+    ):
+        if attention_type not in ("dism", "hybrid_gdn", "pure_gdn"):
             raise ValueError("unsupported v3 attention_type")
         if min(vocab_size, hidden_size, num_hidden_layers, num_heads) <= 0:
-            raise ValueError('model dimensions must be positive')
+            raise ValueError("model dimensions must be positive")
         if intermediate_size is None:
-            # Same SwiGLU parameter-budget convention as FLA GatedMLP / SBA.
-            intermediate_size = 256 * ((int(hidden_size * hidden_ratio * 2 / 3) + 255) // 256)
+            intermediate_size = 256 * (
+                (int(hidden_size * hidden_ratio * 2 / 3) + 255) // 256
+            )
         if intermediate_size <= 0:
-            raise ValueError('intermediate_size must be positive')
+            raise ValueError("intermediate_size must be positive")
         if tie_word_embeddings:
-            raise ValueError('DISM LM currently uses untied input/output embeddings')
+            raise ValueError("DISM LM currently uses untied input/output embeddings")
+        if vocab_temperature <= 0:
+            raise ValueError("vocab_temperature must be positive")
+
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
         self.num_hidden_layers = num_hidden_layers
@@ -53,7 +65,6 @@ class DismConfig(PretrainedConfig):
         self.qk_vocab_size = qk_vocab_size
         self.attention_type = attention_type
         self.post_norm = bool(post_norm)
-        self.window_size = window_size
         self.conv_size = conv_size
         self.rope_theta = rope_theta
         self.qknorm_eps = qknorm_eps
@@ -61,50 +72,6 @@ class DismConfig(PretrainedConfig):
         self.soft_k_l2_norm = bool(soft_k_l2_norm)
         self.value_residual = bool(value_residual)
         self.vocab_temperature = float(vocab_temperature)
-        from .quantile_balance import validate_qb
-        validate_qb(qb_q_strength, qb_k_strength, qb_iterations, qb_update_interval, qb_samples, qb_update_rate)
-        self.qb_q_strength = qb_q_strength
-        self.qb_k_strength = qb_k_strength
-        self.qb_iterations = qb_iterations
-        self.qb_update_interval = qb_update_interval
-        self.qb_samples = qb_samples
-        self.qb_update_rate = qb_update_rate
-        # These were accepted in the signature but never stored, so every spec
-        # value for them was silently ignored (getattr fell back to the default).
-        if not 0.0 <= float(hard_tau_grad_scale) <= 1.0:
-            raise ValueError("hard_tau_grad_scale must be in [0,1]")
-        self.hard_tau_grad_scale = float(hard_tau_grad_scale)
-        self.selector_norm = bool(selector_norm)
-        self.selector_norm_scale_init = float(selector_norm_scale_init)
-        self.selector_norm_freeze_fraction = float(selector_norm_freeze_fraction)
-
-        if type(gqa_query_channels) is not int or gqa_query_channels not in (1, 2):
-            raise ValueError("gqa_query_channels must be 1 or 2")
-        self.gqa_query_channels = gqa_query_channels
-        if type(kv_group_size) is not int or kv_group_size not in (1, 2):
-            raise ValueError("kv_group_size must be 1 or 2")
-        if kv_group_size > 1 and gqa_query_channels > 1:
-            raise ValueError("kv_group_size and gqa_query_channels are mutually exclusive")
-        if num_heads % kv_group_size:
-            raise ValueError("num_heads must be divisible by kv_group_size")
-        self.kv_group_size = kv_group_size
-        self.vocab_transvq = bool(vocab_transvq)
-        self.vocab_transvq_lite = bool(vocab_transvq_lite)
-        self.vocab_transvq_map = str(vocab_transvq_map)
-        self.vocab_transvq_rank = int(vocab_transvq_rank)
-        from .pq_vocab import validate_sizes
-        self.pq_vocab_sizes = (validate_sizes(
-            pq_vocab_sizes, vocab_size=qk_vocab_size, head_dim=head_dim)
-            if pq_vocab_sizes else ())
-        if vocab_head_pairing not in ('', 'swap_halves'):
-            raise ValueError("vocab_head_pairing must be '' or 'swap_halves'")
-        self.vocab_head_pairing = str(vocab_head_pairing)
-        if not isinstance(gdn_b_bias, bool):
-            raise TypeError("gdn_b_bias must be bool")
-        self.gdn_b_bias = gdn_b_bias
-        if sliding_delta_chunk_size not in (16, 32, 64):
-            raise ValueError("sliding_delta_chunk_size must be 16, 32, or 64")
-        self.sliding_delta_chunk_size = sliding_delta_chunk_size
         self.intermediate_size = intermediate_size
         self.hidden_ratio = hidden_ratio
         self.norm_eps = norm_eps
@@ -114,5 +81,10 @@ class DismConfig(PretrainedConfig):
         self.ce_softcap = ce_softcap
         self.ce_chunk_size = ce_chunk_size
         self.ignore_index = ignore_index
-        super().__init__(pad_token_id=pad_token_id, bos_token_id=bos_token_id,
-                         eos_token_id=eos_token_id, tie_word_embeddings=False, **kwargs)
+        super().__init__(
+            pad_token_id=pad_token_id,
+            bos_token_id=bos_token_id,
+            eos_token_id=eos_token_id,
+            tie_word_embeddings=False,
+            **kwargs,
+        )

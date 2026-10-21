@@ -9,35 +9,32 @@ Original source hashes are in `source_manifest.json`.
 
 ## Baseline
 
-`configs/sequence_true.json` is the unchanged original model specification.
-40,467,834 parameters: width384, six heads, D=DV64, R32, Q/K vocab512,
-FFN1445, untied 32k embeddings, context2048. First three layers: pure GDN;
-last three: GDN+DISM sharing Q/K input-linear weights, with independent
-convolution filters and V paths. Postnorm, no SWA. Soft readout is linear+SiLU
-without L2 normalization. GDN beta is sigmoid (no negative eigenvalues).
+`configs/sequence_true_72m_valres.json` is the selected 72M model
+specification. It uses width384, six heads, D=DV64, R32, Q/K vocab512 and
+context2048. The first six layers are pure GDN; the last six are GDN+DISM,
+sharing Q/K input-linear weights while retaining independent convolution
+filters and V paths. The model is post-norm and has no SWA branch.
 
-Direction is fixed true. One training forward with one hard flag per packed
+Direction is fixed true. One training forward uses one hard flag per packed
 training row/head/layer, shared by all 2048 tokens in that row, including
-across documents. Hard probability linearly rises from 0 to .95 in 6000 steps.
+across documents. Hard probability rises linearly to the configured
+`hard_prob_max`.
 Validation reports all-hard and all-soft. Original final hard/soft NLL:
 3.09840534 / 3.08634381 over 1,068,889 valid / 1,179,648 packed tokens.
 These are historical remote results, not fresh evaluation of this tree.
 
-## Current training defaults (2026-10-15)
+## Current training defaults
 
-The DISM runtime now defaults to compact CPU-planned metadata and `ready` hard
-backward: use event backward only once both planning and H2D are complete;
-otherwise use the dedicated quadratic hard backward. For explicit controls,
-`DISM_HARD_BACKWARD=event` restores waiting and `DISM_PLANNER_COMPACT=0` restores
-the classic padded layout. Read these settings before creating the first runtime.
-Worker count, affinity, convolution configuration and model architecture are unchanged.
+Quadratic hard backward is the default. Set `DISM_HARD_PLANNER=1` to opt into
+the asynchronous planner; `DISM_HARD_BACKWARD=ready|event|quadratic` selects
+when that path consumes a completed plan. `DISM_PLANNER_COMPACT=0` selects the
+classic padded planner layout. The production entrypoint must decide these
+settings before the first DISM runtime is created.
 
-For existing `conv_impl="linear_fla", conv_backend="cuda"` configurations, the
-convolution frontend now calls CUDA causal_conv1d forward/backward directly.
-The historical configuration name and `weight`/`conv.weight` parameter layout
-are retained, including initialization RNG, optimizer grouping and shared Q/K
-aliases. There is no checkpoint or Adam-moment migration. The explicit Triton
-backend remains available; the direct CUDA path does not silently fall back.
+The only supported convolution frontend is the linear projection followed by
+CUDA causal_conv1d forward/backward. Its `weight`/`conv.weight` parameter
+layout, initialization RNG, optimizer grouping and shared Q/K aliases match the
+selected valres checkpoint.
 
 One int32 token-to-document map is built from `cu_seqlens` with GPU searchsorted
 per model forward and shared across pure GDN, hybrid DISM/GDN and value-residual
@@ -55,8 +52,8 @@ blocks 117 ms per step but removing it is worth 0.7% +- 1%, and the step absorbs
 25-35 ms of extra host work before it costs step time. Further host-side work
 here has a hard ceiling of about 5% and is not the live lever.
 
-DISM and SWA-control training now use chunked fused linear CE with softcap and
-the actual `cu_seqlens`. Their default scalar `mean` is an equal-weight mean of
+DISM-GDN pretraining uses chunked fused linear CE with softcap and the actual
+`cu_seqlens`. The scalar `mean` is an equal-weight mean of
 valid document means, **not a token mean**. A document with no valid target
 (including an empty boundary interval) is excluded. Targets are already shifted
 by the dataloader and are not shifted again. Padding/ignored labels remain -1.
@@ -83,7 +80,6 @@ normalized gradients. DISM's plain AdamW performs no hidden averaging; if an
 optimizer averages these identical gradients later, that AVG is an identity.
 Do not wrap this path in an additional DDP gradient-averaging wrapper.
 The logged training loss also uses global S/D, not the last microbatch mean.
-Explicit dual-path experiments count documents once, not once per branch.
 
 No whole-step batch prefetch is introduced: the existing one-next-batch protocol,
 consumed dataloader position, RNG counters, annealing state, optimizer groups
@@ -140,7 +136,7 @@ for the observed GPU utilization gap. Raw results belong in ignored `build/`.
 ## Training command
 
 Build the sibling v3 extension first. Environment: `pyproject.toml` dependencies
-plus FLA, causal-conv1d, FlashAttention and the v3 build dependencies.
+plus FLA, causal-conv1d and the v3 build dependencies.
 From repository root:
 
 ```bash
@@ -148,20 +144,20 @@ export PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat"
 export NANOCHAT_BASE_DIR=/path/to/new-run
 export HF_ENDPOINT=https://hf-mirror.com
 python -m scripts.base_train \
-  --model-spec nanochat/configs/sequence_true.json --model-tag random40m \
+  --model-spec nanochat/configs/sequence_true_72m_valres.json --model-tag valres72m \
   --hf-tokenizer /path/to/llama2-tokenizer --data-dir /path/to/fwedu-100B \
   --seq-align 256 --loader-workers 2 --data-shuffle --shuffle-seed 1337 \
-  --device-batch-size 64 --total-batch-size 131072 --num-iterations 6000 \
+  --device-batch-size 64 --total-batch-size 131072 --num-iterations 19074 \
   --warmup-steps 157 --warmdown-ratio .25 --final-lr-frac .1 \
   --matrix-lr .0015 --embedding-lr .0015 --unembedding-lr .0015 \
   --scalar-lr .0015 --weight-decay .01 \
   --eval-every 1500 --eval-tokens 1179648 --dual-eval-valid-tokens 1048576 \
   --eval-device-batch-size 64 --save-every 1000 \
   --core-metric-every -1 --sample-every -1 \
-  --wandb-project dism-v3 --run sequence-true
+  --wandb-project dism-simlpajama --run valres-clean
 ```
 
-6000 × 131072 = 786,432,000 packed tokens. Do not add `--dual-path-loss`.
+19074 × 131072 = 2,500,000,000 packed tokens.
 Batch64 reflects the remote GPU, not a local memory-fit guarantee. Use a new
 W&B identity, never overwrite the historical run. This cleanup starts no jobs.
 
@@ -184,7 +180,7 @@ The explicit SAM prefill/decoding backend is available in flash_dism.inference;
 it does not automatically replace nanochat's model/cache dispatch. V4 training
 operators remain excluded.
 
-DISM/SWA model specs may set `loss_balance` to `document` (default) or `token`.
+DISM-GDN pretraining always uses document-balanced normalization.
 
 DISM training logs a diagnostic census of the hard-backward dispatch decision:
 `train/hard_route/event_per_step`, `train/hard_route/quadratic_per_step` and
@@ -199,11 +195,7 @@ pipeline, readiness is monotone in that replay order: the buckets form a prefix
 that takes the event route and a suffix that falls back, so where the buckets
 stop being 0.0 is the planner deadline cliff.
 
-Both use the chunked fused softcap CE. Training sums the corresponding loss
-numerators and valid counts over all accumulation microbatches/ranks before
-normalizing gradients, including unequal valid-token counts and ignored-only
-microbatches. Token mode does not pass document boundaries to CE; attention and
-shortconvolution still receive the original packed boundaries. Checkpoint
-metadata records `global_valid_document_mean_v1` or `global_valid_token_mean_v1`.
-BPB/unreduced token diagnostics are unchanged. This option changes the objective,
-not model weights, optimizer schema, RNG counters or dataloader state.
+Training sums document-loss numerators and valid-document counts over all
+accumulation microbatches/ranks before normalizing gradients, including unequal
+valid-token counts and ignored-only microbatches. BPB/unreduced token diagnostics
+remain token-based.

@@ -12,7 +12,8 @@ packed-sequence training, and SAM-based full-hard prefill/decoding.
 | `voc_dism` | Vocabulary interpolation and DISM with autograd | Fixed or packed Q/K/readout/V tensors |
 | `dism_core` | DISM without vocabulary interpolation | Prepared operands, labels and LSE |
 | `DismAttention` | Projections, short convolutions, DISM and output gate | `[B,N,width]` |
-| `DismSwaAttention` | DISM plus RoPE sliding-window attention | `[B,N,width]` |
+| `DismGdnAttention` | DISM plus GDN with shared Q/K linear projections | `[B,N,width]` |
+| `PureGdnAttention` | GDN-only layer in the selected hybrid layout | `[B,N,width]` |
 | `DismForCausalLM` | Decoder with SwiGLU and fused cross-entropy | Token IDs or embeddings |
 | `inference.HardDismPrefill` | CPU SAM planning + Triton prefill | Hard labels and BNHD readout/V |
 | `inference.HardDismDecoder` | SAM snapshot/tail decoding | Hard labels and BNHD readout/V |
@@ -48,10 +49,10 @@ python -m pip install --no-build-isolation -e .
 The distribution is `flash-dism`; import it as `flash_dism`. Installation builds
 `cu_flash_dism` through `build.py`, plus the native SAM extensions using NVCC/C++.
 Installed binaries are loaded without compiling; source-checkout inference can
-JIT-build into the user's Torch cache. Runtime dependencies
-include Triton, Transformers and flash-linear-attention. The SWA module also
-needs a compatible FlashAttention installation (`.[swa]`). There is no CPU-only
-build mode. See [installation](docs/INSTALL.md) for toolchain requirements,
+JIT-build into the user's Torch cache. Runtime dependencies include Triton,
+Transformers and flash-linear-attention. This branch has no SWA dependency or
+build variant. There is no CPU-only build mode. See
+[installation](docs/INSTALL.md) for toolchain requirements,
 configuration selection and wheel compatibility.
 
 ## Training
@@ -79,13 +80,13 @@ out.float().square().mean().backward()
 
 Q/K use BF16 `[B,N,H,D]`, V uses BF16 `[B,N,H,DV]`, and sq/sk use BF16
 `[B,N,H,R]`. Supported widths are independently **D,DV ∈ {32,64}** and
-**R ∈ {16,32}**. Vocabularies are `[H,V,D]` or shared `[V,D]`; FP32 master
+**R ∈ {16,32}**. Vocabularies are independent per head, `[H,V,D]`; FP32 master
 parameters are recommended. `tau` is FP32 `[H]` in natural-log units.
 `direction` is bool `[B,H]` (true selects query-LSE normalization), and `hard`
 is bool `[B,H]`, one flag per training sequence/head. Token-level masks are
-rejected. Public training operators and modules automatically combine soft CUDA
-O(N²) forward/backward with hard integer CUDA O(N²) forward and asynchronous
-CPU-planned, chunk-parallel event backward. No planner argument is required.
+rejected. Public training operators and modules combine soft CUDA O(N²)
+forward/backward with hard integer CUDA O(N²) forward. Quadratic hard backward
+is the default; asynchronous CPU-planned event backward is explicit opt-in.
 Low-level `forward_core`/`forward_varlen` and their saved-state backward helpers
 remain soft-only building blocks, not the complete training dispatcher.
 For packed batch-one inputs, hard is `[training_rows,H]`; rows have equal length
@@ -98,10 +99,11 @@ packed input accepts `layout=VarlenLayout(...)`. It returns output and log2
 normalizer, but has no training autograd/backward registration. See the
 [hard forward contract, validation and timings](docs/HARD_FORWARD_PLAN.md#complete-standalone-hard-forward).
 
-The default runtime is lazy and shared per process/device, with no module or
-checkpoint fields. `DismAttention`, the inherited hybrid modules, and default
-`dism_core`/`voc_dism` support eager and fullgraph Inductor training. Existing
-packed compilation still requires dynamic-output-shape capture. Advanced eager
+The runtime is lazy and shared per process/device, with no module or checkpoint
+fields. `DISM_HARD_PLANNER=1` enables the asynchronous planner; without it,
+hard backward uses the quadratic route. `DismAttention` and
+`dism_core`/`voc_dism` support eager and Inductor training. Existing packed
+compilation still requires dynamic-output-shape capture. Advanced eager
 experiments can override the runtime explicitly:
 
 ```python
@@ -155,10 +157,10 @@ evaluation to all-hard; the caller owns the `hard_prob` schedule. `hard_seed`
 is salted by `layer_idx`; explicit flags override sampling. Save any external
 schedule and RNG counters when checkpointing training.
 
-`DismSwaAttention(..., window_size=128)` adds a local branch with separate
-linear + RMSNorm + RoPE Q/K and shared V. The window includes the current token.
-Both branches share the output gate after summation; DISM itself has no RoPE.
-GDN variants are available in `flash_dism.hybrid_gdn` and `flash_dism.pure_gdn`.
+GDN variants are available in `flash_dism.hybrid_gdn` and
+`flash_dism.pure_gdn`. In `DismGdnAttention`, DISM and GDN share the q/k input
+linear weights but keep independent convolution filters and V paths; their raw
+outputs are added before the common norm, gate and output projection.
 See [modules](docs/MODULE.md), [language models](docs/MODEL.md), and the repository's
 [nanochat training framework](../nanochat/README.md), which is not part of the wheel.
 
@@ -228,7 +230,7 @@ readouts. Only Q/K **labels** are discrete: the signed soft readout
 `dot(sq, sk)` is still evaluated. No N×N attention matrix is materialized.
 
 The interfaces below consume prepared labels and vectors, not hidden states.
-Projections, vocabulary argmax, short-convolution state, SWA/GDN state and the
+Projections, vocabulary argmax, short-convolution state, GDN state and the
 output gate remain the model caller's responsibility. They do not automatically
 replace the module's FLA cache. Use one cache per document and layer, with fixed
 weights and tau; no autograd, mixed hard/soft rows, beam reordering or packed

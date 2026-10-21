@@ -1,4 +1,4 @@
-"""Default compact/ready integration and explicit classic/event control."""
+"""Quadratic default and explicit planner/event opt-in."""
 import pytest
 import torch
 
@@ -8,8 +8,19 @@ from flash_dism.kernels.hard_backward_fused import CompactFusedHardPrefillBackwa
 from test_hard_training import inputs
 
 
-def test_default_runtime_is_compact_and_ready(monkeypatch):
+def test_default_runtime_is_quadratic(monkeypatch):
     ht.shutdown_hard_planners()
+    monkeypatch.delenv('DISM_HARD_PLANNER', raising=False)
+    planner = ht.default_hard_planner('cuda')
+    try:
+        assert isinstance(planner, ht.DisabledHardPlanner)
+    finally:
+        ht.shutdown_hard_planners()
+
+
+def test_explicit_runtime_is_compact_and_ready(monkeypatch):
+    ht.shutdown_hard_planners()
+    monkeypatch.setenv('DISM_HARD_PLANNER', '1')
     monkeypatch.delenv('DISM_HARD_BACKWARD', raising=False)
     monkeypatch.delenv('DISM_PLANNER_COMPACT', raising=False)
     planner = ht.default_hard_planner('cuda')

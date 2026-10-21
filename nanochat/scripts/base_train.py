@@ -66,7 +66,6 @@ print_banner()
 # -----------------------------------------------------------------------------
 # CLI arguments
 parser = argparse.ArgumentParser(description="Pretrain base model")
-parser.add_argument("--dual-path-loss", action="store_true", help="Separate all-soft/all-hard losses, paired direction, sequential backward")
 # Logging
 parser.add_argument("--wandb-project", type=str, default="nanochat")
 parser.add_argument("--dual-eval-valid-tokens", type=int, default=0)
@@ -306,8 +305,8 @@ with torch.device("meta"):
 model_config = model.config
 if resuming and getattr(model, 'exact_optimizer_hyperparameters', False):
     for key in ('num_iterations', 'warmup_steps', 'warmdown_ratio', 'final_lr_frac',
-                'total_batch_size', 'device_batch_size', 'eval_device_batch_size', 'matrix_lr', 'weight_decay', 'seq_align', 'data_dir', 'dual_path_loss'):
-        if meta_data['user_config'].get(key, False if key == 'dual_path_loss' else None) != user_config.get(key):
+                'total_batch_size', 'device_batch_size', 'eval_device_batch_size', 'matrix_lr', 'weight_decay', 'seq_align', 'data_dir'):
+        if meta_data['user_config'].get(key) != user_config.get(key):
             raise ValueError(f'DISM exact resume requires unchanged {key}')
 model_config_kwargs = dict(model_spec.config)
 if not model.capabilities.varlen:
@@ -873,26 +872,20 @@ while True:
         from nanochat.document_loss import DocumentLossAccumulator
         document_step = DocumentLossAccumulator(grad_accum_steps, device)
     for micro_step in range(grad_accum_steps):
-        if args.dual_path_loss:
-            from nanochat.dual_loss import dual_loss_backward
-            alpha = float(orig_model.hard_probability.item())
-            train_loss, path_losses = dual_loss_backward(model, orig_model, x, y, cu_seqlens,
-                segment_ids, alpha, grad_accum_steps, scaler, document_step=document_step)
+        if document_step is not None:
+            loss, count = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids,
+                                loss_reduction=getattr(orig_model, 'loss_sum_reduction', 'document_sum'))
+            document_step.add(loss, count)
         else:
-            if document_step is not None:
-                loss, count = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids,
-                                    loss_reduction=getattr(orig_model, 'loss_sum_reduction', 'document_sum'))
-                document_step.add(loss, count)
-            else:
-                loss = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids)
-            train_loss = loss.detach() # for logging
-            # Document loss is a numerator, NOT a local document mean. This
-            # temporary scale is undone in finalize with the global denominator.
-            loss = loss / grad_accum_steps
-            if scaler is not None:
-                scaler.scale(loss).backward()
-            else:
-                loss.backward()
+            loss = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids)
+        train_loss = loss.detach() # for logging
+        # Document loss is a numerator, NOT a local document mean. This
+        # temporary scale is undone in finalize with the global denominator.
+        loss = loss / grad_accum_steps
+        if scaler is not None:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
         x, y, cu_seqlens, segment_ids, dataloader_state_dict = next(train_loader) # prefetch while GPU is busy
     if document_step is not None:
         train_loss = document_step.finalize(orig_model.parameters())
@@ -914,15 +907,6 @@ while True:
             for v in scaler._found_inf_per_device(optimizer).values():
                 dist.all_reduce(v, op=dist.ReduceOp.MAX)
     grad_norm = torch.nn.utils.clip_grad_norm_(orig_model.parameters(), max_norm=args.grad_clip)
-    if args.dual_path_loss and step % 100 == 0:
-        group_sq = {}
-        for name,p in orig_model.named_parameters():
-            if p.grad is None: continue
-            role = ('codebook' if name.endswith(('q_vocab','k_vocab')) else
-                    'shared_qk' if name.endswith(('q_conv.weight','k_conv.weight')) else
-                    'shortconv' if name.endswith('conv_weight') else 'other')
-            group_sq[role] = group_sq.get(role, 0) + p.grad.detach().float().square().sum()
-        wandb_run.log({'step':step, **{'train/grad_norm_'+k:v.sqrt().item() for k,v in group_sq.items()}})
     grad_norm_f = grad_norm.item()
     if not math.isfinite(grad_norm_f):
         raise FloatingPointError(f"Non-finite gradient norm at step {step}: {grad_norm_f}")
@@ -990,10 +974,6 @@ while True:
                 routes, hard_dispatch_layers, hard_dispatch_layers * grad_accum_steps,
                 max(1, step - last_hard_route_step)))
             last_hard_route_step = step
-        if args.dual_path_loss:
-            log_data['train/hard_loss_weight'] = alpha
-            for key,value in path_losses.items():
-                log_data['train/'+key+'_path_loss'] = value.item()
         for key, value in update_rms.items():
             log_data[f"train/update_rms_max/{key}"] = value
         if hidden_rms_buffer is not None:
@@ -1010,13 +990,10 @@ while True:
                     log_data[f"{prefix}_coverage_pooled/layer{layer_index:02d}"] = stats.get("coverage_pooled", stats["coverage"])
                     for head_index, head_coverage in enumerate(stats.get("coverage_per_head", ())):
                         log_data[f"{prefix}_coverage_head{head_index}/layer{layer_index:02d}"] = head_coverage
-                    # Hard-assignment usage and, when quantile balancing is on,
-                    # the price magnitude. These are the quantities the QB
-                    # derivation says to watch; dual decrease alone is not
-                    # evidence that usage was equalised.
+                    # Hard-assignment usage is the capacity signal; probability
+                    # entropy alone cannot reveal codebook collapse.
                     for extra in ("active_codes", "usage_entropy", "effective_symbols",
-                                  "max_load", "capacity_residual",
-                                  "price_abs_mean", "price_std"):
+                                  "max_load", "capacity_residual"):
                         if extra in stats:
                             log_data[f"{prefix}_{extra}/layer{layer_index:02d}"] = stats[extra]
                     counts = np.asarray(stats["counts"], dtype=np.float64)

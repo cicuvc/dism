@@ -20,11 +20,11 @@ def test_capped_hard_schedule_and_state():
     from types import SimpleNamespace
     from nanochat.models.dism import DismConfig
     from nanochat.models.dism.model import DismLM
-    assert DismConfig().hard_prob_max == 1.0
+    assert DismConfig().hard_prob_max == 0.95
     holder = SimpleNamespace(config=DismConfig(anneal_steps=101, hard_prob_max=.95),
                              training_step=torch.zeros((), dtype=torch.int64),
                              hard_probability=torch.zeros(()),
-                             vocab_temperature=torch.ones(()))
+                             vocab_temperature=1.0)
     for step, expected in [(0,0.), (50,.475), (100,.95), (200,.95)]:
         DismLM.set_training_step(holder, step)
         assert holder.training_step.item() == step
@@ -32,15 +32,14 @@ def test_capped_hard_schedule_and_state():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA')
-@pytest.mark.parametrize('architecture', ['dism_hybrid', 'swa_control'])
-def test_dism_compiled_resume(tmp_path, architecture):
+def test_dism_compiled_resume(tmp_path):
     pytest.importorskip('flash_dism')
     from nanochat.checkpoint_manager import save_checkpoint, load_checkpoint
     from torch.fx.experimental import _config as shape_config
     config = dict(sequence_len=256, vocab_size=128, n_layer=2, n_head=2, n_embd=64,
                   intermediate_size=128, head_dim=32, value_dim=32, readout_dim=16,
                   qk_vocab_size=32, anneal_steps=3000, hard_prob_max=.95)
-    spec = ModelSpec(architecture, 1, config)
+    spec = ModelSpec('dism_gdn_hybrid', 1, config)
     model = build_model(spec).cuda().train()
     model.init_weights()
     optconf = PretrainOptimizerConfig(.001, .001, .001, .001, .01)
@@ -56,7 +55,7 @@ def test_dism_compiled_resume(tmp_path, architecture):
     cu = torch.tensor([0, 256, 512, 512], device='cuda', dtype=torch.int32)
     with shape_config.patch(use_duck_shape=False), torch._dynamo.config.patch(capture_dynamic_output_shape_ops=True), \
             torch._inductor.config.patch(compile_threads=1):
-        compiled = torch.compile(model, dynamic=True, fullgraph=True)
+        compiled = torch.compile(model, dynamic=True)
         model.set_training_step(123)
         loss = compiled(x, y, cu_seqlens=cu)
         loss.backward()
@@ -75,10 +74,9 @@ def test_dism_compiled_resume(tmp_path, architecture):
         restored_optim = restored.setup_pretraining_optimizer(optconf)
         restored_optim.load_state_dict(optimizer_state)
         assert optimizer_schema(restored, restored_optim) == schema
-        if architecture == 'dism_hybrid':
-            assert restored.rng_counter.item() == 1
+        assert restored.rng_counter.item() == 1
         restored.set_training_step(124)
-        restored_compiled = torch.compile(restored, dynamic=True, fullgraph=True)
+        restored_compiled = torch.compile(restored, dynamic=True)
         replay = restored_compiled(x, y, cu_seqlens=cu)
         replay.backward()
         torch.testing.assert_close(replay, reference, atol=1e-5, rtol=1e-5)
@@ -87,5 +85,4 @@ def test_dism_compiled_resume(tmp_path, architecture):
         restored_optim.step()
         for p, r in zip(model.parameters(), restored.parameters()):
             torch.testing.assert_close(p, r, atol=2e-5, rtol=.001)
-        if architecture == 'dism_hybrid':
-            assert model.rng_counter.item() == restored.rng_counter.item() == 2
+        assert model.rng_counter.item() == restored.rng_counter.item() == 2

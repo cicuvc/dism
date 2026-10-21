@@ -118,8 +118,7 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
 
     Runs an eager eval-mode forward through the embedding and blocks only (the
     fused LM head is skipped). Selection for the ``q`` codebook is
-    ``argmax(softmax(q @ q_vocab.T))``; likewise for ``k``. Enabled QB instead
-    uses the current beta and frozen side-specific prices. Returns
+    ``argmax(softmax(q @ q_vocab.T))``; likewise for ``k``. Returns
     ``{layer_index: {"q": stats, "k": stats}}`` with ``counts`` a CPU list of
     vocab-size selection frequencies plus entropy (normalized), max_share and
     coverage. Traversal follows the all-hard model evaluation path, including
@@ -138,10 +137,8 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
     try:
         with torch.autocast("cuda", dtype=torch.bfloat16):
             hidden = model.embedding(input_ids.reshape(1, -1))
-            conv_seq_idx = None
-            if config.conv_impl == 'linear_fla' and config.conv_backend == 'cuda':
-                from nanochat.models.dism.conv import packed_conv_sequence_ids
-                conv_seq_idx = packed_conv_sequence_ids(cu_seqlens, hidden.shape[1], device)
+            from nanochat.models.dism.conv import packed_conv_sequence_ids
+            conv_seq_idx = packed_conv_sequence_ids(cu_seqlens, hidden.shape[1], device)
             v_first = None
             value_residual = getattr(config, "value_residual", False)
             for index, layer in enumerate(model.layers):
@@ -162,69 +159,22 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                 conv_options = {'seq_idx': conv_seq_idx} if getattr(attn.q_conv, 'supports_seq_idx', False) else {}
                 q = attn.q_conv(hidden, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, **conv_options)
                 k = attn.k_conv(hidden, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen, **conv_options)
-                # kv_group_size>1 gives the key side fewer heads than the query
-                # side, and fewer codebook rows, so the two axes differ.
-                kv_heads = int(getattr(attn, "kv_heads", heads))
                 q = q.reshape(1, length, heads, attn.head_dim).float()
-                k = k.reshape(1, length, kv_heads, attn.head_dim).float()
-                if getattr(attn, "vocab_transvq", False):
-                    # Effective codebook is C' = P_phi(C), not the frozen base.
-                    with torch.autocast("cuda", enabled=False):
-                        table_q = attn.q_vocab_map(attn.q_vocab.float())
-                        table_k = attn.k_vocab_map(attn.k_vocab.float())
-                else:
-                    table_q, table_k = attn.q_vocab, attn.k_vocab
-                if getattr(attn, 'vocab_head_pairing', ''):
-                    from flash_dism.vocab_roles import expand_qk_vocab
-                    table_q, table_k = expand_qk_vocab(
-                        table_q, table_k, attn.vocab_head_pairing,
-                        heads=heads, kv_heads=kv_heads)
+                k = k.reshape(1, length, heads, attn.head_dim).float()
+                table_q, table_k = attn.q_vocab, attn.k_vocab
                 stats = {}
-                pq_sizes = tuple(getattr(attn, 'pq_vocab_sizes', ()))
                 for tag, vec, table, rows in (("q", q, table_q, heads),
-                                              ("k", k, table_k, kv_heads)):
-                    # Per-head counts: q_vocab/k_vocab are [heads, V, D] with independent
-                    # per-head codebooks unless vocab_share_heads, so entries must not
-                    # be pooled across heads.
+                                              ("k", k, table_k, heads)):
+                    # q_vocab/k_vocab contain one independent table per head.
                     counts = torch.zeros((rows, vocab_size), device=device, dtype=torch.float64)
                     entropy_sum = 0.0
                     max_sum = 0.0
                     for start in range(0, length, chunk_size):
                         stop = min(start + chunk_size, length)
-                        qb = getattr(attn, 'qb', None)
-                        if pq_sizes:
-                            from flash_dism.pq_vocab import strides
-                            group_dim = attn.head_dim // len(pq_sizes)
-                            code = torch.arange(vocab_size, device=device)
-                            full_logp = None
-                            idx_flat = torch.zeros(
-                                (vec.shape[0], stop-start, rows),
-                                device=device, dtype=torch.long)
-                            for group, (size, step) in enumerate(zip(
-                                    pq_sizes, strides(pq_sizes))):
-                                scores = model.vocab_temperature * torch.einsum(
-                                    "bnhd,hvd->bnhv",
-                                    vec[:, start:stop, :, group*group_dim:(group+1)*group_dim],
-                                    table[:, group, :size].float())
-                                logp = torch.log_softmax(scores, dim=-1)
-                                positions = (code // step) % size
-                                contribution = logp[..., positions]
-                                full_logp = (contribution if full_logp is None
-                                             else full_logp + contribution)
-                                idx_flat += logp.argmax(-1) * step
-                            probs = full_logp.exp().reshape(-1, vocab_size)
-                            idx = idx_flat.reshape(-1, rows)
-                        else:
-                            scores = torch.einsum("bnhd,hvd->bnhv", vec[:, start:stop], table.float())
-                            if qb is not None:
-                                price = qb.q_price if tag == 'q' else qb.k_price[::attn.kv_group_size]
-                                strength = qb.q_strength if tag == 'q' else qb.k_strength
-                                with torch.autocast('cuda', enabled=False):
-                                    scores = model.vocab_temperature * torch.einsum(
-                                        'bnhd,hvd->bnhv', vec[:, start:stop].float(),
-                                        table.to(torch.bfloat16).float()) - strength*price
-                            probs = torch.softmax(scores, dim=-1).reshape(-1, vocab_size)
-                            idx = probs.argmax(-1).reshape(-1, rows)
+                        scores = model.vocab_temperature * torch.einsum(
+                            "bnhd,hvd->bnhv", vec[:, start:stop].float(), table.float())
+                        probs = torch.softmax(scores, dim=-1).reshape(-1, vocab_size)
+                        idx = probs.argmax(-1).reshape(-1, rows)
                         for head in range(rows):
                             counts[head] += torch.bincount(idx[:, head], minlength=vocab_size).double()
                         entropy_sum += float(-(probs * (probs + 1e-12).log()).sum(-1).mean()) * (stop - start)
@@ -258,10 +208,6 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                     stats[tag]["max_load"] = float(share.max(1).values.mean())
                     stats[tag]["capacity_residual"] = float(
                         (share - 1.0 / vocab_size).abs().max(1).values.mean())
-                    if qb is not None:
-                        price = qb.q_price if tag == 'q' else qb.k_price[::attn.kv_group_size]
-                        stats[tag]["price_abs_mean"] = float(price.abs().mean())
-                        stats[tag]["price_std"] = float(price.std())
                 results[index] = stats
                 hard = torch.ones((input_ids.shape[0], heads), dtype=torch.bool, device=device)
                 direction = torch.ones((1, heads), dtype=torch.bool, device=device)
@@ -269,7 +215,7 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                                hard=hard, direction=direction, use_cache=False,
                                v_first=v_first if value_residual else None,
                                vocab_temperature=model.vocab_temperature, conv_seq_idx=conv_seq_idx,
-                               direction_true=getattr(attn, 'qb', None) is not None)
+                               direction_true=True)
     finally:
         model.train(was_training)
     return results

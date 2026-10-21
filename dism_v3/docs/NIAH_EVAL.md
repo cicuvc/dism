@@ -24,7 +24,7 @@ forward。context 必须为正的 256 倍数。这里只读取本地 Parquet 的
 
 ## 任务与指标
 
-沿用 [NIAH circuit probe](NIAH_CIRCUIT_PROBE.md) 的历史协议：
+沿用早期 NIAH circuit probe 的历史协议：
 插入的是 `\nThe special magic number is {number}.` 编码后去掉 query 前缀的
 **数字尾部 tokens**，不是完整提示句；query 是 `\nThe special magic number is`。
 每个 present/absent 对共享背景、位置和答案；absent 用等长背景片段替换插入尾部。
@@ -55,7 +55,7 @@ softcap 计算 logits，避免为整个长 context 分配完整词表 logits。
 - 使用 eager `orig_model`、`no_grad`、临时 eval/full-hard 模式；不经过训练编译图。
   临时扩展 `config.sequence_len` 以容纳长 context，退出时恢复。
 - 保存并恢复每个子模块的原始 training flag 和 `eval_hard`。
-  正常路径不写 model buffers，RNG counter、annealing、QB price/count 保持不变，
+  正常路径不写 model buffers，RNG counter、annealing 状态保持不变，
   连 buffer tensor version 也不增加。若发现 buffer 被意外修改，恢复其数值并报错。
   不运行 optimizer，不清空或更改已有 gradients。
 - 分布式只有 rank 0 执行 probe，其余 ranks 等待结果广播；成功、跳过或错误均广播，
@@ -64,4 +64,4 @@ softcap 计算 logits，避免为整个长 context 分配完整词表 logits。
 
 回归测试：`nanochat/tests/test_niah_eval.py` 覆盖配对构造、全局 RNG、
 模型模式/buffers/gradients、异常恢复、缺数据重试、live loader 和预取 batch、
-双进程广播及真实 CUDA DISM+QB 状态隔离；同时运行 checkpoint resume/prefetch 测试。
+双进程广播及真实 CUDA DISM 状态隔离；同时运行 checkpoint resume/prefetch 测试。

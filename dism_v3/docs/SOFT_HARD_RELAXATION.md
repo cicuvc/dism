@@ -4034,7 +4034,7 @@ norm × LR 的小规模交互实验（例如 2000–4000 步、LR ∈ {2/3×, 1�
 
 ## 47. NIAH circuit：层级依赖重分布与 L10 head 3（2026-10-16）
 
-按 `NIAH_CIRCUIT_PROBE.md` 开始第一轮分析。完成 P1（单层必要性）、P2/P3
+按早期 NIAH circuit probe 开始第一轮分析。完成 P1（单层必要性）、P2/P3
 （真实内核输入的查询行和符号链），并针对 L8/L10 补做逐 slot 消融。
 没有修改生产 forward、kernel、checkpoint 或训练进程。代码基线 `4259eb6`；
 每份实验 JSON 记录实际探针源码 SHA256，新增脚本当时尚未提交。
@@ -4821,7 +4821,7 @@ buffers 均未变化。FP32 score argmax 与原 CUDA label 的最大不一致比
 
 ## 53. Fixed-true QB 训练实现（2026-10-16）
 
-完整数学推导单独记录在 [QUANTILE_BALANCING.md](QUANTILE_BALANCING.md)，涵盖
+完整数学推导记录在早期 QB 实验文档中；该实验实现已从 scale-cleanup 分支移除。推导涵盖
 容量约束、价格对偶、quantile 块最优解、soft 下界及其反向传播。
 
 本节实现的是 soft/hard 一致的在线价格校正，不是 §52 的训后 K-label-only 干预。

@@ -54,7 +54,7 @@ def test_compiled_operator_replacement(monkeypatch,direction_value,probability):
     q,k,sq,sk,v = [rand(c) for c in (d,d,r,r,d)]
     eq,ek = [torch.randn(h,512,d,device='cuda')*.25 for _ in range(2)]
     tau = torch.full((h,),.5,device='cuda')
-    hard = (torch.rand(1,h,3,1,device='cuda') < probability).expand(1,h,3,256).reshape(1,h,n).contiguous()
+    hard = torch.rand(1,h,device='cuda') < probability
     direction = torch.full((1,h),direction_value,device='cuda',dtype=torch.bool)
     boundaries = torch.tensor([0,256,768],device='cuda',dtype=torch.int32)
     layout = VarlenLayout.from_cu_seqlens(boundaries,n).table.flatten()
@@ -106,7 +106,7 @@ def test_inductor_autograd(monkeypatch):
     boundaries=torch.tensor([0,256,512],device='cuda',dtype=torch.int32)
     layout=VarlenLayout.from_cu_seqlens(boundaries,n).table.flatten()
     direction=torch.ones(1,h,device='cuda',dtype=torch.bool)
-    hard=(torch.rand(1,h,2,1,device='cuda')<.5).expand(1,h,2,256).reshape(1,h,n).contiguous()
+    hard=torch.rand(1,h,device='cuda')<.5
     beta=torch.tensor(1.)
     def run(*inputs):
         return compiler.voc_forward(*inputs,beta,direction,hard,boundaries,layout)[0]

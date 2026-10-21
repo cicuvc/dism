@@ -22,7 +22,6 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-swa = ["flash-attn>=2.8"]
 test = ["pytest>=8", "numpy"]
 
 [tool.setuptools]

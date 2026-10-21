@@ -299,7 +299,7 @@ def default_hard_planner(device):
     key = (os.getpid(), device.index)
     with _runtime_lock:
         if key not in _runtimes:
-            if os.environ.get('DISM_HARD_PLANNER', '1') == '0':
+            if os.environ.get('DISM_HARD_PLANNER', '0') == '0':
                 _runtimes[key] = DisabledHardPlanner(device)
             else:
                 _runtimes[key] = AsyncHardPlanner(

@@ -32,8 +32,8 @@ python -m pip install --no-build-isolation -e ./dism_v3
 instead of downloading a second Torch into an isolated build environment.
 Use `--no-deps` only when all runtime dependencies are already installed.
 The core requires Torch, Triton, Transformers and flash-linear-attention.
-SWA additionally requires FlashAttention (`flash-dism[swa]`). Install native
-dependencies suitable for your Torch/CUDA versions before installing offline.
+This branch does not build or import an SWA variant. Install native dependencies
+suitable for your Torch/CUDA versions before installing offline.
 
 The installer invokes `build.py`, retaining its incremental cache and default
 eight R/D/DV configurations with fixed/varlen instances. Existing controls work:

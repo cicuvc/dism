@@ -38,7 +38,7 @@ def inputs(n,mode,tau_max=False):
     eq,ek=[torch.randn(h,512,d,device='cuda')*.2 for _ in range(2)]
     tau=torch.full((h,),math.log(d) if tau_max else 2.,device='cuda')
     direction=torch.tensor([[False,True,False,True]],device='cuda')
-    hard=torch.rand(b,h,n,device='cuda')<dict(soft=0.,mixed=.5,hard=1.)[mode]
+    hard=torch.rand(b,h,device='cuda')<dict(soft=0.,mixed=.5,hard=1.)[mode]
     return (q,k,sq,sk,v,eq,ek,tau,direction,hard)
 
 
@@ -57,7 +57,9 @@ def test_dimension_core(n,mode,tau_max):
     args=(qv,kv,sq,sk,lq.transpose(1,2),lk.transpose(1,2),iq,ik,direction,hard,v,tau)
     out,_,state=forward_core(qv,kv,sq,sk,v,args[4],args[5],iq,ik,direction,hard,tau,
                              ctas=1,save_state=True)
-    oracle_args=tuple(x.double() if x.is_floating_point() else x for x in args)
+    oracle_values = list(args)
+    oracle_values[9] = hard[:, :, None].expand(-1, -1, n)
+    oracle_args=tuple(x.double() if x.is_floating_point() else x for x in oracle_values)
     expected_out=dism_ref(*oracle_args)
     torch.testing.assert_close(out.double(),expected_out,atol=.008,rtol=.025)
     do=torch.randn_like(out).bfloat16()

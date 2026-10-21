@@ -23,7 +23,7 @@ def test_voc_optimizer_steps(n, probability):
     parameters = [q, k, sq, sk, v, eq, ek, tau]
     initial_parameters = [x.detach().clone() for x in parameters]
     optimizer = torch.optim.AdamW(parameters, lr=.003, weight_decay=0.)
-    hard = torch.rand(b, h, n, device='cuda') < probability
+    hard = torch.rand(b, h, device='cuda') < probability
     direction = torch.tensor([[False, True]], device='cuda')
 
     def forward():

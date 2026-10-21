@@ -33,81 +33,6 @@ def value_residual_mix(v, v_first, gate):
     return value_residual_mix_reference(v, v_first, gate)
 
 
-class TransVQMap(nn.Module):
-    """TransVQ codebook map P_phi: a shared, dense-Jacobian transform of the codebook.
-
-    The base codebook is a frozen reference; only the map is trained, so every
-    codeword receives gradient through the map's dense Jacobian and the codebook
-    does not collapse. ``kind`` selects the transform:
-      - "linear_attn": one linear-attention layer over the V codewords.
-      - "rank": C' = C + U (V^T C) with U,V in R^{V x rank}; low-rank dense
-                cross-codeword mixing shared across heads.
-      - "diagonal": C' = C * s (per-dimension scale; NO cross-codeword coupling,
-                a negative control for the kernel hypothesis).
-      - "frozen_random": as "rank" but U,V are frozen random; only s is learned.
-    An output RMSNorm with elementwise scaling sets the exit scale.
-    """
-
-    def __init__(self, dim, vocab, mlp_ratio=2.0, dropout=0.0, lite=False,
-                 kind="linear_attn", rank=4):
-        super().__init__()
-        self.kind = str(kind)
-        self.rank = int(rank)
-        self.out_norm = nn.RMSNorm(dim)
-        if self.kind == "linear_attn":
-            self.lite = bool(lite)
-            self.norm1 = nn.LayerNorm(dim)
-            self.q_proj = nn.Linear(dim, dim, bias=False)
-            self.k_proj = nn.Linear(dim, dim, bias=False)
-            self.q_norm = nn.RMSNorm(dim)
-            self.k_norm = nn.RMSNorm(dim)
-            if not self.lite:
-                self.v_proj = nn.Linear(dim, dim, bias=False)
-                self.out_proj = nn.Linear(dim, dim, bias=False)
-                self.norm2 = nn.LayerNorm(dim)
-                hidden = max(1, int(dim * mlp_ratio))
-                self.mlp = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim))
-        elif self.kind in ("rank", "frozen_random"):
-            self.u = nn.Parameter(torch.randn(vocab, self.rank) * 0.02)
-            self.v = nn.Parameter(torch.randn(vocab, self.rank) * 0.02)
-            self.s = nn.Parameter(torch.ones(self.rank))
-            if self.kind == "frozen_random":
-                self.u.requires_grad_(False)
-                self.v.requires_grad_(False)
-        elif self.kind == "mean_shift":
-            self.m = nn.Parameter(torch.zeros(dim))
-        elif self.kind == "diagonal":
-            self.s = nn.Parameter(torch.ones(dim))
-        else:
-            raise ValueError(f"unknown vocab_transvq_map kind {kind!r}")
-
-    def forward(self, codebook):
-        # codebook: [heads, V, dim]
-        if self.kind == "linear_attn":
-            h = self.norm1(codebook)
-            q = self.q_norm(F.elu(self.q_proj(h)) + 1.0)
-            k = self.k_norm(F.elu(self.k_proj(h)) + 1.0)
-            v = h if self.lite else self.v_proj(h)
-            kv = torch.einsum("hvd,hve->hde", k, v)
-            normalizer = k.sum(dim=1)
-            numerator = torch.einsum("hvd,hde->hve", q, kv)
-            denominator = 1.0 + torch.einsum("hvd,hd->hv", q, normalizer).unsqueeze(-1)
-            attn = numerator / denominator
-            if not self.lite:
-                attn = self.out_proj(attn)
-            x = codebook + attn
-            if not self.lite:
-                x = x + self.mlp(self.norm2(x))
-            return self.out_norm(x)
-        if self.kind in ("rank", "frozen_random"):
-            projected = torch.einsum("vr,hvd->hrd", self.v, codebook)
-            mixed = torch.einsum("vr,hrd->hvd", self.u * self.s, projected)
-            return self.out_norm(codebook + mixed)
-        if self.kind == "mean_shift":
-            return self.out_norm(codebook + self.m)
-        return self.out_norm(codebook * self.s)
-
-
 def _salt_hard_seed(seed, layer_idx):
     """XOR with a SplitMix64 layer salt; tensor seeds stay on their device."""
     if layer_idx is None:
@@ -129,18 +54,12 @@ def _salt_hard_seed(seed, layer_idx):
     return seed ^ salt
 
 
-def _rms_unit(x, eps=1e-6):
-    """RMS-normalise over the last dim (the codebook channel), fp32 maths."""
-    work = x.float()
-    return work * torch.rsqrt(work.pow(2).mean(-1, keepdim=True) + eps)
-
-
 class DismAttention(nn.Module):
     """v2-style projections/shortconv/gate with v3 signed soft readout.
 
     Inputs/outputs are [B,N,width]. Use CUDA BF16 autocast with FP32 master
     parameters. N and all packed document boundaries must be multiples of 256.
-    Random direction is one global choice per call. Hard decisions are per row.
+    Direction is supplied explicitly by the caller. Hard decisions are per row.
     A separate Triton sampler generates flags; RNG is not fused into DISM.
     """
     _decode_extra_states = 0
@@ -148,14 +67,7 @@ class DismAttention(nn.Module):
     def __init__(self, width, heads, *, head_dim=64, value_dim=64,
                  readout_dim=32, vocab_size=512, conv_size=4, layer_idx=None,
                  rope_theta=10000.0, qknorm_eps=1e-6, readout_l2_norm=False, soft_k_l2_norm=False,
-                 value_residual=False, vocab_temperature=1.0,
-                 vocab_transvq=False, vocab_transvq_lite=False,
-                 vocab_transvq_map="linear_attn", vocab_transvq_rank=4,
-                 pq_vocab_sizes=(), vocab_head_pairing: str = "",
-                 gqa_query_channels: int = 1,
-                 kv_group_size: int = 1, hard_tau_grad_scale: float = 1.0,
-                 qb_q_strength=0.0, qb_k_strength=0.0, qb_iterations=4, qb_update_interval=16, qb_samples=2048, qb_update_rate=0.1,
-                 selector_norm: bool = False, selector_norm_scale_init: float = 0.2):
+                 value_residual=False, vocab_temperature=1.0):
         super().__init__()
         if min(width, heads, vocab_size, conv_size) <= 0:
             raise ValueError("width, heads, vocab_size and conv_size must be positive")
@@ -176,80 +88,8 @@ class DismAttention(nn.Module):
         self.vocab_temperature = float(vocab_temperature)
         # Host-only multiplier applied to rtau; 1.0 is the deployed value.
         self.tau_scale = 1.0
-        # Optional selector normalisation: RMSNorm at the q/k conv+silu exit and
-        # at the codebook exit, each with a per-channel elementwise scale. With
-        # the scales frozen the selector entropy is a fixed, controllable
-        # quantity instead of drifting with the q norm; releasing them later
-        # lets the model sharpen on its own.
-        self.selector_norm = bool(selector_norm)
-        if self.selector_norm:
-            # Per-channel scales shared across heads and codebook rows (64
-            # parameters each), so the selector temperature is one explicit knob.
-            _init = float(selector_norm_scale_init)
-            self.q_out_scale = nn.Parameter(torch.full((head_dim,), _init))
-            self.k_out_scale = nn.Parameter(torch.full((head_dim,), _init))
-            self.q_vocab_scale = nn.Parameter(torch.full((head_dim,), _init))
-            self.k_vocab_scale = nn.Parameter(torch.full((head_dim,), _init))
-            for _p in (self.q_out_scale, self.k_out_scale,
-                       self.q_vocab_scale, self.k_vocab_scale):
-                _p._no_weight_decay = True
-
-        if type(gqa_query_channels) is not int or gqa_query_channels not in (1, 2):
-            raise ValueError("gqa_query_channels must be 1 or 2")
-        self.gqa_query_channels = gqa_query_channels
-        if type(kv_group_size) is not int or kv_group_size not in (1, 2):
-            raise ValueError("kv_group_size must be 1 or 2")
-        if kv_group_size > 1 and gqa_query_channels > 1:
-            # Two different ways to share one kv across two queries; not composable.
-            raise ValueError("kv_group_size and gqa_query_channels are mutually exclusive")
-        if heads % kv_group_size:
-            raise ValueError("heads must be divisible by kv_group_size")
-        self.kv_group_size = kv_group_size
-        self.vocab_head_pairing = str(vocab_head_pairing)
-        if self.vocab_head_pairing not in ('', 'swap_halves'):
-            raise ValueError("vocab_head_pairing must be '' or 'swap_halves'")
-        if self.vocab_head_pairing:
-            if gqa_query_channels != 1 or kv_group_size != 1:
-                raise NotImplementedError(
-                    'vocab_head_pairing requires gqa_query_channels=1 and kv_group_size=1')
-            if heads % 2:
-                raise ValueError('vocab_head_pairing requires an even head count')
-            if pq_vocab_sizes:
-                raise NotImplementedError('vocab_head_pairing cannot be combined with PQ')
-            if vocab_transvq:
-                raise NotImplementedError('vocab_head_pairing cannot be combined with TransVQ')
-        from .pq_vocab import codebook_shape, validate_sizes
-        self.pq_vocab_sizes = (validate_sizes(
-            pq_vocab_sizes, vocab_size=vocab_size, head_dim=head_dim)
-            if pq_vocab_sizes else ())
-        if self.pq_vocab_sizes:
-            if gqa_query_channels != 1 or kv_group_size != 1:
-                raise NotImplementedError('PQ vocab requires gqa_query_channels=1 and kv_group_size=1')
-            if selector_norm:
-                raise NotImplementedError('PQ vocab does not yet support selector_norm')
-            if vocab_transvq:
-                raise NotImplementedError('PQ vocab cannot be combined with TransVQ')
-            if qb_q_strength or qb_k_strength:
-                raise NotImplementedError('PQ vocab does not yet support QB prices')
-        if not (0.0 <= float(hard_tau_grad_scale) <= 1.0):
-            raise ValueError("hard_tau_grad_scale must be in [0,1]")
-        # 1.0 keeps rtau trained by both paths (unchanged); 0.0 detaches it on
-        # hard rows so only the soft relaxation sets it.
-        self.hard_tau_grad_scale = float(hard_tau_grad_scale)
-        from .quantile_balance import QuantileBalance, validate_qb
-        validate_qb(qb_q_strength, qb_k_strength, qb_iterations, qb_update_interval, qb_samples, qb_update_rate)
-        if (qb_q_strength or qb_k_strength) and gqa_query_channels != 1:
-            raise NotImplementedError('QB does not yet support gqa_query_channels > 1')
-        # No new persistent keys or parameters in the default/off configuration.
-        self.qb = (QuantileBalance(heads * gqa_query_channels, vocab_size,
-                   q_strength=qb_q_strength, k_strength=qb_k_strength,
-                   iterations=qb_iterations, update_interval=qb_update_interval,
-                   samples=qb_samples, update_rate=qb_update_rate)
-                   if qb_q_strength or qb_k_strength else None)
         self.width, self.heads = width, heads
-        # kv_group_size=2 gives heads//2 key/value heads, each queried by
-        # kv_group_size distinct query heads (classic GQA head grouping).
-        self.kv_heads = heads // kv_group_size
+        self.kv_heads = heads
         if layer_idx is not None and (isinstance(layer_idx, bool) or not isinstance(layer_idx, int)
                                       or not 0 <= layer_idx < (1 << 63)):
             raise ValueError("layer_idx must be a nonnegative int64 integer or None")
@@ -260,17 +100,8 @@ class DismAttention(nn.Module):
         self.v_conv = CausalShortConv1d(width, self.kv_heads * value_dim, conv_size)
         self.sq_proj = nn.Linear(width, heads * readout_dim, bias=False)
         self.sk_proj = nn.Linear(width, self.kv_heads * readout_dim, bias=False)
-        # Store effective codewords directly: SiLU shapes only initialization,
-        # not the trainable parameter space or its backward Jacobian. Factorised
-        # codebooks use [H, groups, max_group, head_dim/groups].
-        if self.pq_vocab_sizes:
-            q_shape = codebook_shape(heads, self.pq_vocab_sizes, head_dim)
-            k_shape = codebook_shape(self.kv_heads, self.pq_vocab_sizes, head_dim)
-        else:
-            q_tables = heads//2 if self.vocab_head_pairing else heads
-            k_tables = self.kv_heads//2 if self.vocab_head_pairing else self.kv_heads
-            q_shape = (q_tables, vocab_size, head_dim)
-            k_shape = (k_tables, vocab_size, head_dim)
+        q_shape = (heads, vocab_size, head_dim)
+        k_shape = (self.kv_heads, vocab_size, head_dim)
         self.q_vocab = nn.Parameter(F.silu(torch.randn(q_shape, dtype=torch.float32)))
         self.k_vocab = nn.Parameter(F.silu(torch.randn(k_shape, dtype=torch.float32)))
         self.log_sel_tau = nn.Parameter(torch.empty(heads).uniform_(-4, 4))
@@ -285,49 +116,6 @@ class DismAttention(nn.Module):
             # Per-head, data-dependent gate: v_first + (v - v_first) * sigmoid(g).
             self.v_residual_gate = nn.Linear(width, heads)
             self.v_residual_gate._value_residual_gate = True
-        self.vocab_transvq = bool(vocab_transvq)
-        if self.vocab_transvq:
-            # C' = P_phi(C): train only the map, keep the base codebook frozen.
-            self.q_vocab_map = TransVQMap(head_dim, vocab_size, lite=vocab_transvq_lite,
-                                          kind=vocab_transvq_map, rank=vocab_transvq_rank)
-            self.k_vocab_map = TransVQMap(head_dim, vocab_size, lite=vocab_transvq_lite,
-                                          kind=vocab_transvq_map, rank=vocab_transvq_rank)
-            self.q_vocab.requires_grad_(False)
-            self.k_vocab.requires_grad_(False)
-
-        if self.gqa_query_channels == 2:
-            self.gqa_q_conv = CausalShortConv1d(width, heads * head_dim, conv_size)
-            self.gqa_sq_proj = nn.Linear(width, heads * readout_dim, bias=False)
-            self.gqa_mix = nn.Parameter(torch.full((heads, 2), 0.5))
-
-    def set_qb_eval_factor(self, factor):
-        """Attenuate both QB selector biases during evaluation."""
-        if self.qb is not None:
-            self.qb.set_eval_factor(factor)
-
-    @staticmethod
-    def _expand_gqa(tensor, head_axis, factor=2):
-        """Duplicate each shared head in h*factor+g order; backward sums over g."""
-        shape = list(tensor.shape)
-        expanded = shape[:head_axis + 1] + [factor] + shape[head_axis + 1:]
-        shape[head_axis] *= factor
-        return tensor.unsqueeze(head_axis + 1).expand(expanded).reshape(shape).contiguous()
-
-    def _mix_gqa(self, output):
-        # The core has already normalized each channel independently.
-        batch, length = output.shape[:2]
-        return (output.reshape(batch, length, self.heads, 2, self.value_dim)
-                * self.gqa_mix.view(1, 1, self.heads, 2, 1)).sum(3)
-
-    def _rotary_tables(self, length, device, *, offset=0, dtype=torch.float32, dimension=None):
-        """Split-half RoPE tables for the hybrid SWA branch."""
-        dimension = self.readout_dim if dimension is None else dimension
-        frequencies = self.rope_theta ** (-torch.arange(0, dimension, 2,
-                                                        device=device, dtype=dtype) / dimension)
-        positions = torch.arange(offset, offset + length, device=device, dtype=dtype)
-        phase = positions[:, None] * frequencies[None, :]
-        return phase.cos(), phase.sin()
-
     def _combine_cuda(self, output, x, v, cu_seqlens, max_seqlen, v_first=None,
                       linear_q=None, linear_k=None, conv_seq_idx=None):
         return output
@@ -358,8 +146,6 @@ class DismAttention(nn.Module):
         x = hidden_states
         if x.ndim != 3 or x.shape[-1] != self.width:
             raise ValueError("hidden_states must have shape [B,N,width]")
-        if self.qb is not None and not kwargs.get('direction_true', False):
-            raise ValueError('QB requires explicit fixed direction=true')
         last_state = get_layer_cache(self, past_key_values)
         options = {name: kwargs.get(name) for name in
                    ('hard_prob', 'direction', 'hard', 'hard_seed', 'generator', 'vocab_temperature')}
@@ -373,8 +159,6 @@ class DismAttention(nn.Module):
         if self.training and cached:
             raise ValueError("cached DISM inference requires eval()")
         torch_path = cached or (not self.training and (x.device.type != 'cuda' or x.shape[1] % 256 != 0))
-        if self.qb is not None and torch_path:
-            raise NotImplementedError('QB currently supports uncached aligned CUDA execution only')
         if attention_mask is not None:
             if (attention_mask.ndim != 2 or attention_mask.shape[0] != x.shape[0]
                     or attention_mask.shape[1] < x.shape[1]):
@@ -386,10 +170,6 @@ class DismAttention(nn.Module):
                 raise ValueError("attention_mask must contain only 0/1")
         else:
             mask = None
-        if self.gqa_query_channels > 1 and (torch_path or past_key_values is not None):
-            raise NotImplementedError("GQA-DISM G>1 supports only uncached aligned CUDA execution")
-        if self.kv_group_size > 1 and (torch_path or past_key_values is not None):
-            raise NotImplementedError("shared-KV DISM supports only uncached aligned CUDA execution")
         if torch_path:
             if v_first is not None:
                 raise NotImplementedError("value residual is only implemented for packed CUDA training/eval")
@@ -424,8 +204,7 @@ class DismAttention(nn.Module):
         output = self._forward_cuda(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen,
                                     v_first=v_first, conv_seq_idx=kwargs.get('conv_seq_idx'),
                                     share_branch_boundaries=kwargs.get('_share_branch_boundaries', False),
-                                    direction_true=kwargs.get('direction_true', False),
-                                    qb_valid_mask=kwargs.get('qb_valid_mask'), **options)
+                                    direction_true=kwargs.get('direction_true', False), **options)
         if indices is not None:
             from fla.layers.utils import pad_input
             output = pad_input(output.squeeze(0), indices, batch, length)
@@ -434,7 +213,7 @@ class DismAttention(nn.Module):
     def _forward_cuda(self, x, hard_prob=None, *, direction=None, hard=None,
                 hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None,
                 v_first=None, vocab_temperature=None, conv_seq_idx=None, direction_true=False,
-                share_branch_boundaries=False, qb_valid_mask=None):
+                share_branch_boundaries=False):
         """Default: soft training, hard evaluation; explicit flags override sampling.
 
         direction: bool [B,H] (True selects k-to-qemb, the query-LSE path).
@@ -452,9 +231,6 @@ class DismAttention(nn.Module):
         dataloader buffer that can be overwritten between forwards.
         """
         from . import voc_dism, VarlenLayout
-        if self.qb is not None and not direction_true:
-            raise ValueError('QB requires explicit fixed direction=true')
-
         if x.ndim != 3 or x.shape[-1] != self.width:
             raise ValueError("x must have shape [B,N,width]")
         if not x.is_cuda:
@@ -503,11 +279,10 @@ class DismAttention(nn.Module):
                                          device=x.device, dtype=torch.int64, generator=generator)
                 hard = triton_rand_bool((batch, self.heads), probability,
                                        device=x.device, seed=seed)
-        if direction is None and self.qb is not None:
-            direction = torch.ones((batch, self.heads), device=x.device, dtype=torch.bool)
         if direction is None:
-            direction = torch.randint(2, (), device=x.device, generator=generator,
-                                      dtype=torch.int32).bool().expand(batch, self.heads).contiguous()
+            direction = torch.ones(
+                (batch, self.heads), device=x.device, dtype=torch.bool
+            )
 
         def project(convolution, channels, linear=None, heads=None):
             conv_options = ({'seq_idx': conv_seq_idx}
@@ -525,19 +300,10 @@ class DismAttention(nn.Module):
                                   channels).contiguous()
 
         # torch Linear + FLA conv: the DISM and GDN branches share the q/k input
-        # projections when the linear weights are aliased, so compute the tied
-        # projection once and apply each branch's independent depthwise conv on
-        # top. kv_group_size>1 breaks the k tie (different output widths), so the
-        # two branches are decided independently rather than off one flag.
+        # projections, so compute each tied projection once.
         tied = bool(getattr(self, "share_qk_linear", False))
         auxiliary_q_conv = getattr(self, "gdn_q_conv", None)
         auxiliary_k_conv = getattr(self, "gdn_k_conv", None)
-        if auxiliary_q_conv is None:
-            auxiliary_q_conv = getattr(self, "sdn_q_conv", None)
-            auxiliary_k_conv = getattr(self, "sdn_k_conv", None)
-        if auxiliary_q_conv is None:
-            auxiliary_q_conv = getattr(self, "path_q_conv", None)
-            auxiliary_k_conv = getattr(self, "path_k_conv", None)
         share_q = tied and auxiliary_q_conv is not None and self.q_conv.weight is auxiliary_q_conv.weight
         share_k = tied and auxiliary_k_conv is not None and self.k_conv.weight is auxiliary_k_conv.weight
         linear_q = self.q_conv.project_linear(x) if share_q else None
@@ -545,88 +311,20 @@ class DismAttention(nn.Module):
         q = project(self.q_conv, self.head_dim, linear_q)
         k = project(self.k_conv, self.head_dim, linear_k, heads=self.kv_heads)
         v = project(self.v_conv, self.value_dim, heads=self.kv_heads)
-        if self.selector_norm:
-            # The scales are fp32 parameters; cast them so q/k stay bf16 (the
-            # production kernels require it).
-            q = _rms_unit(q).to(q.dtype) * self.q_out_scale.to(q.dtype)
-            k = _rms_unit(k).to(k.dtype) * self.k_out_scale.to(k.dtype)
-        if self.kv_group_size > 1:
-            # One shared key side queried by kv_group_size distinct query heads.
-            k, v = (self._expand_gqa(t, 2, self.kv_group_size) for t in (k, v))
         if self.value_residual and v_first is not None:
             v = value_residual_mix(v, v_first, self.v_residual_gate(x))
         if q.dtype != torch.bfloat16:
             raise ValueError("use CUDA BF16 autocast; the production kernels require BF16")
         sq = self._activate_readout(self.sq_proj(x))
         sk = self._activate_readout(self.sk_proj(x), is_key=True, heads=self.kv_heads)
-        if self.kv_group_size > 1:
-            sk = self._expand_gqa(sk, 2, self.kv_group_size)
         # No runtime codebook activation; interpolation owns the BF16 cast.
-        if self.vocab_transvq:
-            with torch.autocast('cuda', enabled=False):
-                eq = self.q_vocab_map(self.q_vocab.float())
-                ek = self.k_vocab_map(self.k_vocab.float())
-        else:
-            eq, ek = self.q_vocab.float(), self.k_vocab.float()
-        if self.vocab_head_pairing:
-            from .vocab_roles import expand_qk_vocab
-            eq, ek = expand_qk_vocab(
-                eq, ek, self.vocab_head_pairing,
-                heads=self.heads, kv_heads=self.kv_heads)
-        if self.selector_norm:
-            eq = _rms_unit(eq) * self.q_vocab_scale
-            ek = _rms_unit(ek) * self.k_vocab_scale
-        if self.kv_group_size > 1:
-            # The shared key anchors one symbol set for the whole group; the
-            # query side keeps an independent codebook per query head.
-            ek = self._expand_gqa(ek, 0, self.kv_group_size)
+        eq, ek = self.q_vocab.float(), self.k_vocab.float()
         tau = F.softplus(self.log_sel_tau.float()).contiguous()
         if self.tau_scale != 1.0:
             tau = tau * self.tau_scale
-        if self.hard_tau_grad_scale != 1.0 and hard is not None:
-            # Per (row, head) hard flags; rtau is one scalar per head, so the
-            # flags must agree across rows for this to be well defined.
-            row = hard if hard.ndim == 1 else hard[0]
-            if hard.ndim > 1 and not torch.equal(hard, row.expand_as(hard)):
-                raise ValueError("hard_tau_grad_scale requires uniform hard flags across rows")
-            row = row.to(device=tau.device)
-            if bool(row.any()):
-                scaled = tau * self.hard_tau_grad_scale + tau.detach() * (1.0 - self.hard_tau_grad_scale)
-                tau = torch.where(row, scaled, tau)
         dism_v = v
-        if self.gqa_query_channels == 2:
-            q_extra = project(self.gqa_q_conv, self.head_dim)
-            sq_extra = self._activate_readout(self.gqa_sq_proj(x))
-            q = torch.cat((q.unsqueeze(3), q_extra.unsqueeze(3)), dim=3).flatten(2, 3)
-            sq = torch.cat((sq.unsqueeze(3), sq_extra.unsqueeze(3)), dim=3).flatten(2, 3)
-            k, sk, dism_v = (self._expand_gqa(t, 2) for t in (k, sk, v))
-            # Optional shared-head vocabularies arrive as [V,D].
-            eq = eq.unsqueeze(0).expand(self.heads, -1, -1) if eq.ndim == 2 else eq
-            ek = ek.unsqueeze(0).expand(self.heads, -1, -1) if ek.ndim == 2 else ek
-            eq, ek, tau = (self._expand_gqa(t, 0) for t in (eq, ek, tau))
-            hard, direction = (self._expand_gqa(t, 1) for t in (hard, direction))
-        from .reinforce import enabled, sampled_voc
         beta = self.vocab_temperature if vocab_temperature is None else vocab_temperature
-        if self.pq_vocab_sizes:
-            from .pq_voc_forward import pq_voc_forward
-            if not compiling and layout is not None:
-                compiled_layout = layout.table.flatten()
-            output = pq_voc_forward(
-                q, k, sq, sk, dism_v, eq, ek, tau, beta, direction, hard,
-                cu_seqlens, compiled_layout, sizes=self.pq_vocab_sizes)
-        elif self.qb is not None:
-            if enabled():
-                raise NotImplementedError('QB cannot be combined with categorical REINFORCE')
-            if not compiling and layout is not None:
-                compiled_layout = layout.table.flatten()
-            output = self.qb(q, k, sq, sk, dism_v, eq, ek, tau, beta, direction, hard,
-                             cu_seqlens, compiled_layout, direction_true=direction_true, valid_mask=qb_valid_mask)
-        elif enabled():
-            if self.gqa_query_channels > 1:
-                raise NotImplementedError("GQA-DISM G>1 does not support independent categorical K sampling")
-            output = sampled_voc(q, k, sq, sk, dism_v, eq, ek, tau, direction=direction,
-                                 hard=hard, layout=layout, beta=beta)
-        elif compiling or direction_true:
+        if compiling or direction_true:
             from .compiler import voc_forward
             if not compiling and layout is not None:
                 compiled_layout = layout.table.flatten()
@@ -635,8 +333,6 @@ class DismAttention(nn.Module):
         else:
             output = voc_dism(q, k, sq, sk, dism_v, eq, ek, tau,
                               direction=direction, hard=hard, layout=layout, beta=beta)
-        if self.gqa_query_channels == 2:
-            output = self._mix_gqa(output)
         output = self._combine_cuda(output, x, v,
                                     branch_cu_seqlens if share_branch_boundaries else cu_seqlens,
                                     max_seqlen, v_first=v_first,

@@ -1,115 +1,74 @@
-# Full DISM causal language model
+# Selected DISM model
 
-Following `flame/custom_models/sba`, the package exports `DismConfig`,
-`DismModel`, and `DismForCausalLM`, with Transformers AutoConfig/AutoModel/
-AutoModelForCausalLM registration (`model_type="dism_v3"`). All implementation
-lives here; the reference SBA tree and installed packages are unchanged.
+This branch keeps only the selected DISM-GDN architecture used by the valres
+baseline and its scaling variants.
 
-## Architecture and defaults
+## Architecture
 
-Token embedding -> PreNorm decoder blocks -> final RMSNorm -> untied LM head.
-Each block is residual hybrid DISM+SWA attention, then residual SwiGLU MLP.
-Both branch inputs use RMSNorm. Attention retains per-head output gated RMSNorm.
-MLP is standard PyTorch `down_proj(SiLU(gate_proj(x))*up_proj(x))`.
+- Post-norm `DismBlock` with RMSNorm, mixer branch and SwiGLU MLP.
+- nanochat pretraining uses the first half as pure GDN and the rear half as
+  DISM+GDN.
+- DISM and GDN share the q/k input linear projections inside a hybrid layer.
+- Value residual is enabled and initialized with gate bias 2.0.
+- Q/K codebooks are independent per head. The selected vocabulary is dense,
+  one q table and one k table per head.
+- Soft training uses the vocabulary-temperature relaxation. Hard evaluation
+  and deployed inference use integer argmax symbols.
+- Direction is fixed true. Hard/soft sampling is one flag per packed training
+  row and head.
 
-Defaults are width256,12 layers,4 heads,D=DV64,R32,QK vocab512,SWA128,external
-vocab50257. `attention_type="hybrid"` is default; `"dism"` omits SWA.
-`intermediate_size` is configurable; if omitted, use the SBA/FLA parameter-budget
-rule `ceil_to_256(hidden_size*hidden_ratio*2/3)`, hidden_ratio4 (default FFN768).
-These are configurable construction defaults, not a claim of any fixed parameter
-budget or a new approved training run. Input/output embedding tying is rejected.
+## Retained attention types
 
-Linear, fused projection and embedding weights use normal std0.02 by default.
-Keep the attention-specific SiLU-Gaussian effective vocabularies, softplus-tau
-initialization and shortconv coefficient initialization; HF post_init must not
-replace them with generic Gaussian codebooks. RMS weights start at one.
+| Type | Class | Use |
+|---|---|---|
+| `dism` | `DismAttention` | DISM-only diagnostics and operator tests |
+| `hybrid_gdn` | `DismGdnAttention` | selected rear-half pretraining layer |
+| `pure_gdn` | `PureGdnAttention` | selected first-half pretraining layer |
 
-## Training
+All training tensors use BNHD vectors and BHN labels/LSE. Training lengths and
+packed boundaries must be multiples of 256. The fixed and packed operators use
+the same CUDA core; no padding or Python fallback is inserted for misaligned
+training inputs.
 
-```python
-import torch
-from flash_dism import DismConfig, DismForCausalLM
+## Forward and backward
 
-model = DismForCausalLM(DismConfig()).cuda()  # FP32 master parameters
-optimizer = torch.optim.AdamW(model.optimizer_param_groups(0.01), lr=1e-3)
-ids = torch.randint(0, model.config.vocab_size, (2, 256), device="cuda")
-with torch.autocast("cuda", dtype=torch.bfloat16):
-    result = model(input_ids=ids, labels=ids, hard_prob=0.0, hard_seed=123)
-result.loss.backward()
+The ordinary CUDA core evaluates the soft recurrence. Hard rows additionally
+run the integer-label forward. During training, backward may use either:
+
+- the default quadratic hard recomputation path;
+- an explicitly enabled asynchronous planner/event path.
+
+`DISM_HARD_PLANNER` defaults to `0` (quadratic). Set it to `1` to opt into the
+planner. `DISM_HARD_BACKWARD=ready|event|quadratic` selects the planner
+consumer policy. Both routes must produce the same gradients.
+
+## Decoding
+
+Hard inference lives under `flash_dism.inference` and includes arbitrary-length
+prefill, a complete-history cache prime, CPU/GPU planner backends and
+single-token append. `nanochat.hard_inference` provides the GDN-hybrid
+reference integration.
+
+## Removed variants
+
+This branch does not support DISM+SWA, SDN/PaTH, GQA-DISM, shared or paired
+codebooks, TransVQ, product-quantized vocabularies, quantile balancing,
+selector normalization, per-depth optimizer groups, alternative layer layouts,
+or categorical REINFORCE/dual-forward training.
+
+## Legacy migration
+
+The runtime intentionally rejects historical `DismConfig` metadata. A separate
+offline migration must produce a clean config before building the model.
+
+The selected runtime stores convolution filters under
+`conv.weight` in `[channel, 1, tap]` order. Historical fused checkpoints store
+`conv_weight` in `[lag, channel]` order. Migration must map
+
+```text
+conv_weight -> conv.weight
+[lag, channel] -> flip(lag).T[:, None, :]
 ```
 
-CUDA training and uncached aligned evaluation now use complete hard/soft
-dispatch automatically. Soft rows use CUDA forward/backward; hard rows use
-integer CUDA forward and asynchronous CPU-planned Triton event backward.
-No-grad evaluation does not plan a backward. Cached Torch inference is
-unchanged. See [the module contract](MODULE.md) for compact sequence flags.
-
-Pass the optimizer-step hard_prob schedule externally. One hard_seed is forwarded
-to all layers, which salt it by their layer_idx. Change the base seed per step if
-new masks are desired. Explicit direction/hard, generator, cu_seqlens and
-max_seqlen are forwarded to attention. Labels are unshifted token IDs: the LM
-shifts exactly once. Final tokens and packed document transitions are ignored;
-padding transitions are also excluded. Caller-supplied -100 labels are preserved.
-
-CUDA loss uses the local fused **linear + cross entropy** kernel, BF16 hidden/head
-operands and FP32 mean loss, with configurable `ce_softcap` (default30), optional
-`ce_chunk_size`, `ignore_index=-100`. Packed loss is averaged over valid tokens,
-not equally weighted document means. The existing CE kernel's varlen mode uses
-document means, so the model deliberately passes boundary-masked labels through
-its token-mean path. All-ignored labels return zero loss.
-
-With labels and fused CE, logits default to None. `return_logits=True` explicitly
-materializes them too. Without labels, logits are always computed by default;
-`logits_to_keep=N` selects the final N positions (0 means all). With labels,
-logits_to_keep must be0. Returned logits include the same softcap as the loss.
-`fuse_cross_entropy=False` or CPU evaluation uses Torch CE for verification.
-No dense attention scores are materialized by the CUDA training path.
-
-`optimizer_param_groups(wd)` excludes all biases/1D parameters, vocabularies,
-tau and QK RMS weights from decay. Names back up Python no-decay markers so HF
-checkpoint loading cannot accidentally change this grouping.
-
-`gradient_checkpointing_enable()` uses non-reentrant recomputation. Missing
-hard seeds and directions are sampled outside the checkpoint closure, then
-replayed; this also handles an explicit generator without resampling in backward.
-Original attention/CE gradient tolerances are not changed.
-
-## Varlen, cache and serialization
-
-Training accepts packed `[1,T]` IDs with int32 cu_seqlens; all document boundaries
-must be256-aligned. Empty documents inside a nonempty pack are allowed. Padding
-masks are supported where each unpadded document has aligned length. Packed
-RoPE and all convolution/attention state reset at document boundaries.
-
-Eval defaults to use_cache=True and constructs DismCache when absent; that means
-prefill/decoding uses the current Torch reference, not the aligned CUDA path.
-For fast aligned evaluation without caching (including packed input), pass
-use_cache=False. Training rejects decoding caches. Return dictionaries follow
-BaseModelOutputWithPast/CausalLMOutputWithPast, with optional hidden states;
-return_dict=False returns tuples. Attention matrices are not returned.
-
-```python
-model.eval()
-tokens = model.generate(ids[:1, :16], max_new_tokens=8, do_sample=True,
-                        temperature=0.8, top_p=0.9)
-model.save_pretrained("checkpoint")
-# import flash_dism before AutoModelForCausalLM.from_pretrained("checkpoint")
-```
-
-Generation uses the local FLA-compatible DismCache, not Transformers DynamicCache.
-Each continuation supplies only new tokens, and each layer keeps its own cached
-direction. Same inherited restrictions apply: equal-length, unpadded decoding
-only; packed caches, unequal-length padded generation and arbitrary position_ids
-are not supported. Cache model weights/theta/window must stay fixed. No SAM or
-subquadratic decoding is claimed. The model-level API is tested with the locally
-installed Transformers/FLA versions; static/quantized cache modes are rejected.
-
-## Verification
-
-`PYTHONPATH=python:.. python -m pytest -q tests/test_modeling.py`
-
-Tests cover default hybrid construction, untied weights, packed label boundaries,
-CPU dense-vs-cached logits, generate, HF/Auto round trip, parameter no-decay,
-fixed/varlen CUDA fused loss and all-parameter backward, all-ignored loss, and
-checkpointed-vs-normal loss/gradient replay. These are smoke/correctness tests,
-not a training-convergence or throughput result.
+and apply the same permutation to matching AdamW moment tensors. It must not
+mutate the source checkpoint in place.

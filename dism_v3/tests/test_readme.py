@@ -10,7 +10,7 @@ import torch
 def test_readme_python_examples():
     text = (Path(__file__).parents[1] / 'README.md').read_text()
     blocks = re.findall(r'```python\n(.*?)\n```', text, flags=re.DOTALL)
-    assert len(blocks) == 4
+    assert len(blocks) == 5
     namespace = {'__name__': '__readme__'}
     for block in blocks:
         exec(compile(block, 'README.md', 'exec'), namespace)

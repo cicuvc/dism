@@ -10,11 +10,8 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 
 from .configuration_dism import DismConfig
 from .module import DismAttention
-from .hybrid import DismSwaAttention
 from .hybrid_gdn import DismGdnAttention
 from .pure_gdn import PureGdnAttention
-from .sliding_delta import DismSlidingDeltaAttention, PureSlidingDeltaAttention
-from .sliding_path import DismSlidingPathAttention, PureSlidingPathAttention
 from .cache import DismCache
 from .kernels.conv1d import CausalShortConv1d
 from .kernels.linear_rmsnorm_rope import FusedLinearRMSNormRoPE
@@ -37,12 +34,11 @@ class DismBlock(nn.Module):
         self.attn_norm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
         self.mlp_norm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
         self.post_norm = getattr(config, 'post_norm', False)
-        attention = {'hybrid': DismSwaAttention, 'dism': DismAttention,
-                     'hybrid_gdn': DismGdnAttention, 'pure_gdn': PureGdnAttention,
-                     'hybrid_sdn': DismSlidingDeltaAttention,
-                     'pure_sdn': PureSlidingDeltaAttention,
-                     'hybrid_path': DismSlidingPathAttention,
-                     'pure_path': PureSlidingPathAttention}[config.attention_type]
+        attention = {
+            'dism': DismAttention,
+            'hybrid_gdn': DismGdnAttention,
+            'pure_gdn': PureGdnAttention,
+        }[config.attention_type]
         options = dict(head_dim=config.head_dim, value_dim=config.value_dim,
                        readout_dim=config.readout_dim, vocab_size=config.qk_vocab_size,
                        conv_size=config.conv_size, rope_theta=config.rope_theta,
@@ -51,31 +47,7 @@ class DismBlock(nn.Module):
                        soft_k_l2_norm=config.soft_k_l2_norm,
                        value_residual=getattr(config, 'value_residual', False),
                        vocab_temperature=getattr(config, 'vocab_temperature', 1.0),
-                       gqa_query_channels=getattr(config, "gqa_query_channels", 1),
-                       kv_group_size=getattr(config, "kv_group_size", 1),
-                       hard_tau_grad_scale=getattr(config, "hard_tau_grad_scale", 1.0),
-                       selector_norm=getattr(config, "selector_norm", False),
-                       selector_norm_scale_init=getattr(config, "selector_norm_scale_init", 0.2),
-                        qb_q_strength=getattr(config, "qb_q_strength", 0.0),
-                        qb_k_strength=getattr(config, "qb_k_strength", 0.0),
-                        qb_iterations=getattr(config, "qb_iterations", 4),
-                        qb_update_interval=getattr(config, "qb_update_interval", 16),
-                        qb_samples=getattr(config, "qb_samples", 2048),
-                        qb_update_rate=getattr(config, "qb_update_rate", 0.1),
-                       vocab_transvq=getattr(config, 'vocab_transvq', False),
-                       vocab_transvq_lite=getattr(config, 'vocab_transvq_lite', False),
-                       vocab_transvq_map=getattr(config, 'vocab_transvq_map', 'linear_attn'),
-                       vocab_transvq_rank=getattr(config, 'vocab_transvq_rank', 4),
-                       pq_vocab_sizes=getattr(config, 'pq_vocab_sizes', ()),
-                       vocab_head_pairing=getattr(config, 'vocab_head_pairing', ''),
-                       gdn_b_bias=getattr(config, 'gdn_b_bias', False))
-        if config.attention_type in ('hybrid', 'hybrid_sdn', 'pure_sdn',
-                                     'hybrid_path', 'pure_path'):
-            options['window_size'] = config.window_size
-        if config.attention_type in ('hybrid_sdn', 'pure_sdn'):
-            options['sliding_delta_chunk_size'] = config.sliding_delta_chunk_size
-        if config.attention_type in ('hybrid_path', 'pure_path'):
-            options['sliding_path_chunk_size'] = config.sliding_delta_chunk_size
+                       )
         self.attn = attention(config.hidden_size, config.num_heads, **options)
         self.mlp = DismMLP(config)
 
@@ -168,9 +140,6 @@ class DismModel(DismPreTrainedModel):
                 states += (hidden,)
             if checkpointing:
                 replay = dict(options)
-                if replay.get('direction') is None:
-                    replay['direction'] = torch.randint(2, (), device=hidden.device,
-                        generator=options.get('generator')).bool().expand(hidden.shape[0], self.config.num_heads).contiguous()
                 # Bind layer/options now: backward must not capture the loop's last layer.
                 def run(value, current=layer, arguments=replay):
                     return current(value, **arguments)

@@ -13,6 +13,9 @@ from test_hard_training import inputs
 
 
 def test_handle_storage_ownership():
+    shutdown_hard_planners()
+    gc.collect()
+    torch.cuda.synchronize()
     class Payload:
         pass
     p = Payload()

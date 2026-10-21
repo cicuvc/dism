@@ -35,7 +35,6 @@ class Model(torch.nn.Module):
         self.config = SimpleNamespace(sequence_len=256, softcap=0.)
         self.eval_hard = False
         self.register_buffer('rng_counter', torch.tensor(37))
-        self.register_buffer('qb_price', torch.arange(4.))
         self.failure, self.calls = failure, 0
 
     def forward(self, x, cu_seqlens):
@@ -87,7 +86,7 @@ def test_state_and_failure_restoration(data, failure):
         assert result['status'] == 'ok'
         assert result['metrics']['niah/present_nll'] == pytest.approx(math.log(128))
         assert result['metrics']['niah/gain'] == 0
-        assert model.calls == 2
+        assert model.calls == 3
         assert versions == [b._version for b in model.buffers()]
     assert_rng(rng)
     for name, tensor in model.state_dict().items():
@@ -167,21 +166,24 @@ def test_live_loader_and_prefetched_batch_untouched(data, tmp_path):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
-def test_real_dism_qb_state(data):
-    from nanochat.models import build_model
-    from test_qb_training import spec
-    model = build_model(spec()).cuda().train()
+def test_real_dism_state(data):
+    import json
+    from pathlib import Path
+    from nanochat.models import ModelSpec, build_model
+    spec = ModelSpec.from_dict(json.loads(
+        (Path(__file__).parents[1] / 'configs/sequence_true_72m_valres.json').read_text()
+    ))
+    model = build_model(spec).cuda().train()
     model.init_weights()
     model.set_training_step(1000)
     model.rng_counter.fill_(37)
-    model.layers[1].attn.qb.q_price.fill_(.1)
     before = copy.deepcopy(model.state_dict())
     versions = [b._version for b in model.buffers()]
     rng = rng_state()
     result = ShortNIAH(data, contexts=[512], depths=[.5], trials=1).evaluate(model, Tokenizer())
     assert result['status'] == 'ok'
     assert_rng(rng)
-    assert model.training and model.config.sequence_len == 256
+    assert model.training and model.config.sequence_len == 2048
     assert versions == [b._version for b in model.buffers()]
     for name, tensor in model.state_dict().items():
         assert torch.equal(tensor, before[name]), name

@@ -1,6 +1,6 @@
 """BNHD adapter for plugging the hard-only core into model decoding.
 
-This adapter does not compute model projections, convolution state, GDN/SWA, or
+This adapter does not compute model projections, convolution state, GDN, or
 vocabulary selection. Feed their existing hard labels and readout/value vectors.
 It deliberately does not silently substitute this cache for FLA's beam cache.
 """
@@ -11,8 +11,6 @@ from .runtime import NativeDecodeCache
 class HardDismDecoder:
     def __init__(self, batch, heads, readout_dim, value_dim, capacity, tau, *,
                  device='cuda', cache_dtype=torch.bfloat16, planner_backend='cpu', **tuning):
-        if tuning.get('gqa_query_channels', 1) != 1:
-            raise NotImplementedError('GQA-DISM G>1 is not supported by SAM inference')
         self.batch,self.heads,self.r,self.dv=batch,heads,readout_dim,value_dim
         self.capacity,self.position=capacity,0
         self.dtype=cache_dtype

@@ -113,7 +113,8 @@ def dism_decode_ref(q_vec, k_vec, sq_vec, sk_vec, q_lse, k_lse,
 
 @torch.no_grad()
 def dism_wrapper_decode(q,k,sq_vec,sk_vec,q_weight,k_weight,v,rtau,*,
-                        cache=None,direction=None,hard=None,hard_prob=.5,generator=None):
+                        cache=None,direction=None,hard=None,hard_prob=.5,generator=None,
+                        vocab_temperature=1.0):
     """Cached counterpart of dism_wrapper, including Torch vocabulary interpolation.
 
     Tables are shared [V,D] or per-head [H,V,D]. Activations belong to
@@ -130,11 +131,13 @@ def dism_wrapper_decode(q,k,sq_vec,sk_vec,q_weight,k_weight,v,rtau,*,
         raise ValueError('tables must be equal shared [V,D] or per-head [H,V,D]')
     if not 0<=hard_prob<=1:
         raise ValueError('hard_prob must be in [0,1]')
+    if vocab_temperature <= 0:
+        raise ValueError('vocab_temperature must be positive')
     q,k,eq,ek=map(_float,(q,k,q_weight,k_weight))
     if eq.ndim==2:
         eq,ek=eq.expand(h,-1,-1),ek.expand(h,-1,-1)
-    qs=torch.einsum('bnhd,hvd->bnhv',q,eq)
-    ks=torch.einsum('bnhd,hvd->bnhv',k,ek)
+    qs=vocab_temperature*torch.einsum('bnhd,hvd->bnhv',q,eq)
+    ks=vocab_temperature*torch.einsum('bnhd,hvd->bnhv',k,ek)
     lq,lk=qs.logsumexp(-1),ks.logsumexp(-1)
     iq,ik=qs.argmax(-1).transpose(1,2),ks.argmax(-1).transpose(1,2)
     qfk=torch.einsum('bnhv,hvd->bnhd',ks.softmax(-1),eq)

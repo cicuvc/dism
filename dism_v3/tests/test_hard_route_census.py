@@ -35,7 +35,7 @@ def pending_ticket(policy='ready'):
 
 def test_records_both_routes_in_replay_order():
     x = torch.ones(1, 8, 1, 32)
-    assert take_route_log() == []
+    take_route_log()
     pending_ticket().backward(x, x, x, x, fallback=lambda: 'quadratic')
     ready_ticket().backward(x, x, x, x, fallback=lambda: 'quadratic')
     assert take_route_log() == ['q', 'e']

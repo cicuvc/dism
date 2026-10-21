@@ -29,7 +29,7 @@ def torch_voc(q,k,sq,sk,v,eq,ek,tau,direction,hard):
 @pytest.mark.strict_gradient
 def test_triton_embedding_end_to_end(mode,direction_value):
     torch.manual_seed(273)
-    b,n,h=1,65,2
+    b,n,h=1,256,2
     q,k=[(torch.randn(b,n,h,64,device='cuda')*.2).bfloat16() for _ in range(2)]
     sq,sk=[torch.nn.functional.silu(torch.randn(b,n,h,32,device='cuda')*.5).bfloat16()
            for _ in range(2)]
@@ -37,7 +37,7 @@ def test_triton_embedding_end_to_end(mode,direction_value):
     eq,ek=[torch.randn(h,512,64,device='cuda')*.2 for _ in range(2)]
     tau=torch.full((h,),2.,device='cuda')
     direction=torch.full((b,h),direction_value,device='cuda',dtype=torch.bool)
-    hard=torch.rand(b,h,n,device='cuda')<{'soft':0.,'mixed':.5,'hard':1.}[mode]
+    hard=torch.rand(b,h,device='cuda')<{'soft':0.,'mixed':.5,'hard':1.}[mode]
     args=[x.requires_grad_() for x in (q,k,sq,sk,v,eq,ek,tau)]
     do=torch.randn_like(v)
     actual=voc_dism(*args,direction=direction,hard=hard,ctas=1)
