@@ -201,7 +201,7 @@ def main():
     meta_path = args.checkpoint_dir/f'meta_{args.step:06d}.json'
     meta = json.loads(meta_path.read_text())
     spec = model_spec_from_metadata(meta)
-    if spec.config['hard_granularity'] != 'sequence':
+    if spec.config.get('hard_granularity', 'sequence') != 'sequence':
         raise ValueError('only sequence-level checkpoints supported')
     model_state = torch.load(args.checkpoint_dir/f'model_{args.step:06d}.pt',
                              map_location='cpu', weights_only=True)
@@ -336,8 +336,10 @@ def main():
             cursor += 1
             t = begin('forward')
             with mark(f'microbatch_{micro}/forward'):
+                if hard_mode is not None:
+                    model.hard_probability.fill_(float(hard_mode))
                 options = {'loss_reduction': getattr(model, 'loss_sum_reduction', 'document_sum')} if document_step is not None else {}
-                result = fn(x,y,cu_seqlens=bounds,segment_ids=segments,hard_mode=hard_mode, **options)
+                result = fn(x,y,cu_seqlens=bounds,segment_ids=segments, **options)
                 if document_step is not None:
                     loss, count = result
                     document_step.add(loss, count)
@@ -398,7 +400,7 @@ def main():
         args.output.write_text(json.dumps(report,indent=2)+'\n')
     restore()
     print(f"Loaded {report['parameters']:,} params; {tokens} tokens x {accum}, "
-          f"{args.batches} real batches, direction={spec.config['direction_policy']}; warming up",flush=True)
+          f"{args.batches} real batches, direction={spec.config.get('direction_policy', 'true')}; warming up",flush=True)
     for i in range(args.warmup):
         started=time.perf_counter()
         value,norm,_,_=step()
