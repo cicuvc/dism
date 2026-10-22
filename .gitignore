@@ -22,3 +22,5 @@ runs/
 base_checkpoints/
 *.pt
 *.parquet
+
+paper
