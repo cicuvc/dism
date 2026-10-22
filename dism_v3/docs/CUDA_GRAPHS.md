@@ -74,9 +74,14 @@ optimizers replacing their storage require recapture.
 
 Planner-enabled capture remains explicitly unsupported. Async submission,
 completion, per-invocation handle ownership and event/quadratic routing cannot
-be frozen during capture. Future support must stage each invocation's plan
-outside replay and define backward dispatch/lifetimes. The packed metadata
-interface is independent of that planner and can be reused.
+be frozen during capture. The proposed [planner graph protocol and staged
+implementation plan](PLANNER_CUDA_GRAPHS.md) keeps full microbatch replay:
+captured D2H/external-event notification feeds a host coordinator, which uploads
+each replay's plan and publishes a generation flag. A device sampling node
+selects one hard-backward path for that invocation. Publication, lifetimes and
+dynamic task consumers still require implementation and validation; the packed
+metadata interface can be reused. This design does not change current support
+or enable the planner by default.
 
 ## Validation
 
