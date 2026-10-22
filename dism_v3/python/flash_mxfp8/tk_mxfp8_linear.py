@@ -113,10 +113,13 @@ class _BackwardState:
 class _MXFP8LinearFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, weight, module):
+        shape = x.shape
+        x = x.reshape(-1, x.shape[-1])
         module._sync_if_needed()
         state = module._forward_state(x)
         out = state(x, module._weight_fp8, module._weight_scale)
         ctx.module = module
+        ctx.input_shape = shape
         ctx.save_for_backward(
             x,
             weight,
@@ -125,14 +128,14 @@ class _MXFP8LinearFunction(torch.autograd.Function):
             state.quantize.column_fp8,
             state.quantize.column_scale,
         )
-        return out
+        return out.view(*shape[:-1], out.shape[-1])
 
     @staticmethod
     def backward(ctx, dy):
         x, weight, weight_fp8, weight_scale, x_column, x_column_scale = (
             ctx.saved_tensors
         )
-        dy = dy.contiguous()
+        dy = dy.reshape(-1, dy.shape[-1]).contiguous()
         if dy.dtype != torch.bfloat16:
             dy = dy.to(torch.bfloat16)
         state = ctx.module._backward_state(
@@ -149,7 +152,7 @@ class _MXFP8LinearFunction(torch.autograd.Function):
             weight_fp8,
             weight_scale,
         )
-        return dx, dw.float(), None
+        return dx.reshape(ctx.input_shape), dw.float(), None
 
 
 class MXFP8Linear(nn.Module):
@@ -296,14 +299,14 @@ class MXFP8Linear(nn.Module):
 
     @torch.compiler.disable
     def forward(self, x):
-        if x.ndim != 2 or x.shape[1] != self.in_features:
+        if x.ndim < 2 or x.shape[-1] != self.in_features:
             raise ValueError(
-                f"expected input [M,{self.in_features}], got {tuple(x.shape)}"
+                f"expected input [...,{self.in_features}], got {tuple(x.shape)}"
             )
         if x.dtype != torch.bfloat16 or not x.is_cuda:
             raise TypeError("expected CUDA BF16 input")
         return _MXFP8LinearFunction.apply(
-            x.contiguous(), self.weight, self
+            x, self.weight, self
         )
 
     def extra_repr(self):

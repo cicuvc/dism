@@ -100,6 +100,44 @@ def test_mxfp8_forward_backward_and_fused_optimizer():
     )
 
 
+def test_fused_rmsnorm_outputs_bf16_and_dual_mxfp8():
+    from flash_mxfp8 import FusedAddRMSNormMXFP8
+    from flash_mxfp8.tk_silu_bwd import SiluBwdQuantizeLibrary
+
+    m, k = 137, 192
+    torch.manual_seed(19)
+    x = torch.randn((m, k), device="cuda", dtype=torch.bfloat16, requires_grad=True)
+    residual = torch.randn_like(x, requires_grad=True)
+    factor = torch.randn(k, device="cuda", dtype=torch.float32, requires_grad=True)
+    factor.data.mul_(0.05).add_(1.0)
+
+    fused = FusedAddRMSNormMXFP8(k)
+    y, row, row_scale, column, column_scale = fused(x, residual, factor)
+    torch.cuda.synchronize()
+
+    summed = x.detach().float() + residual.detach().float()
+    reference = (
+        summed
+        * torch.rsqrt(summed.square().mean(1) + 1e-6)[:, None]
+        * factor.detach()[None, :]
+    ).bfloat16()
+    expected = SiluBwdQuantizeLibrary().plan_direct(reference)()
+    # The fused kernel evaluates the FP32 mean in a different reduction order.
+    torch.testing.assert_close(y, reference, rtol=0.01, atol=0.008)
+    torch.testing.assert_close(
+        row.view(torch.uint8), expected[0].view(torch.uint8), rtol=0, atol=0
+    )
+    torch.testing.assert_close(row_scale, expected[1], rtol=0, atol=0)
+    torch.testing.assert_close(
+        column.view(torch.uint8), expected[2].view(torch.uint8), rtol=0, atol=0
+    )
+    torch.testing.assert_close(column_scale, expected[3], rtol=0, atol=0)
+
+    y.sum().backward()
+    assert x.grad is not None and residual.grad is not None and factor.grad is not None
+    assert torch.equal(x.grad, residual.grad)
+
+
 def test_standard_adamw_refreshes_fp8_snapshots():
     from flash_mxfp8.core import quantize_weight
 

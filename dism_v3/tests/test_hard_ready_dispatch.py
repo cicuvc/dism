@@ -50,6 +50,18 @@ def test_fallback_oracle(packed,mode):
     for name,g in zip(('sq_vec','sk_vec','v','rtau'),grads): assert_gradient(got[name],g,name)
 
 
+def test_packed_fallback_does_not_stack_documents(monkeypatch):
+    xs,layout=inputs(True,'hard','repeat')
+    do=torch.randn_like(xs[4])*.2
+
+    def fail_stack(*args, **kwargs):
+        raise AssertionError("packed fallback must consume the document task table")
+
+    monkeypatch.setattr(torch, "stack", fail_stack)
+    got=backward_hard_recompute(*xs[2:5],do,xs[7],xs[8],xs[10],xs[11],layout=layout)
+    assert all(torch.isfinite(value).all() for value in got.values())
+
+
 @pytest.mark.parametrize('packed',[False,True])
 def test_delayed_planner_no_wait_and_retained_graph(packed):
     xs,layout=inputs(packed,'mixed')

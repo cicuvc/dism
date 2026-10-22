@@ -18,6 +18,16 @@ def main():
     parser.add_argument("--tokens-per-microbatch", type=int, default=32768)
     parser.add_argument("--microbatches", type=int, default=4)
     parser.add_argument("--warmup", type=int, default=2)
+    parser.add_argument(
+        "--cuda-only",
+        action="store_true",
+        help="omit CPU activities to reduce profiler-induced GPU gaps",
+    )
+    parser.add_argument(
+        "--stack",
+        action="store_true",
+        help="record Python stacks in the CPU/CUDA trace",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.output.exists() or not args.output.resolve().is_relative_to(
@@ -71,12 +81,17 @@ def main():
         step()
     torch.cuda.synchronize()
     with torch.profiler.profile(
-        activities=[
-            torch.profiler.ProfilerActivity.CPU,
-            torch.profiler.ProfilerActivity.CUDA,
-        ],
+        activities=(
+            [torch.profiler.ProfilerActivity.CUDA]
+            if args.cuda_only
+            else [
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ]
+        ),
         record_shapes=True,
         profile_memory=False,
+        with_stack=args.stack,
     ) as profile:
         step()
     torch.cuda.synchronize()

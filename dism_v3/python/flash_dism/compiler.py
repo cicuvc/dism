@@ -292,8 +292,8 @@ def voc_forward(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundaries,
     if direction_true:
         if isinstance(beta, torch.Tensor):
             raise ValueError('fixed true direction requires a host scalar beta')
-        # Explicit semantic override, never a GPU all()/item() dispatch decision.
-        direction = torch.ones_like(direction)
+        # Explicit semantic override; direction_true makes the tensor contents
+        # irrelevant, so callers can provide an owned cached buffer.
         return entry(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward,True)
     return entry(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward)
 

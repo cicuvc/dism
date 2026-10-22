@@ -176,7 +176,8 @@ class DismAttention(nn.Module):
             raise ValueError("hidden_states must have shape [B,N,width]")
         last_state = get_layer_cache(self, past_key_values)
         options = {name: kwargs.get(name) for name in
-                   ('hard_prob', 'direction', 'hard', 'hard_seed', 'generator', 'vocab_temperature')}
+                   ('hard_prob', 'direction', 'hard', 'hard_seed', 'generator',
+                    'vocab_temperature', 'tau_override')}
         v_first = kwargs.get('v_first')
         probability = options['hard_prob']
         probability = (0.0 if self.training else 1.0) if probability is None else float(probability)
@@ -241,7 +242,7 @@ class DismAttention(nn.Module):
     def _forward_cuda(self, x, hard_prob=None, *, direction=None, hard=None,
                 hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None,
                 v_first=None, vocab_temperature=None, conv_seq_idx=None, direction_true=False,
-                share_branch_boundaries=False):
+                share_branch_boundaries=False, tau_override=None):
         """Default: soft training, hard evaluation; explicit flags override sampling.
 
         direction: bool [B,H] (True selects k-to-qemb, the query-LSE path).
@@ -344,17 +345,17 @@ class DismAttention(nn.Module):
         if q.dtype != torch.bfloat16:
             raise ValueError("use CUDA BF16 autocast; the production kernels require BF16")
         readout_input = x.to(torch.bfloat16) if self.mxfp8_projections else x
-        readout_q = self.sq_proj(readout_input.reshape(-1, self.width)).reshape(
-            batch, length, self.heads * self.readout_dim
-        )
-        readout_k = self.sk_proj(readout_input.reshape(-1, self.width)).reshape(
-            batch, length, self.kv_heads * self.readout_dim
-        )
+        readout_q = self.sq_proj(readout_input)
+        readout_k = self.sk_proj(readout_input)
         sq = self._activate_readout(readout_q)
         sk = self._activate_readout(readout_k, is_key=True, heads=self.kv_heads)
         # No runtime codebook activation; interpolation owns the BF16 cast.
         eq, ek = self.q_vocab.float(), self.k_vocab.float()
-        tau = F.softplus(self.log_sel_tau.float()).contiguous()
+        tau = (
+            F.softplus(self.log_sel_tau.float()).contiguous()
+            if tau_override is None
+            else tau_override.contiguous()
+        )
         if self.tau_scale != 1.0:
             tau = tau * self.tau_scale
         dism_v = v
@@ -372,7 +373,9 @@ class DismAttention(nn.Module):
                                     branch_cu_seqlens if share_branch_boundaries else cu_seqlens,
                                     max_seqlen, v_first=v_first,
                                     linear_q=linear_q, linear_k=linear_k, conv_seq_idx=conv_seq_idx)
-        gate = self.g_proj_up(self.g_proj_down(x)).reshape(batch, length, self.heads, self.value_dim)
+        gate = self.g_proj_up(self.g_proj_down(x)).unflatten(
+            -1, (self.heads, self.value_dim)
+        )
         if compiling:
             # Let Inductor fuse this expression. FLA's current custom backward
             # queries Triton device properties from inside the traced graph.

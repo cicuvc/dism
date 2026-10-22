@@ -131,6 +131,104 @@ class _MXFP8SwiGLUFunction(torch.autograd.Function):
         return grad_x, grad_gate.float(), grad_up.float(), None
 
 
+class _MXFP8SwiGLUQuantizedFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        x,
+        x_row,
+        x_row_scale,
+        x_column,
+        x_column_scale,
+        gate_weight,
+        up_weight,
+        layer,
+    ):
+        layer._sync_if_needed()
+        state = layer._forward_state(x)
+        state.forward.rebind(
+            x_row,
+            x_row_scale,
+            layer._gate_weight_fp8,
+            layer._gate_weight_scale,
+            layer._up_weight_fp8,
+            layer._up_weight_scale,
+        )
+        out = state.forward()
+        ctx.layer = layer
+        ctx.save_for_backward(
+            x,
+            gate_weight,
+            up_weight,
+            layer._gate_weight_fp8,
+            layer._gate_weight_scale,
+            layer._up_weight_fp8,
+            layer._up_weight_scale,
+            state.gate_linear,
+            state.up_linear,
+            x_column,
+            x_column_scale,
+        )
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (
+            x,
+            gate_weight,
+            up_weight,
+            gate_fp8,
+            gate_scale,
+            up_fp8,
+            up_scale,
+            gate_linear,
+            up_linear,
+            x_column,
+            x_column_scale,
+        ) = ctx.saved_tensors
+        grad_output = grad_output.contiguous()
+        if grad_output.dtype != torch.bfloat16:
+            grad_output = grad_output.to(torch.bfloat16)
+        layer = ctx.layer
+        state = layer._backward_state(
+            grad_output,
+            gate_linear,
+            up_linear,
+            x,
+            gate_fp8,
+            gate_scale,
+            up_fp8,
+            up_scale,
+            x_column,
+            x_column_scale,
+        )
+        state.rebind(
+            grad_output,
+            gate_linear,
+            up_linear,
+            x,
+            gate_fp8,
+            up_fp8,
+            gate_scale,
+            up_scale,
+            x_column,
+            x_column_scale,
+            reallocate=True,
+        )
+        grad_x, grad_gate, grad_up = state()
+        state.release_workspace()
+        return (
+            grad_x,
+            None,
+            None,
+            None,
+            None,
+            grad_gate.float(),
+            grad_up.float(),
+            None,
+        )
+
+
 class MXFP8SwiGLU(nn.Module):
     """FP32-master, BF16-activation gate/up SwiGLU layer.
 
@@ -358,6 +456,57 @@ class MXFP8SwiGLU(nn.Module):
             raise RuntimeError("MXFP8SwiGLU requires CUDA")
         hidden = _MXFP8SwiGLUFunction.apply(
             x.contiguous(), self.gate_weight, self.up_weight, self
+        )
+        return self.down_proj(hidden)
+
+    @torch.compiler.disable
+    def forward_quantized(
+        self,
+        x,
+        x_row,
+        x_row_scale,
+        x_column,
+        x_column_scale,
+    ):
+        """Skip X quantization when fused RMSNorm already emitted both layouts."""
+        if x.ndim != 2 or x.shape[1] != self.in_features:
+            raise ValueError(
+                f"expected input [M,{self.in_features}], got {tuple(x.shape)}"
+            )
+        if x.dtype != torch.bfloat16 or not x.is_contiguous():
+            raise TypeError("expected contiguous BF16 normalized input")
+        if x_row.shape != x.shape or x_row.dtype != torch.float8_e4m3fn:
+            raise ValueError("invalid prequantized row input")
+        expected_row_scale = (
+            (self.in_features + 127) // 128,
+            (x.shape[0] + 15) // 16 * 16,
+        )
+        if x_row_scale.shape != expected_row_scale or x_row_scale.dtype != torch.int32:
+            raise ValueError("invalid prequantized row scales")
+        padded_rows = (x.shape[0] + 127) // 128 * 128
+        if (
+            x_column.shape != (padded_rows, self.in_features)
+            or x_column.dtype != torch.float8_e4m3fn
+        ):
+            raise ValueError("expected token-major FP8 X for wgrad")
+        expected_column_scale = (
+            padded_rows // 128,
+            (self.in_features + 15) // 16 * 16,
+        )
+        if (
+            x_column_scale.shape != expected_column_scale
+            or x_column_scale.dtype != torch.int32
+        ):
+            raise ValueError("invalid prequantized column scales")
+        hidden = _MXFP8SwiGLUQuantizedFunction.apply(
+            x,
+            x_row,
+            x_row_scale,
+            x_column,
+            x_column_scale,
+            self.gate_weight,
+            self.up_weight,
+            self,
         )
         return self.down_proj(hidden)
 

@@ -59,6 +59,19 @@ class DismMLP(nn.Module):
             return out.reshape(shape)
         return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
 
+    def forward_quantized(self, x, row, row_scale, column, column_scale):
+        if not self.mxfp8:
+            raise RuntimeError("quantized input is only available for MXFP8 MLP")
+        shape = x.shape
+        out = self.mxfp8_mlp.forward_quantized(
+            x.reshape(-1, x.shape[-1]),
+            row,
+            row_scale,
+            column,
+            column_scale,
+        )
+        return out.reshape(shape)
+
 
 class DismBlock(nn.Module):
     def __init__(self, config, layer_idx):
@@ -85,15 +98,34 @@ class DismBlock(nn.Module):
                        )
         self.attn = attention(config.hidden_size, config.num_heads, **options)
         self.mlp = DismMLP(config)
+        if self.mxfp8:
+            from flash_mxfp8 import FusedAddRMSNormMXFP8
+
+            self.fused_attn_norm = FusedAddRMSNormMXFP8(
+                config.hidden_size, eps=config.norm_eps
+            )
 
     def forward(self, hidden_states, **kwargs):
         if self.post_norm:
             branch, _, _ = self.attn(hidden_states, **kwargs)
-            hidden_states = self.attn_norm(hidden_states + branch)
             if self.mxfp8:
-                hidden_states = hidden_states.to(torch.bfloat16)
-                output = self.mlp_norm(hidden_states + self.mlp(hidden_states))
+                (
+                    hidden_states,
+                    row,
+                    row_scale,
+                    column,
+                    column_scale,
+                ) = self.fused_attn_norm(
+                    hidden_states,
+                    branch,
+                    self.attn_norm.weight,
+                )
+                mlp_output = self.mlp.forward_quantized(
+                    hidden_states, row, row_scale, column, column_scale
+                )
+                output = self.mlp_norm(hidden_states + mlp_output)
                 return output.to(torch.bfloat16)
+            hidden_states = self.attn_norm(hidden_states + branch)
             return self.mlp_norm(hidden_states + self.mlp(hidden_states))
         branch, _, _ = self.attn(self.attn_norm(hidden_states), **kwargs)
         hidden_states = hidden_states + branch

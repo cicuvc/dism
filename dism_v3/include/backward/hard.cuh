@@ -5,14 +5,21 @@
 namespace DISM_VARIANT::dism_hard_backward {
 using namespace dism_backward;
 struct Shape { int batch, heads, n; };
+struct Task {
+    int batch, head, begin, n, bh, k0;
+    int64_t metadata, boundary;
+    int hard_index;
+};
 struct Args {
     Shape score;
+    int task_count, lut_stride;
     SoftQueryGlobal sq;
     DerivativeGlobal dout;
     HeldSoftGlobal sk;
     HeldValueGlobal v;
     const int *q_label, *k_label, *boundary;
     const bool *hard;
+    const Task *tasks;
     const float *normalizer, *log_weights, *dlog_weights;
     float *moments;
     void *dv, *dsk;
@@ -33,14 +40,24 @@ struct Shared {
 };
 constexpr size_t SharedBytes=4096+sizeof(Shared);
 struct Scheduler {
-    struct Task { int batch,head,bh,k0; };
+    using Task = dism_hard_backward::Task;
+    const Args& args;
     int index,blocks,heads,total;
-    __device__ Scheduler(const Args& a):index(blockIdx.x),blocks(a.score.n/128),
+    __device__ Scheduler(const Args& a):args(a),index(blockIdx.x),blocks(a.score.n/128),
         heads(a.score.heads),total(blocks*heads*a.score.batch) {}
     __device__ bool next(Task& t) {
+        if(args.tasks) {
+            if(index>=args.task_count) return false;
+            t=args.tasks[index];
+            index+=gridDim.x;
+            return true;
+        }
         if(index>=total) return false;
         int bh=index/blocks;
-        t={bh/heads,bh%heads,bh,(index%blocks)*128};
+        int batch=bh/heads,head=bh%heads,k0=(index%blocks)*128;
+        t={batch,head,0,args.score.n,bh,k0,
+           int64_t(bh)*args.score.n,
+           int64_t(bh)*((args.score.n-1)/32)*args.score.n,bh};
         index+=gridDim.x;
         return true;
     }
@@ -54,29 +71,30 @@ __device__ __forceinline__ void produce(const Args& a,Shared& s,HeldPipe& held,
     int lane=kt::warp::laneid();
     Scheduler::Task t;
     while(scheduler.next(t)) {
-        if(!a.hard[t.bh]) continue;
+        if(!a.hard[t.hard_index]) continue;
         auto first=held.waitBuffer(0,s.held,s.labels.held);
         if(leader) {
             kt::tma::expect_bytes(first.getBarrier(),sizeof(Shared::Held));
-            kt::tma::load_async(first.template get<0>().sk,a.sk,{t.batch,t.head,t.k0,0},first.getBarrier());
-            kt::tma::load_async(first.template get<0>().v,a.v,{t.batch,t.head,t.k0,0},first.getBarrier());
+            kt::tma::load_async(first.template get<0>().sk,a.sk,{t.batch,t.head,t.begin+t.k0,0},first.getBarrier());
+            kt::tma::load_async(first.template get<0>().v,a.v,{t.batch,t.head,t.begin+t.k0,0},first.getBarrier());
         }
         // Halo needed to reconstruct up to32 diagonal steps from a horizontal
         // checkpoint. Labels are loaded once per held key tile, never per pair.
         for(int j=lane;j<160;j+=32) {
             int key=t.k0+j-32;
-            first.template get<1>().value[j]=key>=0?a.k_label[int64_t(t.bh)*a.score.n+key]:0;
+            int global_key=t.begin+key;
+            first.template get<1>().value[j]=global_key>=t.begin?a.k_label[t.metadata+key]:0;
         }
         __syncwarp();
         first.submitToNextAndTrigger(); held.moveNext();
-        for(int q0=a.score.n-Q;q0>=t.k0;q0-=Q) {
+        for(int q0=t.n-Q;q0>=t.k0;q0-=Q) {
             auto packet=input.waitBuffer(0,s.input,s.labels.input);
             if(leader) {
                 kt::tma::expect_bytes(packet.getBarrier(),sizeof(Shared::Input));
-                kt::tma::load_async(packet.template get<0>().sq,a.sq,{t.batch,q0,t.head,0},packet.getBarrier());
-                kt::tma::load_async(packet.template get<0>().dout,a.dout,{t.batch,q0,t.head,0},packet.getBarrier());
+                kt::tma::load_async(packet.template get<0>().sq,a.sq,{t.batch,t.begin+q0,t.head,0},packet.getBarrier());
+                kt::tma::load_async(packet.template get<0>().dout,a.dout,{t.batch,t.begin+q0,t.head,0},packet.getBarrier());
             }
-            packet.template get<1>().value[lane]=a.q_label[int64_t(t.bh)*a.score.n+q0+lane];
+            packet.template get<1>().value[lane]=a.q_label[t.metadata+q0+lane];
             __syncwarp();
             packet.submitToNextAndTrigger(); input.moveNext();
         }
@@ -85,14 +103,14 @@ __device__ __forceinline__ void produce(const Args& a,Shared& s,HeldPipe& held,
 
 // Correctness-first bounded halo reconstruction. O(Q) with Q fixed at32;
 // checkpoint stores the last mismatching KEY coordinate, not a length.
-__device__ __forceinline__ int length(const Args& a,const int* q,const int* k,
-        int bh,int tile_k,int key,int q0,int query) {
+__device__ __forceinline__ int length(const Args& a,const Task& t,const int* q,const int* k,
+        int tile_k,int key,int q0,int query) {
     if(key>query) return 0;
     int count=0,local=query-q0;
     while(count<=local && count<=key && q[local-count]==k[key-tile_k+32-count]) ++count;
     if(count==local+1 && key>=count && q0>0) {
         int previous_key=key-count;
-        int64_t offset=(int64_t(bh)*((a.score.n-1)/32)+q0/32-1)*a.score.n+previous_key;
+        int64_t offset=t.boundary+int64_t(q0/32-1)*t.n+previous_key;
         count+=previous_key-a.boundary[offset];
     }
     return count;
@@ -100,7 +118,7 @@ __device__ __forceinline__ int length(const Args& a,const int* q,const int* k,
 
 using IntScan=pscore::AltLayoutSplitScanBuffer<K,Q,pscore::UnaryElement,pscore::HardMaxOp,pscore::I32x2>;
 __device__ __forceinline__ IntScan recompute(const Args& a,const int* q,const int* k,
-        int bh,int tile_k,int k0,int q0) {
+        const Task& t,int tile_k,int k0,int q0) {
     IntScan scan;
     int lane=kt::warp::laneid();
 #pragma unroll
@@ -120,15 +138,15 @@ __device__ __forceinline__ IntScan recompute(const Args& a,const int* q,const in
     if(k0>0 && lane/4<4) {
         int query=q0+8*(lane&3)+3-lane/4;
         top.init[0].value={
-            k0-1-length(a,q,k,bh,tile_k,k0-1,q0,query),
-            k0-1-length(a,q,k,bh,tile_k,k0-1,q0,query+4)};
+            k0-1-length(a,t,q,k,tile_k,k0-1,q0,query),
+            k0-1-length(a,t,q,k,tile_k,k0-1,q0,query+4)};
     }
     if(q0>0 && (lane&3)==3) {
 #pragma unroll
         for(int r=0;r<2;++r) {
             int key=k0+8*r+lane/4-1;
             if(key>=0 && key<q0)
-                left.init[r].value.u0=a.boundary[(int64_t(bh)*((a.score.n-1)/32)+q0/32-1)*a.score.n+key];
+                left.init[r].value.u0=a.boundary[t.boundary+int64_t(q0/32-1)*t.n+key];
         }
     }
     auto state=scan.inclusive_prescan(left,top);

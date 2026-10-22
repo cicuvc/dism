@@ -589,13 +589,13 @@ def _add_rmsnorm_output(
     else:
         normalized = summed * inverse[:, None]
     normalized_bf16 = normalized.to(tl.bfloat16)
-    if Y_MODE == 1:
+    if Y_MODE == 1 or Y_MODE == 3:
         tl.store(
             y_bf16 + rows[:, None] * y_stride + cols[None, :],
             normalized_bf16,
             mask=mask,
         )
-    if Y_MODE == 2:
+    if Y_MODE == 2 or Y_MODE == 3:
         row_q, row_s = _online_scale(normalized_bf16)
         tl.store(
             row_fp8 + rows[:, None] * row_stride + cols[None, :],
@@ -634,7 +634,13 @@ class FusedAddRMSNormPlan:
     Y_NONE = 0
     Y_BF16 = 1
     Y_MXFP8 = 2
-    Y_MODES = {"none": Y_NONE, "bf16": Y_BF16, "mxfp8": Y_MXFP8}
+    Y_BF16_MXFP8 = 3
+    Y_MODES = {
+        "none": Y_NONE,
+        "bf16": Y_BF16,
+        "mxfp8": Y_MXFP8,
+        "bf16_mxfp8": Y_BF16_MXFP8,
+    }
 
     def __init__(
         self,
@@ -663,7 +669,9 @@ class FusedAddRMSNormPlan:
             if not factor.is_cuda or factor.device != x.device:
                 raise ValueError("Expected factor on the input device")
         if y_mode not in self.Y_MODES:
-            raise ValueError("y_mode must be 'none', 'bf16', or 'mxfp8'")
+            raise ValueError(
+                "y_mode must be 'none', 'bf16', 'mxfp8', or 'bf16_mxfp8'"
+            )
         m, k = x.shape
         if k % 32:
             raise ValueError("K must be a multiple of 32")
@@ -680,9 +688,11 @@ class FusedAddRMSNormPlan:
             torch.empty_like(x) if self.write_sum else None
         )
         self.y_bf16 = (
-            torch.empty_like(x) if self.y_mode == self.Y_BF16 else None
+            torch.empty_like(x)
+            if self.y_mode in (self.Y_BF16, self.Y_BF16_MXFP8)
+            else None
         )
-        if self.y_mode == self.Y_MXFP8:
+        if self.y_mode in (self.Y_MXFP8, self.Y_BF16_MXFP8):
             self.row_fp8 = torch.empty_like(x, dtype=torch.float8_e4m3fn)
             self.row_scale = torch.zeros(
                 ((k + 127) // 128, self.mp16),

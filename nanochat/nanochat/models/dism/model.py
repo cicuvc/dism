@@ -103,6 +103,89 @@ def _fake_hard_flags(counter, probability, n, heads, seed):
     return counter.new_empty((1, heads, n), dtype=torch.bool)
 
 
+@triton.jit
+def _hard_flags_selectors(hard, direction, tau, log_tau, counter, probability,
+                          N: tl.constexpr, H: tl.constexpr,
+                          SEED: tl.constexpr, BLOCK: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offsets < N * H
+    seed = tl.load(counter).to(tl.uint64) + SEED
+    row, head = offsets // H, offsets % H
+    # Preserve the historical sampler's [head, row] RNG coordinates and flags
+    # while writing the compact [row, head] layout directly.
+    rng_index = head * N + row
+    tl.store(
+        hard + offsets,
+        tl.rand(seed, rng_index) < tl.load(probability),
+        mask,
+    )
+    head_mask = offsets < H
+    tl.store(direction + offsets, True, head_mask)
+    value = tl.load(log_tau + offsets, mask=head_mask, other=0.0)
+    tl.store(tau + offsets, tl.log(1.0 + tl.exp(value)), head_mask)
+
+
+@torch.library.custom_op(
+    "nanochat_dism::hard_flags_selectors", mutates_args=()
+)
+def sample_hard_flags_selectors(
+    counter: torch.Tensor,
+    probability: torch.Tensor,
+    log_tau: torch.Tensor,
+    n: int,
+    heads: int,
+    seed: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    hard = torch.empty((n, heads), device=counter.device, dtype=torch.bool)
+    direction = torch.empty((1, heads), device=counter.device, dtype=torch.bool)
+    tau = torch.empty_like(log_tau)
+    _hard_flags_selectors[(triton.cdiv(n * heads, 256),)](
+        hard,
+        direction,
+        tau,
+        log_tau,
+        counter,
+        probability,
+        n,
+        heads,
+        seed,
+        256,
+    )
+    return hard, direction, tau
+
+
+@sample_hard_flags_selectors.register_fake
+def _fake_hard_flags_selectors(counter, probability, log_tau, n, heads, seed):
+    return (
+        counter.new_empty((n, heads), dtype=torch.bool),
+        counter.new_empty((1, heads), dtype=torch.bool),
+        torch.empty_like(log_tau),
+    )
+
+
+def _hard_flags_selectors_setup(ctx, inputs, output):
+    ctx.save_for_backward(inputs[2])
+    ctx.mark_non_differentiable(output[0], output[1])
+
+
+def _hard_flags_selectors_backward(ctx, grad_hard, grad_direction, grad_tau):
+    (log_tau,) = ctx.saved_tensors
+    return (
+        None,
+        None,
+        grad_tau * torch.sigmoid(log_tau),
+        None,
+        None,
+        None,
+    )
+
+
+sample_hard_flags_selectors.register_autograd(
+    _hard_flags_selectors_backward,
+    setup_context=_hard_flags_selectors_setup,
+)
+
+
 class DismLM(nn.Module):
     aligned_segment_ends = True
     exact_optimizer_hyperparameters = True
@@ -417,14 +500,14 @@ class DismLM(nn.Module):
                     continue
 
                 if self.training:
-                    row_hard = sample_hard_flags(
+                    hard, direction, tau = sample_hard_flags_selectors(
                         counter,
                         self.hard_probability,
+                        layer.attn.log_sel_tau,
                         batch,
                         self.config.n_head,
                         self.config.rng_seed + i * 104729,
                     )
-                    hard = row_hard.squeeze(0).T.contiguous()
                 else:
                     hard = torch.full(
                         (batch, self.config.n_head),
@@ -432,16 +515,19 @@ class DismLM(nn.Module):
                         device=x.device,
                         dtype=torch.bool,
                     )
+                    direction = torch.ones(
+                        (1, self.config.n_head),
+                        device=x.device,
+                        dtype=torch.bool,
+                    )
+                    tau = None
                 x = layer(
                     x,
                     cu_seqlens=cu_seqlens,
                     max_seqlen=self.config.sequence_len,
                     hard=hard,
-                    direction=torch.ones(
-                        (1, self.config.n_head),
-                        device=x.device,
-                        dtype=torch.bool,
-                    ),
+                    direction=direction,
+                    tau_override=tau,
                     use_cache=False,
                     v_first=v_first,
                     vocab_temperature=self.vocab_temperature,

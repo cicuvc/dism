@@ -130,3 +130,46 @@ overhead.
 SwiGLU, BF16 `o_proj`, BF16 embedding and BF16 LM head. At 512 width this is
 4.6% faster and uses about 1.75 GiB less peak memory than putting all
 projections in MXFP8.
+
+## Kernel-fragmentation reductions
+
+The production 125M path now combines four adjacent boundaries without changing
+its objective:
+
+- `MXFP8Linear` preserves arbitrary leading input dimensions inside its
+  autograd function. The sq/sk callers no longer create token-plane views around
+  separate custom-op boundaries.
+- The hard-flag Triton sampler also emits the fixed-True direction buffer and
+  `softplus(log_sel_tau)`. Its hard flags are bitwise identical to the previous
+  head-major sampler, and the custom-op autograd applies the softplus chain rule.
+- `FusedAddRMSNormPlan` has output modes `bf16`, `mxfp8`, and `bf16_mxfp8`.
+  The last mode is used at the post-attention RMSNorm -> SwiGLU edge: one kernel
+  writes normalized BF16 for the residual path plus row-wise and token-major
+  column-wise MXFP8 layouts. `MXFP8SwiGLU.forward_quantized` consumes both and
+  skips its former direct input quantizer.
+- Quadratic packed hard fallback now passes document tasks to
+  `hard_backward`; SQ/SK/V/dO are consumed in place. The equal-length
+  `torch.stack` copies and output scattering path are gone. The packed tau
+  reduction uses a compact per-document table and the shared-LUT stride rather
+  than the packed token length.
+
+One 131,072-token CUDA-only step on the same 125M model:
+
+| Metric | Before | After |
+|---|---:|---:|
+| CUDA kernels | 26,036 | 25,220 |
+| D2D/memcpy events | 1,043 | 721 |
+| Memcpy bytes | 4.03 GB | 3.22 GB |
+| GPU busy union | 707.3 ms | 699.7 ms |
+| First-to-last activity | 875.3 ms | 868.3 ms |
+| `<20 us` kernels | 19,084 | 18,281 |
+| `softplus` kernels | 288 | 192 |
+| fixed-direction `ones_like` | 48 | 0 |
+| 2 MiB fallback stack copies | 384 | 0 |
+
+An unprofiled ten-step replay of the same step medians at 813.4 ms, vs roughly
+830 ms before these changes. Packed quadratic fallback passes memcheck (0
+errors) and racecheck (0 hazards). Main CUDA hard-backward spills remain the
+documented pre-existing limitation: 8/112/80/192-byte stacks for
+R16-DV32/R16-DV64/R32-DV32/R32-DV64; this change does not claim a spill-free
+backend.

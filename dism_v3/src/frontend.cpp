@@ -55,7 +55,7 @@ T hard_summary_cuda(T,T,T,std::optional<T>,int64_t); \
 T hard_chunk_cuda(T,std::optional<T>,int64_t); \
 T hard_log_weights_cuda(T,int64_t); \
 Pair hard_readout_cuda(V,T,T,std::optional<T>,int64_t); \
-V hard_backward_cuda(V,T,T,T,int64_t); \
+V hard_backward_cuda(V,T,T,T,int64_t,std::optional<T>); \
 T chunk_scan_cuda(T,T,int64_t); \
 Pair forward_cuda(T,T,T,T,T,T,T,T,T,T,T,T,T,int64_t,int64_t,std::optional<T>,bool); \
 T backward_delta_cuda(T,T); \
@@ -77,7 +77,7 @@ struct Backend {
     T (*hard_chunk)(T,std::optional<T>,int64_t);
     T (*hard_log_weights)(T,int64_t);
     Pair (*hard_readout)(V,T,T,std::optional<T>,int64_t);
-    V (*hard_backward)(V,T,T,T,int64_t);
+    V (*hard_backward)(V,T,T,T,int64_t,std::optional<T>);
     T (*chunk)(T,T,int64_t);
     Pair (*forward)(T,T,T,T,T,T,T,T,T,T,T,T,T,int64_t,int64_t,std::optional<T>,bool);
     T (*delta)(T,T);
@@ -326,14 +326,15 @@ void bind_frontend(py::module_& m) {
     });
     m.def("core_forward",&core_forward,py::arg("raw"),py::arg("table"),py::arg("ctas"),
           py::arg("save"),py::arg("fp32"),py::arg("absorbed"),py::arg("direction_true")=false,py::arg("qb_key_bias")=false);
-    m.def("hard_backward",[](V x,T boundary,T lut,T norm,int64_t ctas) {
+    m.def("hard_backward",[](V x,T boundary,T lut,T norm,int64_t ctas,std::optional<T> table) {
         py::gil_scoped_release release;
         TORCH_CHECK(x.size()==7 && x[0].dim()==4 && x[2].dim()==4,"invalid hard backward operands");
         for(const auto& backend:backends)
             if(backend.r==x[0].size(3) && backend.dv==x[2].size(3))
-                return backend.hard_backward(x,boundary,lut,norm,ctas);
+                return backend.hard_backward(x,boundary,lut,norm,ctas,table);
         TORCH_CHECK(false,"unsupported hard backward (R,DV)");
-    });
+    },py::arg("x"),py::arg("boundary"),py::arg("lut"),py::arg("norm"),
+      py::arg("ctas"),py::arg("table")=std::nullopt);
     m.def("core_backward",&core_backward,py::arg("operands"),py::arg("vertical"),
           py::arg("output"),py::arg("normalizer"),py::arg("dout"),py::arg("table"),
           py::arg("ctas"),py::arg("fp32"),py::arg("diagnostics"),py::arg("direction_true")=false);
