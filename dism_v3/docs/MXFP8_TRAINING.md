@@ -173,3 +173,40 @@ errors) and racecheck (0 hazards). Main CUDA hard-backward spills remain the
 documented pre-existing limitation: 8/112/80/192-byte stacks for
 R16-DV32/R16-DV64/R32-DV32/R32-DV64; this change does not claim a spill-free
 backend.
+
+### Nsight Systems capture
+
+A separate `cuda,nvtx,osrt` capture used the 125M torch-AdamW checkpoint at
+step 500 with `DISM_HARD_PLANNER=0`, quadratic hard backward and no training
+probes. Artifacts:
+
+- `build/nsys_opt125m_torchadamw_20261022.nsys-rep`
+- `build/nsys_opt125m_torchadamw_20261022.sqlite`
+- `build/nsys_opt125m_torchadamw_20261022_analysis.json`
+
+The capture contains one optimizer step and all eight accumulation
+microbatches. Nsys raises the step scope to 902.3 ms versus an uninstrumented
+818.6 ms warmup, so only delta and topology conclusions use this trace.
+GPU activity union is 706.4 ms and no-activity time is 195.9 ms. All 26,163
+kernel/copy/memset activities are on one CUDA stream. There are 4,322 gaps of
+at least 10 us totaling 182.8 ms; the largest individual gap is 0.91 ms. This
+is launch/dependency fragmentation, not a planner tail.
+
+Largest repeated inter-kernel gaps:
+
+| Predecessor -> successor | Count | Total | Max |
+|---|---:|---:|---:|
+| `_add_rmsnorm_output` -> MXFP8 SwiGLU | 96 | 15.16 ms | 0.213 ms |
+| BF16 projection GEMM -> value-residual fwd | 138 | 11.80 ms | 0.142 ms |
+| multiply -> l2norm fwd | 92 | 9.69 ms | 0.174 ms |
+| BF16 projection GEMM -> `_inverse_rms_add` | 96 | 8.68 ms | 0.133 ms |
+| BF16 projection GEMM -> causal conv fwd | 194 | 8.18 ms | 0.356 ms |
+| GDN chunk output -> cast | 48 | 7.03 ms | 0.199 ms |
+
+Runtime API time is 42.5 ms for `cudaLaunchKernel`, 18.5 ms for
+`cuLaunchKernel`, 12.1 ms for `cuLaunchKernelEx`, and 23.9 ms for
+`cudaMemcpyAsync`; these enqueue costs overlap GPU execution and are not added
+to the device budget. Device copies remain 595 D2D events / 3.22 GB, with only
+58 D2H and 139 H2D events. The next useful targets are therefore the new
+RMSNorm-to-SwiGLU boundary and forward attention/projection serialization, not
+hard-backward fallback traffic.
