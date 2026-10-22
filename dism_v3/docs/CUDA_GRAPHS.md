@@ -446,3 +446,384 @@ The tool reports actual layout, parameter count and measured-only route counts.
 Generated logs/results remain under ignored `build/middle_dism_*` paths.
 The prior strict numerical and sanitizer limitations remain as documented above;
 this layout change did not modify any kernel or attempt to suppress those reports.
+
+## Why planner readiness did not improve throughput (2026-10-23)
+
+The layout/throughput work above was committed as `947efb4`. Follow-up diagnosis
+used the same middle layout, RTX 5090 and synthetic workload at hard probability
+.95. No production kernel, launch default or planner enablement changed.
+
+Two fresh Nsight runs used eight warmup and three measured optimizer steps.
+`profile_training_cuda_graph.py` now annotates the explicit graph binding and
+the nested hard-backward paths; innermost backward scopes receive exclusive
+GPU attribution. There were 24 graph replays and 144 sampled layer routes per
+run. Planner-on chose event 143 times and quadratic once. These are GPU activity
+duration sums per optimizer step, not independent wall-clock contributions:
+
+| Hard backward work | Planner off (ms) | Planner on (ms) |
+|---|---:|---:|
+| Quadratic recomputation/backward, including buffer initialization | 100.598 | 4.535 |
+| Event consumer, including buffer initialization and tau reduction | — | 97.658 |
+| Route sampling, casts and branch-gradient addition | — | 11.494 |
+| Total | 100.598 | 113.686 |
+
+The event consumer spends 93.056 ms in `compact_stage`, 2.592 ms clearing FP32
+outputs and 2.009 ms in tau stages. The 11.494 ms dispatch/merge cost contains
+7.245 ms of addition, 4.177 ms of casts and only .071 ms of flag sampling.
+The quadratic branch still allocates/clears buffers and launches gated kernels
+when event wins; its 4.535 ms also includes the one real fallback. Hence flag
+sampling itself is not the dominant overhead.
+
+Measured wall time was 951.641 ms off versus 971.366 ms on, consistent in direction
+with the longer uninstrumented runs above. Forward DISM activity also increased
+from 40.260 to 44.060 ms with snapshot staging. Planner-on had 14.450 ms of
+outside-graph GPU activity, mostly uploads, which overlaps other work and must
+not be added directly to wall time. CPU drain/wait spans include GPU waiting;
+these profiles do not establish a pure CPU-planning cost.
+
+An independent same-input comparison uses `tools/bench_graph_hard_routes.py`.
+After eight synthetic optimizer steps it copies SQ/SK/V/dO, labels, hard masks
+and tau for six DISM layers and four packing patterns. All model replays finish
+before standalone captures begin. Each case owns immutable input copies and
+its own graph layout. Planning and completed uploads are outside timing.
+Each route is captured separately, warmed up, and measured as the median of
+five groups of 32 replays. The following are mean case medians across six
+layers, in ms per layer/microbatch at eight training rows:
+
+| Document lengths in each 2048-token row | Quadratic | Current graph event | Current dual dispatch, event chosen | Original static event |
+|---|---:|---:|---:|---:|
+| 2048 | 2.978 | 2.441 | 2.754 | .201 |
+| 256 + 1792 | 2.598 | 2.298 | 2.612 | .183 |
+| 4 × 512 | 1.240 | 1.774 | 2.089 | .129 |
+| 8 × 256 | .980 | 1.249 | 1.582 | .107 |
+
+Quadratic includes forward-state recomputation, clearing and tau reduction.
+Event includes clearing and tau reduction. Dual dispatch includes both gated
+branches and the same four gradient additions/casts as production. Original
+static event uses `CompactFusedHardPrefillBackward` on the identical plan and
+inputs with its original task-count launch grid; its already-completed upload
+event is excluded from capture. It cannot replace dynamic planner dispatch
+directly because its launch geometry depends on the prepared plan.
+
+With each packing repeated twice, sums of the isolated measurements are
+93.557 ms quadratic, 93.147 ms current graph event, 108.434 ms event-selected
+dual dispatch, 107.173 ms quadratic-selected dual dispatch, and 7.443 ms original
+static event. These are GPU-only estimates, not model throughput. All 24 cases
+passed the existing relaxed `.001/.03` gradient check for all four alternatives
+against quadratic. Across comparisons, maximum absolute error was 9.39e-7,
+maximum relative L2 was .001685, and minimum cosine was .9999985; this does not
+replace the separate strict-gradient diagnostics.
+
+Thus current graph event is faster for long documents but slower for short
+ones. Its aggregate advantage is negligible, and dual-branch overhead removes
+it. The original static consumer being about 12.5 times faster than current
+graph event points to the graph port's execution efficiency, not an inherent
+advantage of quadratic math. Current graph consumers use a fixed 32-CTA grid
+with an indirect descriptor and a task loop; static consumers use a task-count
+grid. The previously recorded graph-kernel spills remain relevant. This probe
+does not isolate the individual contribution of grid size, indirection or
+spills, so no single cause is established and no launch default was changed.
+
+An earlier diagnostic interleaved standalone captures with later model replays
+while sharing the live model layout; its next model replay failed with CUDA
+719. That diagnostic result was discarded. The final isolated snapshot version
+completed all four model packs and all 24 route comparisons. The failure's
+precise cause was not established; it is not classified as a tool false positive
+or evidence that the production runner is sanitizer-clean.
+
+A supplementary memcheck run of the final script (`--rows 1 --warmup-steps 1
+--repeats 1 --samples 1`, compute-sanitizer 2025.4.1, `--error-exitcode 1`)
+stalled before the first snapshot. After several minutes without progress,
+GPU utilization was zero and native thread stacks showed `cuMemHostAlloc`
+waiting on driver locks, with other workers waiting on the Python GIL.
+The diagnostic process was terminated; this is an **incomplete memcheck**, not
+a passing or classified false-positive result. The log and native stack are
+retained under ignored `build/hard_routes_matched_memcheck*` paths. This does
+not change the earlier production regression results or resolve the stall.
+
+Reproduce the matched-input comparison using the local environment above:
+
+```bash
+python dism_v3/tools/bench_graph_hard_routes.py \
+  --model-spec nanochat/configs/sequence_true_125m_valres_mxfp8_ffnonly_slimpajama_3b_h768_h12_i1152_r32.json \
+  --training-step 22887 --warmup-steps 8 --repeats 32 --samples 5 \
+  --output dism_v3/build/hard_routes_matched.json
+```
+
+For the full-model profiles, use `bench_training_cuda_graph.py` with `--mode
+graph --training-step 22887 --warmup 8 --steps 3 --nsys`, once with `--planner`
+and once without, under the Nsight capture/export procedure documented above.
+The generated `build/hard_routes_{off,on}.*` and `build/hard_routes_matched_v4.*`
+artifacts remain ignored. No user checkpoint, dataset or real training job was
+accessed. Prior strict numerical and racecheck limitations remain in force.
+
+## Graph event scheduling diagnosis (2026-10-23)
+
+The dominant problem was the fixed **32-CTA grid**, followed by the cost of the
+grid-stride task loop. At this diagnostic stage only opt-in tools and tests
+changed; production still defaulted to 32 CTAs. The optimization below supersedes
+that scheduling default; planner enablement remains opt-in.
+
+The matched-input tool now accepts `--event-ctas` to sweep the existing consumer
+constructor argument. All 24 cases (six layers × four packs), all gradient
+comparisons and all timing samples completed. Each timing is the median of
+three groups of 16 replays after warmup. For the same eight-microbatch packing
+mix as above, sums of the isolated GPU times were:
+
+| Grid | Event GPU ms per optimizer-step equivalent |
+|---|---:|
+| 32 (production default) | 93.959 |
+| 64 | 49.749 |
+| 128 | 27.704 |
+| 256 | 16.903 |
+| 512 | 12.064 |
+| 1024 | 12.103 |
+| 2048 | 11.830 |
+| Original static event | 7.475 |
+
+Increasing only the grid to 512 removes about **94.7% of the measured gap**
+between current graph event and static event. This uses the same compiled
+kernel specializations, including their existing spills. Larger grids plateau
+and do not improve every packing: at 256-token documents the means were .179,
+.180 and .190 ms for 512/1024/2048 CTAs, versus .310/.311/.293 ms for 2048-token
+documents. These are isolated measurements, not an autotuned production choice.
+
+The planner produces tens of thousands of independent C16 tasks per layer:
+the first layer's four cases had 38,122 / 38,574 / 36,012 / 27,095 C16 blocks.
+At 32 CTAs each CTA serially traverses roughly 850–1,200 such tasks, and only
+32 CTAs are available to occupy the GPU's 170 SMs at a time. The fixed grid also applies
+to other stages despite very different task counts. Thus the issue is not
+primarily failure to build a plan or a missing fast single-pair arithmetic path.
+
+`tools/graph_event_schedule_probe.py` provides opt-in ablations which reuse the
+original arithmetic helpers, acquire gate and tau stages. For one DISM layer
+and all four packs, it compares direct versus descriptor-loaded pointers,
+512 versus exact task-count grids, and a grid-stride loop versus one task per
+CTA. Task-count/direct-pointer variants are frozen-plan controls; they are not
+valid replacements for changing plans in production. A covering grid is
+required for the one-task variant, and zero-count records still execute no task.
+
+For the 2048-token document case, graph event at 512 CTAs took .310 ms, the
+indirect task-count grid retaining the loop took .266 ms, and removing the loop
+on that same task-count grid took .214 ms. Original static event took .202 ms.
+Keeping the one-task grid and replacing descriptor pointers with direct
+arguments took .216 ms. Direct pointers alone do not explain the large gap.
+
+A second four-pack ablation also skips entire empty records using the frozen
+CPU plan. At 512-token documents, the indirect one-task path fell from .150 to
+.140 ms; at 256-token documents it fell from .144 to .134 ms. Long-document
+cases had no empty records and no consistent change. Thus empty launches add
+about 10 microseconds per layer/microbatch in these short-document controls,
+but do not explain the original millisecond-scale deficit. Direct one-task
+timing at 256 tokens was .132 ms, indicating a smaller remaining contribution
+from pointer/compiler differences. Empty-record skipping is a diagnostic
+control, not a host decision added to dynamic graph replay. Both ablation runs
+passed all four gradient comparisons against quadratic for every variant.
+
+The compiled resource difference supports the loop result:
+
+| Stage | Current loop: registers / spills | Indirect one-task: registers / spills | Original static: registers / spills |
+|---|---:|---:|---:|
+| C16 backward | 157 / 0 | 64 / 0 | 56 / 0 |
+| C32 backward | 240 / 0 | 127 / 0 | 136 / 0 |
+| C64 backward | 255 / 22 | 250 / 0 | 248 / 0 |
+| Multi summaries | 255 / 10 | 185 / 0 | 181 / 0 |
+| Multi scan | 96 / 0 | 96 / 0 | 78 / 0 |
+| Multi backward | 255 / 50 | 255 / 0 | 255 / 10 |
+
+`spills` is Triton's `n_spills` field, not ptxas spill bytes. All 44 distinct
+compiled kernels dumped across both ablation runs were disassembled; none
+contained a SASS CALL instruction. No shared FP32 atomic operation was added.
+These controls establish that the loop increases resource pressure; they do
+not separately quantify time spent spilling versus occupancy or scheduling.
+
+Four new scheduling-probe tests passed normally and independently under
+compute-sanitizer memcheck and synccheck (four passes, zero errors for each
+tool). They cover vocabulary sizes 8/64/256/512 at `[2,2048,2]`, mixed hard
+flags, bucket/multi tasks, direct/indirect and loop/one-task variants, skipping
+empty records, repeated replay and the frozen inactive choice. They compare
+against the unchanged consumer using its existing `1e-4/1e-4` cross-consumer
+contract. These tests exercise isolated frozen plans, not the asynchronous
+full-model lifecycle; they do not resolve the prior full-model memcheck stall
+or RMSNorm racecheck warning. Reproduce with:
+
+```bash
+python -m pytest -q dism_v3/tests/test_graph_event_schedule_probe.py
+/usr/local/cuda-13.1/bin/compute-sanitizer --tool memcheck --error-exitcode 1 \
+  python -m pytest -q dism_v3/tests/test_graph_event_schedule_probe.py
+```
+
+Replace `memcheck` with `synccheck` for the synchronization check. Logs are
+ignored under `build/graph_event_schedule_{tests,memcheck,synccheck}.log`.
+
+An end-to-end confirmation used three fresh processes, in the order 512 CTA,
+32 CTA, planner off. Each ran eight warmup and 32 measured optimizer steps at
+hard probability .95 with the same model/config/packing as above, and includes
+planning, transfers, drain, normalization, clipping and optimizer work:
+
+| Mode | Mean ms/step | Input tokens/s | Event / fallback choices |
+|---|---:|---:|---:|
+| Planner off | 893.735 | 146,657 | 0 / 1536 |
+| Planner on, production 32 CTA | 910.247 | 143,996 | 1419 / 117 |
+| Planner on, diagnostic 512 CTA | 842.224 | 155,626 | 1437 / 99 |
+
+The 512-CTA run improved throughput by 8.08% against 32 CTAs and 6.12% against
+planner off. These are single-run measurements with unlocked clocks and a
+desktop GPU, not a guarantee across shapes, hard probabilities or real training
+data. Absolute times and route rates differ from the earlier run; comparisons
+above use this new set of fresh processes. Faster isolated event backward does
+not translate proportionally to whole-model speed because other components,
+both gated branches and planner synchronization remain.
+
+For this end-to-end experiment only, a scratch driver changed
+`GraphCompactBackward.__init__.__kwdefaults__['ctas']` to 512 and invoked
+`bench_training_cuda_graph.py` with `runpy.run_path(..., run_name='__main__')`.
+The override existed only in that process. Reproduce with the usual benchmark
+arguments `--mode graph --planner --training-step 22887 --warmup 8 --steps 32`;
+at that revision, running the script normally used 32 CTAs. Omit `--planner` for the disabled
+control. Logs remain under ignored `build/graph_event_{512,32,off}_training.log`.
+
+The following grid-sweep command records the pre-optimization experiment;
+reproducing that table requires the consumer source from `947efb4` with the
+diagnostic tool additions. On the optimized consumer, `--event-ctas` controls
+the overflow/other-stage grid while the C16 prefix remains enabled.
+
+```bash
+python dism_v3/tools/bench_graph_hard_routes.py \
+  --model-spec nanochat/configs/sequence_true_125m_valres_mxfp8_ffnonly_slimpajama_3b_h768_h12_i1152_r32.json \
+  --event-ctas 64 128 256 512 1024 2048 --samples 3 --repeats 16 \
+  --dump-kernels --output dism_v3/build/graph_event_cta_sweep.json
+```
+
+For the ablations, use `--event-ctas 512 --schedule-ablations --case-layer 3
+--samples 5 --repeats 32` and a fresh output path. Resource reports are embedded
+in result JSON; optional PTX/cubin dumps sit beside it in an ignored directory.
+A layer-filtered result sums only the selected layer, not all six DISM layers.
+All measurements use synthetic scratch weights/inputs and exclude planning
+and upload from isolated GPU timing. Clocks are not locked. The earlier strict
+numerical and sanitizer limitations remain distinct from these scheduling tests.
+
+## Graph event scheduling optimization (2026-10-23)
+
+The production event consumer now uses 512 CTAs for grid-stride stages and a
+fixed C16 prefix with one task per CTA. The prefix grid is
+`min(8192, ceil(flat_vector_rows / 4))`, where flat rows include training rows, tokens and
+heads. It is computed from tensor shape at capture, never from a live CPU plan.
+The prefix processes `[0, min(count, prefix_capacity))`; a separate 512-CTA
+grid-stride launch processes `[prefix_capacity, count)`. Thus a plan exceeding
+the prefix remains complete, and changing counts/pointers requires no recapture.
+Other bucket/multi stages retain their existing arithmetic and traversal.
+An uncapped prefix launched about 49K empty CTAs per layer at the current full
+shape and regressed the all-soft end-to-end check by 1.4%. The 8192-task cap
+bounds this overhead; the overflow path still handles every remaining task.
+
+Four private gradient clears and the multi tau clear are fused into one kernel.
+The clear runs even when quadratic is selected, but only a successful acquire
+of the frozen event choice permits descriptor/multi-tau access. Single-bucket
+tau clearing is removed: each task overwrites its slot, including the
+single-pair path; the disjoint prefix/overflow partitions cover every task.
+Multi tau still needs initialization because its chunks accumulate atomically.
+The four tau reductions are one launch with a second grid dimension selecting
+the descriptor record. Private gradient addition to quadratic is unchanged.
+
+This reduces event GPU launches from 18 to 9: one fused clear, seven compute
+launches (C16 prefix/overflow, C32, C64, three multi stages), and one tau reduce.
+The C16 prefix has 64 registers and no spills, versus 157 registers for the old
+persistent C16 kernel. Overflow retains 157 registers. Clear/reduce use 30/34
+registers and zero spills. C32/C64 and multi resources remain as previously
+reported, including their existing spills; those are not claimed eliminated.
+All nine production specializations dumped at full shape were disassembled
+with zero SASS CALL instructions. No shared FP32 atomics were introduced.
+
+Attempts using disabled loop-invariant motion, out-of-line task calls, and
+separate single-pair/matrix loops did not improve measured performance and were
+discarded. Only the measured fixed-prefix/overflow strategy is retained.
+`prefix_tasks=False` remains an explicit diagnostic constructor control;
+planner enablement, model configuration, checkpoints and optimizer defaults
+are unchanged. The default planner is still off.
+
+An intermediate uncapped-prefix 24-case comparison (six DISM layers, four packing patterns, eight
+synthetic optimizer warmups, three samples × 16 replays) passed the existing
+`.001/.03` gradient checks. GPU time summed for eight microbatches was 9.533 ms
+event, 11.673 ms with its prefix disabled, 7.503 ms original static event,
+24.382 ms event-selected dual dispatch and 94.804 ms quadratic recomputation.
+These are GPU-only measurements excluding plan construction/upload and are not
+wall-clock step times. Generated timing, numerical and resource evidence is
+under ignored `build/graph_event_optimized_matched*` paths. Final capped-prefix
+measurements are reported separately below.
+
+The final capped-prefix operator/binding/probe/model graph regression passed 96 tests,
+with five existing strict-gradient diagnostics deselected. New checks cover
+odd output tails, rejected invalid descriptors, changing plans, empty plans,
+more C16 tasks than prefix capacity plus overflow grid, and NaN-poisoned tau
+slots before repeated event/quadratic/event choices. Tolerances were not changed.
+The known strict-gradient and full-model RMSNorm racecheck limitations remain.
+
+The production `[8,2048]` model also passed all three eager/graph comparisons
+at hard probabilities 0/~.475/.95 and document counts 16/64/8, with the existing
+loss `.005/.02` and per-parameter gradient `.001/.03` tolerances and exact
+RNG/annealing buffer checks. Routes were `eeeeee`, `eeeeee`, `eeeqqq`; this is
+correctness coverage, not a throughput estimate. Operator/probe memcheck and
+synccheck each passed 27 tests with zero errors (five strict diagnostics
+deselected). These checks do not resolve the earlier intrusive full-model
+memcheck stall or classify the existing RMSNorm racecheck warnings.
+Final logs are ignored under `build/graph_event_final_{tests,memcheck,synccheck,full_model}.log`.
+
+The final capped-prefix 24-case comparison also passed all gradient checks:
+maximum absolute difference 7.42e-7, maximum relative L2 .001688, and minimum
+cosine .9999985 across alternatives versus quadratic. Summed GPU times were
+11.226 ms event, 11.845 ms without its prefix, 7.481 ms static event, 26.777 ms
+event-selected dual dispatch and 95.614 ms quadratic. Compared with the earlier
+93.959 ms original event measurement, the final event path is about 8.4× faster.
+The cap trades some isolated long-document speed for bounded empty-grid cost.
+Final timings/resources and the nine-kernel SASS inspection are under ignored
+`build/graph_event_final_matched*` paths; all nine have zero CALL instructions.
+
+End-to-end results on the same synthetic changing-pack workload:
+
+| Hard probability | Original planner-on ms/step | Optimized planner-on ms/step | Original tokens/s | Optimized tokens/s | Throughput change |
+|---|---:|---:|---:|---:|---:|
+| 0 | 904.149 | 899.898 | 144,967 | 145,652 | +0.47% |
+| ~.475 | 911.073 | 862.046 | 143,866 | 152,048 | +5.69% |
+| .95 | 906.522 | 839.400 | 144,588 | 156,150 | +8.00% |
+
+Each condition runs in a fresh process with 131,072 input tokens/optimizer step.
+At .95 there are eight warmup and 32 measured steps; at 0/.475 there are four
+warmup and 16 measured steps. All samples are retained. Timing includes H2D,
+planner work/drain, forward/backward, normalization, clipping and optimizer.
+The original control loads only `planner_graph.py` from commit `947efb4` in an
+ignored scratch module and substitutes its `GraphCompactBackward` in both the
+kernel module and runtime before invoking the benchmark; other source and
+configuration are identical. This restores the original 32-CTA/18-launch
+consumer rather than merely changing the optimized consumer's grid parameter.
+Final capped tests ran in order 0/.95/.475, after the controls and the uncapped
+screen. Clocks were not locked, and the GPU serves the desktop; the all-soft
+sub-percent change is consistent with noise, not a claimed stable speedup.
+
+At 0/.475 both variants selected event 768/768 times. At .95 the original
+selected event/fallback 1429/107 times versus 1443/93 for the optimized version.
+The measurements cover synthetic scratch training, not a resumed checkpoint or
+real dataset. Logs and aggregate JSON remain ignored under
+`build/graph_event_opt_before_*`, `build/graph_event_opt_capped_*` and
+`build/graph_event_opt_capped_throughput.json`.
+
+Reproduce final correctness and component timing with the local environment
+above:
+
+```bash
+python -m pytest -q dism_v3/tests/test_planner_graph.py \
+  dism_v3/tests/test_planner_graph_binding.py dism_v3/tests/test_graph_event_schedule_probe.py \
+  nanochat/tests/test_cuda_graph.py nanochat/tests/test_planner_cuda_graph.py
+python dism_v3/tools/check_training_cuda_graph.py --planner \
+  --model-spec nanochat/configs/sequence_true_125m_valres_mxfp8_ffnonly_slimpajama_3b_h768_h12_i1152_r32.json \
+  --rows 8 --iterations 3 --microbatches 8
+python dism_v3/tools/bench_graph_hard_routes.py \
+  --model-spec nanochat/configs/sequence_true_125m_valres_mxfp8_ffnonly_slimpajama_3b_h768_h12_i1152_r32.json \
+  --samples 3 --repeats 16 --dump-kernels --output dism_v3/build/graph_event_recheck.json
+```
+
+For sanitizer reproduction, prefix the two operator/probe test files with
+`compute-sanitizer --tool memcheck --error-exitcode 1` or `--tool synccheck`.
+For optimized throughput, invoke `bench_training_cuda_graph.py --mode graph
+--planner --training-step 22887 --warmup 8 --steps 32` with the same model spec;
+use steps 0/11444 and `--warmup 4 --steps 16` for the other rows.

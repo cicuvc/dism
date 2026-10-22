@@ -21,17 +21,22 @@ def annotate_capture(model):
     import torch
     import flash_dism.compiler as compiler
     import flash_dism.graph_gdn as graph_gdn
+    import flash_dism.hard_backward as hard_backward
+    from flash_dism.graph_binding import GraphPlannerBinding
+    from flash_dism.planner_graph import GraphPlannerSlot
+    from flash_dism.kernels.planner_graph import GraphCompactBackward
     from nanochat.models.dism import model as model_module
     changes = []
 
-    def mark(owner, name, category, path):
+    def mark(owner, name, category, path, *, backward=False):
         original = getattr(owner, name)
         had_local = name in vars(owner)
         local_value = vars(owner).get(name)
 
         @functools.wraps(original)
         def wrapped(*args, **kwargs):
-            with torch.cuda.nvtx.range(f'component/{category}/{path}'):
+            prefix = 'component_backward' if backward else 'component'
+            with torch.cuda.nvtx.range(f'{prefix}/{category}/{path}'):
                 return original(*args, **kwargs)
 
         setattr(owner, name, wrapped)
@@ -66,6 +71,11 @@ def annotate_capture(model):
         if hasattr(module, 'depthwise_silu'):
             mark(module, 'depthwise_silu', 'short_convolution', path+'.depthwise_silu')
     mark(compiler, 'voc_forward', 'dism_core', 'voc_forward')
+    mark(GraphPlannerBinding, 'vocabulary', 'dism_core', 'graph_vocabulary')
+    mark(GraphPlannerBinding, 'core', 'dism_core', 'graph_core')
+    mark(GraphPlannerSlot, 'backward', 'hard_dual_dispatch', 'slot_backward', backward=True)
+    mark(GraphCompactBackward, 'backward', 'hard_event', 'graph_event', backward=True)
+    mark(hard_backward, 'backward_hard_recompute', 'hard_quadratic', 'quadratic_recompute', backward=True)
     mark(graph_gdn, 'prepared_gdn', 'gdn_core', 'prepared_gdn')
     mark(model_module, 'packed_document_ce', 'head_loss', 'packed_document_ce')
     try:
@@ -147,6 +157,10 @@ def analyze(path):
     points = [(node, tid, timestamp) for node, (tid, timestamp) in origins.items()]
     node_forward = containing(components, points)
     node_backward = containing(engines, points)
+    # Explicit scopes inside backward override its broad forward-sequence
+    # category. Innermost scope wins, so branch work is not counted twice.
+    explicit_backward = containing(
+        [s for s in scopes if s['name'].startswith('component_backward/')], points)
 
     def component(node):
         seen = set()
@@ -155,6 +169,8 @@ def analyze(path):
                 raise RuntimeError('graph clone cycle')
             seen.add(node)
             node = clones[node]
+        if node in explicit_backward:
+            return 'backward', explicit_backward[node]['name'].split('/')[1]
         if node in node_backward:
             return 'backward', node_backward[node].get('component', 'backward_unmapped')
         if node in node_forward:

@@ -40,6 +40,77 @@ def compare(actual, expected):
             atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.parametrize('tokens', [17, 16385])
+def test_fused_clear_covers_tails_and_ignores_rejected_descriptor(tokens):
+    vectors=[torch.empty((tokens,d),dtype=torch.bfloat16,device='cuda')
+             for d in (32,32,64,64)]
+    descriptor=torch.full((64,),-1,dtype=torch.int64,device='cuda')
+    choice=torch.zeros(1,dtype=torch.int32,device='cuda')
+    consumer=GraphCompactBackward(descriptor,choice,prefix_tasks=True)
+    consumer.backward(*vectors,heads=3)
+    torch.cuda.synchronize()
+    graph=torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        actual=consumer.backward(*vectors,heads=3)
+    for _ in range(3):
+        for output in actual.values():
+            output.fill_(float('nan'))
+        graph.replay()
+        torch.cuda.synchronize()
+        for output in actual.values():
+            assert torch.count_nonzero(output)==0
+
+
+@pytest.mark.parametrize('n', [2048,16384])
+def test_prefix_overflow_and_tau_reinitialization_across_plans(n):
+    planner=NativeTrainingPlanner(4)
+    x=list(fixture(n,'random',b=2,h=2))
+    do=torch.randn_like(x[2])*.2
+    flat=[t.reshape(-1,t.shape[-1]) for t in (*x[:3],do)]
+    desc=torch.zeros(64,dtype=torch.int64,device='cuda')
+    choice=torch.ones(1,dtype=torch.int32,device='cuda')
+    consumer=GraphCompactBackward(desc,choice,prefix_tasks=True)
+    consumer.backward(*flat,heads=2)
+    torch.cuda.synchronize()
+    graph=torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        actual=consumer.backward(*flat,heads=2)
+    patterns=('unique','multi','mixed','empty','unique') if n==2048 else ('unique','empty','unique')
+    for pattern in patterns:
+        for label in x[3:5]:
+            if pattern=='unique':
+                label.copy_(torch.arange(n,device='cuda',dtype=label.dtype))
+            else:
+                label.random_(0,8 if pattern=='multi' else 128)
+        if pattern=='unique':
+            # Remove one valid pair so the last overflow CTA has a partial tail.
+            x[3][0,0,0]=n+1
+        x[-2].fill_(pattern!='empty')
+        host,expected=compact_reference(planner,x,do)
+        if pattern=='unique':
+            # More tasks than both the one-task prefix and the overflow grid.
+            assert host.statistics['bucket_blocks'][0] > flat[0].shape[0]//4+consumer.ctas
+        payload=upload_plan(host,device=x[0].device,stream=torch.cuda.current_stream(),budget_bytes=2**30)
+        tau_ptrs=set(payload.descriptor.reshape(4,16)[:,15].tolist())
+        tau_buffers=[t for t in payload.owners if isinstance(t,torch.Tensor)
+                     and t.is_cuda and t.numel() and t.data_ptr() in tau_ptrs]
+        for selected in (1,0,1):
+            choice.fill_(selected)
+            if selected:
+                desc.copy_(payload.descriptor)
+            else:
+                desc.fill_(-1)  # must not even inspect an unpublished descriptor
+            for tau in tau_buffers:
+                tau.fill_(float('nan'))
+            graph.replay()
+            torch.cuda.synchronize()
+            if selected:
+                compare(actual,expected)
+            else:
+                for output in actual.values():
+                    assert torch.count_nonzero(output)==0
+
+
 def test_descriptor_changes_in_one_graph():
     planner = NativeTrainingPlanner(4)
     x = list(fixture(512, 'random', b=1, h=2))

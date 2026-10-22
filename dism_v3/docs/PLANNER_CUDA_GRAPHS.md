@@ -921,3 +921,29 @@ python dism_v3/tools/check_training_cuda_graph.py --planner \
 CLI `--help`、修改文件的 Python 语法及 `git diff --check` 通过。原始日志保存在忽略的
 `build/planner_graph_p6_*` / `build/planner_graph_p7_*`，不进入 Git。测试未使用真实
 训练任务、数据集或用户 checkpoint，也未修改 TMA 插值实验的默认开关。
+
+## 13. Graph event 调度优化（2026-10-23）
+
+前述 32 CTA 是初版实现的历史参数。当前 consumer 默认使用 512 CTA 的固定
+grid；C16 另加一个由输入形状决定的固定前段，每个 CTA 只处理一个任务，
+前段最多 8192 个任务，限制全 soft / 未命中路由时的空 CTA 开销。超过前段容量
+的任务交给 grid-stride 溢出 kernel。两段不重叠且覆盖完整任务域，
+不读取 CPU planner 的实时任务数，也不修改 graph 的 launch 形状。描述符 ABI、
+发布/acquire、冻结 choice、双分支梯度合并和退休协议保持不变。
+
+梯度清零和 multi tau 清零合为一个 kernel；single bucket 每个 tau 槽由对应
+任务覆盖写，不再提前清零；四个 tau reduction 合为一个二维 grid。默认 event
+路径由 18 个 GPU launch 减为 9 个。C16 前段寄存器从持久循环的 157 降至 64，
+无 spill；C32/C64 和 multi 的既有 spill 保持可见。完整形状下九个编译实例
+均检查 SASS，无 CALL，不新增 shared FP32 atomic。
+
+96 项组合回归通过（5 项既有 strict-gradient 诊断未选入），原始模型 `[8,2048]`
+的三个 loss/梯度/RNG/退火状态对照全部通过。27 项 operator/probe 测试分别在
+memcheck、synccheck 下通过，均为零错误。新增测试覆盖尾块、无效且未发布的
+描述符、超过前段与溢出 grid 的任务数、跨 replay 改 plan、空 plan，以及
+NaN 填充 tau 槽后的重复计算。此前完整模型 memcheck 停滞和 RMSNorm racecheck
+warning 不因这组独立验证而消除。
+
+planner 仍默认关闭；本次没有变更真实训练、checkpoint、优化器或插值后端默认。
+调度边界、资源、逐组件与整步性能的详细证据及复现步骤见
+[CUDA_GRAPHS.md 的优化记录](CUDA_GRAPHS.md#graph-event-scheduling-optimization-2026-10-23)。
