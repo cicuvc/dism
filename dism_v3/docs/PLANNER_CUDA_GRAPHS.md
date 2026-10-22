@@ -2,8 +2,9 @@
 
 记录日期：2026-10-23。代码基线：`510b3eb`。
 
-状态：**P2/P3/P4 已实现独立 runtime 和 hard backward API，验证见第 10 节。**
-P5/P6 模型/runner 接入尚未开始，`PackedTrainingGraph` 仍要求
+状态：**P2/P3/P4 独立 runtime 与 hard backward 已提交为 `5f99856`；
+P5 core/vocabulary 显式 graph binding 已实现，验证见第 11 节。**
+P6 模型/runner 接入尚未开始，`PackedTrainingGraph` 仍要求
 `DISM_HARD_PLANNER=0`。设计文档首次提交为 `b2da895`；P1 结果见第 9 节。
 不据此宣称整模型 planner graph 已支持；默认开关不变，暂不做性能优化。
 
@@ -234,7 +235,7 @@ shared FP32 atomicAdd，不修改已有默认 launches 来追求性能。
 | P2：slot 与真实 planner runtime | 固定 snapshot、epoch/descriptor ownership、现有 native planner 接入、上传、回收、错误通道 | 独立 API 已实现；快照、预算、退役和错误路径验证见第 10 节 |
 | P3：固定 launch 的 event consumer | descriptor 驱动 compact 各阶段、动态有效任务数、workspace/tau 处理 | 独立 API 已实现；同图动态计划、原 compact/FP64 对照见第 10 节 |
 | P4：完整双路径门控 | quadratic 全链路门控、共享采样结果、输出初始化/合并 | 独立 API 已实现；完整 native fallback 门控、packed/双路径测试见第 10 节 |
-| P5：DISM core/vocabulary 接入 | capture 专用 runtime binding、D2H 节点、保存状态和梯度合并 | 基于 P2/P4；单层及多层完整前向反向，连续改变 labels/masks/tau/boundaries，旧 eager/AOT 回归通过 |
+| P5：DISM core/vocabulary 接入 | capture 专用 runtime binding、D2H 节点、保存状态和梯度合并 | 已实现，见第 11 节；单层及多层完整前向反向，连续改变 labels/masks/tau/boundaries，旧 eager/AOT 回归通过 |
 | P6：nanochat runner 接入 | replay 调度、预热与 capture、累积梯度、optimizer 前错误检查、实际 GPU 路由统计 | 基于 P5；小模型后再到当前模型，RNG/恢复/数据位置保持，限定支持组合并显式启用 |
 | P7：完整验收与交付 | 跨轮压力、异常生命周期、数值与 sanitizer 证据、运行文档 | 所有必需项完成后才声明支持；保留默认 planner-disabled 行为，不做吞吐优化 |
 
@@ -636,6 +637,150 @@ python -m pytest dism_v3/tests/test_planner_graph.py -m strict_gradient -q
 
 strict 命令预期保留上述 boundary-dSK 失败。synccheck/racecheck 替换 `--tool`；
 kernel artifacts 可通过 `slot.consumer.last_kernels` 和 native fatbin 用 cuobjdump
-审查。下一阶段是 P5：为 core/vocabulary 建立显式 graph runtime binding，保留
-真实前向的 saved tensors，再处理 soft/hard 梯度合并。P6 之前继续保留 nanochat
+审查。P5 的后续实现见第 11 节；P6 之前继续保留 nanochat
 对 planner-enabled capture 的拒绝。
+
+
+## 11. P5：core/vocabulary 显式 graph binding（2026-10-23）
+
+实现位于 [graph_binding.py](../python/flash_dism/graph_binding.py)，回归位于
+[test_planner_graph_binding.py](../tests/test_planner_graph_binding.py)。本阶段连接完整
+前向、真实 saved tensors、soft backward、event/quadratic hard backward 和梯度合并。
+默认 dispatcher、nanochat runner、模型和 checkpoint 格式均未改变。
+
+### 11.1 接口与捕获
+
+每层使用一个新 slot，显式绑定 `core` 或 `vocabulary`。当前支持 BF16 D32/64、
+R32、DV64，fixed 或 owned fixed-capacity packed layout，固定 true direction、
+per-head tau、原始训练行 hard mask、compact C64 和非阻塞 ready 语义。
+Vocabulary 的 beta 为有限正 host scalar；shared/per-head vocabulary 均可用。
+Hard mask 与 tau 需为连续 CUDA tensor，labels 由共享前向实现规范化。
+
+```python
+from flash_dism.planner_graph import GraphPlannerRuntime
+
+# 所有输入、runtime、binding、layout 和 graph 都由调用者保留。
+# 先令 side stream 等待输入初始化，再在同一 stream 内执行以下流程。
+with GraphPlannerRuntime(workers=16, max_slots=1) as runtime:
+    slot = runtime.slot(rows=rows, heads=heads, row_tokens=row_tokens)
+    binding = slot.bind('vocabulary', layout=graph_layout)  # fixed 时省略 layout
+
+    def step():
+        out = binding.vocabulary(q, k, sq, sk, v, eq, ek, tau,
+                                 direction=direction, hard=hard, beta=1.0)
+        return out, torch.autograd.grad(out, parameters, dout)
+
+    step()  # 完整前向/反向预热；不派发 CPU planner
+    torch.cuda.current_stream().synchronize()
+    graph = torch.cuda.CUDAGraph(keep_graph=True)
+    with torch.cuda.graph(graph, stream=torch.cuda.current_stream()):
+        out, grads = step()
+    graph.instantiate()
+
+    # 每轮：原位更新输入及 owned graph layout，保持原始训练行划分。
+    slot.arm()               # 自动使用 binding 的 layout，排空上一代
+    runtime.replay(graph)    # launch 返回后才派发 CPU planner
+    runtime.drain()          # 读取 grads/路由、optimizer/checkpoint 前的错误边界
+```
+
+Core 使用 `binding.core(*raw, absorbed=False)`，十二个 operands 与 `dism_core`
+一致。两种入口都明确覆盖 direction 为 true，并持有自己的 bool buffer：fixed
+native kernel 读取该 buffer，packed 使用已有 true specialization。不能仅依赖
+native `direction_true` 参数覆盖 fixed tensor 的内容。
+
+新入口使用 eager `autograd.Function`，共享 `compiler.py` 中已有实现；不把 runtime
+mutation 塞入声明 `mutates_args=()` 的 functional custom op。新 binding 明确拒绝
+Dynamo/AOT、无梯度调用、重复 backward 和跨 stream warmup/capture。原 custom op
+名称、schema、fake 实现及默认调度保留，旧 AOT/Inductor 路径继续可用。
+现有 `base_train.py --cuda-graph` 分支本就使用 eager 模型，本入口与其捕获方式一致。
+
+### 11.2 所有权与时序
+
+Binding 和每个 forward ticket 分别由已有 CPU tensor Storage handle 持有。没有新增
+裸指针全局 registry；clone handle 会被拒绝。Ticket 保存本次前向的实际 labels、hard、
+tau 和 slot，capture 时不创建 Future。Vocabulary 在插值后捕获 D2H snapshot，
+core 在 labels 规范化后捕获；soft 与 hard 梯度在同一个 backward 内合并。
+
+一个 binding 只允许一次完整 graph capture；可以在此前多次完整预热。CUDA capture
+ID 检查前后向配对，capture graph identity 检查 replay，故要求 `keep_graph=True`。
+同图所有 bound slots 必须一起提交；错误 graph、漏层、重复绑定、两个 pending
+forward、capture 未完成就 arm、arm 后改 packed table 都会在 launch 前拒绝。
+Packed table 只能原位更新，不能换成另一块 storage。调用者仍需遵守 PyTorch graph
+输入生命周期约束，不得在 replay 在途时改输入、重置 graph 或修改 graph 节点。
+
+`finish` 位于该层梯度合并之后。`drain` 既回收 CPU/upload/消费者，也同步 owning
+stream 的剩余工作；即使 planner 抛错，也先退役再传播错误。没有 Future 的 eager
+预热或丢弃 forward 同样会排空已排队 D2H。异常保持 sticky，不能悄悄当作成功
+fallback；重建 runtime 后再使用。此生命周期不进入 state_dict，也不改变 RNG、
+annealing、optimizer 或 dataloader 位置。
+
+### 11.3 验证及数值边界
+
+最终合并回归 **210 passed，5 strict diagnostics deselected**，其中 P5 binding 新增
+45 项全部通过。旧 eager、AOT/Inductor、fixed-true 插值、planner-disabled 路径及
+P1–P4 回归一并通过；没有把未运行的 strict diagnostics 记为通过。
+
+- 完整 capture/replay 覆盖 core/vocabulary、D32/64、fixed/packed、soft/mixed/hard。
+  每图连续四轮改变输入、labels、hard、tau、文档数和空文档；使用本轮真实计划预发布
+  与延迟生产确定性覆盖 event/fallback。前向与已有路径 bitwise 一致，梯度对照使用
+  `atol=2e-4, rtol=2e-3`；full-hard 的 Q/K/LSE 或词表结构性零梯度严格检查。
+- 两层独立分支和两层串联均捕获完整 autograd。真实异步 producer 连续运行，串联
+  把第一层输出作为第二层 V，验证全部参数梯度及上游梯度传递；不要求异步命中率。
+  另用直接 `.backward()` 验证叶梯度连续累积及层内 finish 之后的完成边界。
+- 独立 maintained FP64 oracle 覆盖 core fixed/packed 三类 hard mask，以及 shared
+  vocabulary 三类 hard mask。沿用 `gradient_acceptance.py`，未修改 oracle 或容差。
+- Vocabulary 的任意 FP32 codebook 会先转 BF16，离散 argmax 可能与原始 FP64
+  codebook 不同。本次原始随机 fixture 的 K labels 有 1/512 不同；旧 eager 路径同样
+  出现最大输出误差 `0.07049325`，使用 BF16 值计算 labels 则无差异。因此 mixed/hard
+  的 FP64 fixture 明确使用 BF16 可精确表示的词表值，soft 保留任意 FP32 值；任意
+  FP32 词表的完整 replay 仍与旧实现独立对照。此项不能视为任意 FP32 输入的端到端
+  FP64 一致性证明，亦未改变生产插值精度。
+
+Memcheck 和 synccheck 各运行 21 项集成/生命周期用例，均为 0 errors。
+完整 racecheck 中 21 项数值测试通过，工具汇总 134 errors / 0 warnings，默认只展示
+前 100 组；随后对后半组 13 项以 `--print-limit 0` 复查，13 passed，67 errors 全部
+展示。两次已展示报告均仅来自 fixed soft F1/F3；原始未显示的 34 组不能逐条还原，
+不把它们记为单独核查通过。两次工具均按预期返回非零退出码 86。
+当前二进制对已展示报告的定位如下：
+
+| 实例 R32/D/DV64 | 报告的访存 PC | 本 kernel 的 ARRIVES 非零立即数 |
+|---|---|---|
+| D32 F1 | read 0x26f0，write 0xf80 / 0xf90 | 0x1120 `[UR5+0x8]` |
+| D64 F1 | read 0x28c0，write 0xfe0 / 0xff0 | 0x1180 `[UR5+0x8]` |
+| D32 F3 | write 0x1100，read 0x3420 | 0x1140 `[UR23+0x8]` |
+| D64 F3 | write 0x1100，read 0x3680 | 0x1140 `[UR23+0x8]` |
+
+这些实例沿用 [SOFT_ONLY_CUDA.md](SOFT_ONLY_CUDA.md) 中已有的疑似工具告警分类，
+**不是零 hazard / clean racecheck 结果**。检查没有过滤 kernel 或抑制报告，分类也
+没有扩大到无对应 ARRIVES 证据的 kernel、memcheck、synccheck 或数值失败。
+
+本阶段仅改 Python 调度、所有权及共享 helper，没有改 CUDA/Triton kernel 数学、
+launch defaults 或编译配置。第 10 节的 spill/CALL 结果和已知 strict dSK boundary
+失败仍适用；没有据此声称性能改进或消除历史数值限制。
+
+P6 尚未开始：`PackedTrainingGraph` 的 planner guard 保留，正式 runner 的梯度累积、
+RNG 恢复、optimizer 错误边界及路由日志仍须在下一阶段接入并验证。
+
+
+### 11.4 检查复现
+
+在 conda `blkw`、本工作树 PYTHONPATH 下运行：
+
+```bash
+export PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat"
+export OMP_NUM_THREADS=1
+export TORCHINDUCTOR_COMPILE_THREADS=1
+python -m pytest dism_v3/tests/test_planner_graph_binding.py -q
+python -m pytest dism_v3/tests/test_module_dynamo.py \
+  dism_v3/tests/test_hard_ready_dispatch.py dism_v3/tests/test_hard_training.py \
+  dism_v3/tests/test_planner_graph.py dism_v3/tests/test_planner_graph_sync.py \
+  dism_v3/tests/test_interp_true.py dism_v3/tests/test_disabled_hard_planner.py -q
+/usr/local/cuda-13.1/bin/compute-sanitizer --tool memcheck --error-exitcode 86 --print-limit 0 \
+  python -m pytest dism_v3/tests/test_planner_graph_binding.py -q \
+  -k 'mixed or chained or error_channel or ownership or unsupported or abandoned or two_layer'
+```
+
+synccheck/racecheck 替换 `--tool`；完整 racecheck 含 soft F1/F3 已知告警，不预期零退出码。
+后半组复查在上述 `-k` 表达式外加括号并追加 `and not full_graph`，使用
+`--tool racecheck --print-limit 0`。日志、SASS 和 ARRIVES 定位保存在忽略的
+`build/planner_graph_p5_*` 中，不进入 Git。

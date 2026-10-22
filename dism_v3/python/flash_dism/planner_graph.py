@@ -158,6 +158,13 @@ class GraphPlannerRuntime:
         with torch.cuda.device(self.device):
             if torch.cuda.is_current_stream_capturing():
                 raise RuntimeError('cannot replay during capture')
+            for slot in slots:
+                if slot._binding is not None:
+                    slot._binding.validate_replay(graph)
+            captures = {s._binding.capture_id for s in slots if s._binding is not None}
+            if any(s not in slots and s._binding is not None and s._binding.capture_id in captures
+                   for s in self.slots):
+                raise RuntimeError('replay must include every bound slot captured in this graph')
             try:
                 graph.replay()
             except Exception:
@@ -215,6 +222,12 @@ class GraphPlannerSlot:
         self.epoch, self.state, self.future = 0, 'idle', None
         self.payload, self.reason, self.error = None, None, None
         self.cancelled = threading.Event()
+        self._binding = None
+
+    def bind(self, kind, *, layout=None):
+        """Bind one core/vocabulary layer to this slot and one CUDA graph."""
+        from .graph_binding import GraphPlannerBinding
+        return GraphPlannerBinding(self, kind, layout=layout)
 
     def _check_open(self):
         if self.runtime.closed:
@@ -225,6 +238,8 @@ class GraphPlannerSlot:
     def arm(self, *, layout=None):
         """Before replay: retire old writers; privately copy CPU document table."""
         self._check_open()
+        if self._binding is not None:
+            layout = self._binding.arm_layout(layout)
         if self.state == 'armed':
             raise RuntimeError('slot is already armed; drain an unsubmitted replay first')
         self.drain()
@@ -248,6 +263,8 @@ class GraphPlannerSlot:
             if cursor != self.rows*self.row_tokens:
                 raise ValueError('documents must cover packed rows')
         self.documents = np.array(documents, dtype=np.int64, copy=True).reshape(-1, 3)
+        if self._binding is not None:
+            self._binding.staged_layout = None if layout is None else layout.table.clone()
         with torch.cuda.device(self.device):
             if self.epoch == 2**32-1:
                 # drain above includes every old writer and reader, before ABA reset.
@@ -286,7 +303,7 @@ class GraphPlannerSlot:
         self.finished.record()
 
     def backward(self, sq, sk, value, dout, iq, ik, hard, tau, *, layout=None, ctas=0):
-        """P4 standalone hard backward; P5 will bind this to core/vocabulary.
+        """Hard backward shared by standalone probes and bound core/vocabulary.
 
         Private branch buffers are initialized each replay; gated kernels never
         clear the other branch. No host route read, wait, or planner inspection.
@@ -342,24 +359,28 @@ class GraphPlannerSlot:
 
     def drain(self):
         """Required before optimizer/checkpoint. Errors are sticky, never fallback-only."""
-        if self.state == 'inflight':
-            try:
-                self.finished.synchronize()
-                if self.future is not None:
-                    self.future.result()
-            except Exception as exc:
-                self.error = exc
-                raise
-            finally:
-                # Future must finish even if GPU completion failed.
+        try:
+            if self.state == 'inflight':
                 try:
+                    self.finished.synchronize()
                     if self.future is not None:
                         self.future.result()
+                except Exception as exc:
+                    self.error = exc
+                    raise
                 finally:
-                    self.upload.synchronize()
-                    self.state, self.future, self.payload = 'idle', None, None
-        elif self.state == 'armed':
-            # No replay was submitted: never wait on an unrecorded external event.
-            self.state = 'idle'
-        if self.error is not None:
-            raise RuntimeError('graph planner slot failed; rebuild runtime') from self.error
+                    # Future must finish even if GPU completion failed.
+                    try:
+                        if self.future is not None:
+                            self.future.result()
+                    finally:
+                        self.upload.synchronize()
+                        self.state, self.future, self.payload = 'idle', None, None
+            elif self.state == 'armed':
+                # No replay was submitted: never wait on an unrecorded external event.
+                self.state = 'idle'
+            if self.error is not None:
+                raise RuntimeError('graph planner slot failed; rebuild runtime') from self.error
+        finally:
+            if self._binding is not None:
+                self._binding.retire_host_work()

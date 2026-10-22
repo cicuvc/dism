@@ -96,7 +96,7 @@ def _voc_forward_impl(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: to
                 v: torch.Tensor, eq: torch.Tensor, ek: torch.Tensor, tau: torch.Tensor,
                 beta: torch.Tensor, direction: torch.Tensor, hard: torch.Tensor,
                 boundaries: Optional[torch.Tensor], layout: Optional[torch.Tensor],
-                need_backward: bool, direction_true=False) -> list[torch.Tensor]:
+                need_backward: bool, direction_true=False, planner=None) -> list[torch.Tensor]:
     from .hard_training import default_hard_planner, layout_from_table
     from .hard_forward import forward_hard
     b = float(beta)
@@ -115,7 +115,7 @@ def _voc_forward_impl(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: to
         qv, kv = select_operands(q, k, qsk, ksk, direction)
     table = layout.view(-1, 7) if layout is not None else _table(boundaries, q.shape[1])
     pack = layout_from_table(table, q.shape[1])
-    ticket = (default_hard_planner(q.device).submit(iq, ik, hard, tau, layout=pack)
+    ticket = ((default_hard_planner(q.device) if planner is None else planner).submit(iq, ik, hard, tau, layout=pack)
               if need_backward and q.shape[1] else None)
     output, norm, state = cu.core_forward(
         (qv, kv, sq, sk, v, lq.transpose(1, 2), lk.transpose(1, 2),
@@ -298,21 +298,26 @@ def voc_forward(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundaries,
     return entry(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward)
 
 
-@torch.library.custom_op('flash_dism::core_forward_hybrid_v2', mutates_args=())
-def _core_forward(raw: list[torch.Tensor], table: Optional[torch.Tensor], ctas: int,
-                  absorbed: bool, need_backward: bool) -> list[torch.Tensor]:
+def _core_forward_impl(raw: list[torch.Tensor], table: Optional[torch.Tensor], ctas: int,
+                       absorbed: bool, need_backward: bool, *, planner=None, direction_true=False) -> list[torch.Tensor]:
     from .hard_training import default_hard_planner, layout_from_table
     from .hard_forward import forward_hard
     q,k,sq,sk,v,lq,lk,iq,ik,direction,hard,tau = raw
     pack = layout_from_table(table,q.shape[1])
     cu.prepare_operands(raw,table is not None,absorbed)
     iq_c,ik_c=iq.to(torch.int32).contiguous(),ik.to(torch.int32).contiguous()
-    ticket = (default_hard_planner(q.device).submit(iq_c,ik_c,hard,tau,layout=pack)
+    ticket = ((default_hard_planner(q.device) if planner is None else planner).submit(iq_c,ik_c,hard,tau,layout=pack)
               if need_backward and q.shape[1] else None)
-    out,norm,state = cu.core_forward(raw,table,ctas,True,False,absorbed,False,False)
+    out,norm,state = cu.core_forward(raw,table,ctas,True,False,absorbed,direction_true,False)
     combined = out+forward_hard(sq.contiguous(),sk.contiguous(),v.contiguous(),iq_c,ik_c,
                                 hard.contiguous(),tau.contiguous(),layout=pack,ctas=ctas)[0] if q.shape[1] else out.clone()
     return [combined,state['vertical'],state['operands'][12],out,norm,cu.hold_training_plan(ticket)]
+
+
+@torch.library.custom_op('flash_dism::core_forward_hybrid_v2', mutates_args=())
+def _core_forward(raw: list[torch.Tensor], table: Optional[torch.Tensor], ctas: int,
+                  absorbed: bool, need_backward: bool) -> list[torch.Tensor]:
+    return _core_forward_impl(raw, table, ctas, absorbed, need_backward)
 
 
 @_core_forward.register_fake
@@ -330,15 +335,14 @@ def _core_fake(raw,table,ctas,absorbed,need_backward):
             q.new_empty((b,h,n),dtype=torch.float32),torch.empty(1,device='cpu',dtype=torch.int64)]
 
 
-@torch.library.custom_op('flash_dism::core_backward_hybrid_v2', mutates_args=())
-def _core_backward(raw: list[torch.Tensor], saved: list[torch.Tensor], table: Optional[torch.Tensor],
-                   ctas: int, absorbed: bool, dout: torch.Tensor) -> list[torch.Tensor]:
+def _core_backward_impl(raw: list[torch.Tensor], saved: list[torch.Tensor], table: Optional[torch.Tensor],
+                        ctas: int, absorbed: bool, dout: torch.Tensor, *, direction_true=False) -> list[torch.Tensor]:
     _,vertical,boundary,out,norm,handle=saved
     prepared=list(cu.prepare_operands(raw,table is not None,absorbed))
     prepared.append(boundary)
     dout=dout.to(torch.bfloat16).contiguous()
     g,_=cu.core_backward(prepared,vertical,out,norm.flatten() if table is not None else norm,
-                         dout,table,ctas,False,False)
+                         dout,table,ctas,False,False,direction_true)
     ticket=cu.get_training_plan(handle)
     if ticket is not None:
         from .hard_backward import backward_hard_recompute
@@ -350,6 +354,12 @@ def _core_backward(raw: list[torch.Tensor], saved: list[torch.Tensor], table: Op
             g[name]=g[name].float()+hg[name]
     return [g[name].to(raw[i].dtype).contiguous() for name,i in
             zip(('q_vec','k_vec','sq_vec','sk_vec','v','q_lse','k_lse','rtau'),(0,1,2,3,4,5,6,11))]
+
+
+@torch.library.custom_op('flash_dism::core_backward_hybrid_v2', mutates_args=())
+def _core_backward(raw: list[torch.Tensor], saved: list[torch.Tensor], table: Optional[torch.Tensor],
+                   ctas: int, absorbed: bool, dout: torch.Tensor) -> list[torch.Tensor]:
+    return _core_backward_impl(raw, saved, table, ctas, absorbed, dout)
 
 
 @_core_backward.register_fake
