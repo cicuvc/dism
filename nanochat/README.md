@@ -29,6 +29,14 @@ These are historical remote results, not fresh evaluation of this tree.
 
 ## Current training defaults
 
+The current 123M configuration
+`configs/sequence_true_125m_valres_mxfp8_ffnonly_slimpajama_3b_h768_h12_i1152_r32.json`
+sets `layer_layout="gggddddddggg"`, where `g` is pure GDN and `d` is GDN+DISM.
+Both layer types still occur six times. Configs without `layer_layout` retain
+the original `ggggggdddddd` order; the explicit layout is part of the model
+fingerprint, so an old checkpoint is not silently reinterpreted as this layout.
+Postnorm, fixed true direction, row sampling and value residual remain unchanged.
+
 `--cuda-graph` optionally captures packed DISM microbatch forward/backward with
 `DISM_HARD_PLANNER=0`, including GDN and MXFP8 FFN. Changed document boundaries
 are validated and staged before replay; optimizer, loader and checkpoint flows

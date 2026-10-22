@@ -223,9 +223,10 @@ class DismLM(nn.Module):
             config.vocab_size, config.n_embd, dtype=core_dtype
         )
         blocks = []
-        for i in range(config.n_layer):
+        layout = config.layer_layout or ('g' * (config.n_layer // 2) + 'd' * (config.n_layer // 2))
+        for i, kind in enumerate(layout):
             layer_config = c
-            if i < config.n_layer // 2:
+            if kind == 'g':
                 import copy
                 layer_config = copy.copy(c)
                 layer_config.attention_type = "pure_gdn"

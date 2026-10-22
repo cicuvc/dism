@@ -23,6 +23,36 @@ def batch(rows=1, n=256):
     return ids,targets,bounds
 
 
+def test_middle_dism_layout_replay(monkeypatch):
+    from nanochat.models import ModelSpec
+    monkeypatch.setenv('DISM_HARD_PLANNER','0')
+    layout='gggddddddggg'
+    model,reference=model_pair(True,True,layers=12,layout=layout)
+    actual=''.join('g' if getattr(l.attn,'is_pure_mixer',False) else 'd' for l in model.layers)
+    assert actual==layout
+    serialized=ModelSpec.from_dict(model.model_spec.to_dict())
+    assert serialized.config['layer_layout']==layout
+    legacy=ModelSpec(serialized.architecture,serialized.architecture_version,
+                     {k:v for k,v in serialized.config.items() if k!='layer_layout'})
+    assert legacy.fingerprint()!=serialized.fingerprint()
+    model.set_training_step(5)
+    reference.set_training_step(5)
+    data=batch(rows=2)
+    with PackedTrainingGraph(model,*data,planner=True,planner_workers=2,
+                             microbatches=8,warmup=1) as graph:
+        assert tuple(b is not None for b in graph.bindings)==tuple(c=='d' for c in layout)
+        loss,count=graph.forward_backward(*data)
+        graph.drain()
+        expected,n=reference(*data[:2],cu_seqlens=data[2],loss_reduction='document_sum')
+        (expected/8).backward()
+        torch.testing.assert_close(loss,expected,atol=.005,rtol=.02)
+        torch.testing.assert_close(count,n,atol=0,rtol=0)
+        for (name,p),(_,q) in zip(model.named_parameters(),reference.named_parameters()):
+            torch.testing.assert_close(p.grad,q.grad,atol=.001,rtol=.03,msg=name)
+        assert model.rng_counter.item()==reference.rng_counter.item()==1
+        assert sum(graph.route_counts.values())==6
+
+
 def test_model_routes_and_snapshots(monkeypatch):
     from flash_dism.planner_graph import upload_plan
     from flash_dism.hard_training import take_route_log

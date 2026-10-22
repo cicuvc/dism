@@ -5,6 +5,11 @@ capture for the packed DISM model with `DISM_HARD_PLANNER=0`. The selected
 FFN-only MXFP8 model uses its existing fused AdamW optimizer. Without the flag,
 training continues to use `torch.compile`; GDN remains outside Dynamo.
 
+Layer order comes from the ModelSpec. The current 123M config explicitly uses
+`gggddddddggg` (`g` = GDN, `d` = GDN+DISM). Earlier measurements below used the
+original `ggggggdddddd`; reproduce them with a copy of the config omitting
+`layer_layout`. The final section records the reordered model's measurements.
+
 The graph returns the document-loss numerator and valid-document count and
 accumulates gradients divided by the existing accumulation count. Document
 normalization, clipping, learning-rate updates, optimizer/FP8 updates, evaluation,
@@ -362,3 +367,82 @@ a classified false positive**. Earlier fixed-soft racecheck and strict numerical
 limitations also remain. See [P6/P7 evidence and reproduction](PLANNER_CUDA_GRAPHS.md)
 for scope, exact results and commands. No user checkpoint or training task was
 accessed or restarted.
+
+## Middle DISM layout: planner throughput (2026-10-23)
+
+After the P6/P7 commit `4b2d32d`, the current 123M config was changed to
+`layer_layout="gggddddddggg"`: layers 1–3 and 10–12 are pure GDN; layers 4–9
+are GDN+DISM. The parameter count remains 123,473,088. The optional layout
+field validates length, equal g/d counts and a leading g for value residual.
+Omitting it preserves the old `ggggggdddddd` model; saved ModelSpecs and
+fingerprints are not rewritten or migrated.
+
+The new arrangement passed 23 targeted layout/registry/resume tests, including
+12-layer MXFP8 graph versus eager loss and gradients. The full `[8,2048]` model
+also passed all three synthetic correctness steps (document counts 16/64/8,
+hard probabilities 0/~.475/.95) at the existing loss `.005/.02` and gradient
+`.001/.03` tolerances. Kernel math, launch defaults, interpolation backend and
+default planner enablement are unchanged.
+
+Throughput used an otherwise idle RTX 5090, BF16/MXFP8 FFN and optimizer,
+CUDA Graph, eight `[8,2048]` microbatches per optimizer step (131,072 input
+tokens). Packing cycles 8/16/32/64 documents twice. Each of the nine conditions
+ran in a separate process with eight warmup steps and 32 measured steps; all
+samples were retained. Timing includes H2D, metadata staging, planner work and
+drain, accumulated forward/backward, document normalization, clipping, optimizer
+and gradient clearing. It excludes setup/capture, data loading, evaluation,
+checkpointing and instrumentation. Inputs are repeated synthetic batches with
+random initial weights and real optimizer updates, not a user training run.
+CPU intra-op threads = 1, native planner workers = 16, compact C64/ready, budget
+= 1 GiB, and interpolation remains split dQ/dKV.
+
+| Hard probability | Old layout, planner on tokens/s | New layout, planner off tokens/s | New layout, planner on tokens/s | New planner-on ms/step |
+|---|---:|---:|---:|---:|
+| 0 | 136,724 | 137,854 | 137,192 | 955.39 |
+| 0.475 | 135,741 | 135,181 | 135,494 | 967.37 |
+| 0.95 | 135,414 | 139,101 | 135,883 | 964.59 |
+
+There are 1,536 sampled layer routes per condition (32 steps × 8 microbatches ×
+6 DISM layers). At probability 0 and .475 both planner-enabled layouts selected
+event 1,536/1,536 times. At .95 the old layout selected event 1,085/1,536 times
+(70.64%), versus 1,532/1,536 (99.74%) for the new layout. All-soft event choices
+are empty hard plans, not useful-hard-work counts.
+
+Moving DISM to the middle substantially improved readiness in the .95 test,
+but measured throughput changed only +0.35% versus the old planner-enabled
+layout. Against the same new layout with planner disabled, planner enabled
+changed throughput by −0.48%, +0.23%, −2.31% at probabilities 0/.475/.95.
+Thus this run shows no clear throughput benefit from reordering; improved
+event selection alone did not produce a comparable speedup. It does not isolate
+the cost responsible for the remaining overhead.
+
+Clocks were not locked and the GPU also serves the desktop. Sub-percent changes
+should not be treated as a stable gain. To reduce one-way order bias, execution
+order was new-on/old-on/new-off at 0, old-on/new-off/new-on at .475, and
+new-off/new-on/old-on at .95. New planner-on median step times were
+955.15/967.39/963.86 ms. Peak reserved memory across the nine runs was
+13,414–13,720 MiB; graph-owned storage is not fully represented by allocator-active
+figures after resetting peak statistics.
+
+Reproduce from the repository root using conda `blkw` and the local imports:
+
+```bash
+export PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat"
+export DISM_HARD_PLANNER=0
+export DISM_HARD_BACKWARD=ready
+export DISM_PLANNER_COMPACT=1
+export DISM_PLANNER_WORKERS=16
+export OMP_NUM_THREADS=1
+export TORCHINDUCTOR_COMPILE_THREADS=1
+python dism_v3/tools/bench_training_cuda_graph.py \
+  --model-spec nanochat/configs/sequence_true_125m_valres_mxfp8_ffnonly_slimpajama_3b_h768_h12_i1152_r32.json \
+  --mode graph --planner --training-step 11444 --warmup 8 --steps 32
+```
+
+Use steps 0/22887 for the other probabilities. Omit `--planner` for the new
+disabled control. For the old layout, copy this JSON into ignored scratch
+storage, remove `layer_layout`, and run with that copy and `--planner`.
+The tool reports actual layout, parameter count and measured-only route counts.
+Generated logs/results remain under ignored `build/middle_dism_*` paths.
+The prior strict numerical and sanitizer limitations remain as documented above;
+this layout change did not modify any kernel or attempt to suppress those reports.

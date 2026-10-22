@@ -5,6 +5,7 @@
     "sequence_len": 2048,
     "vocab_size": 32000,
     "n_layer": 12,
+    "layer_layout": "gggddddddggg",
     "n_head": 12,
     "n_embd": 768,
     "intermediate_size": 1152,

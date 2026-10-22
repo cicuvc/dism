@@ -5,8 +5,10 @@
 - Read the selected version's AGENTS.md and docs/AGENTS.md before editing.
 - Use only this worktree's flash_dism and cu_flash_dism on PYTHONPATH.
 - nanochat originates from remote randomness-sequence_true-786m. Preserve
-  postnorm, first-half GDN/rear-half GDN+DISM, fixed true direction and
+  postnorm, explicit layer_layout (omitted means first-half GDN/rear-half GDN+DISM),
+  fixed true direction and
   sequence-level hard sampling (packed training rows, NOT document boundaries).
+  The current 123M config explicitly uses gggddddddggg (g=GDN, d=GDN+DISM).
 - Preserve checkpoint RNG counters, annealing buffers, no-decay grouping,
   optimizer schema and consumed dataloader position. Never silently reset them.
 - Use conda blkw locally and each version's build.py. CUDA device translation

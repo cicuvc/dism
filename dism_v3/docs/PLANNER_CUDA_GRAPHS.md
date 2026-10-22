@@ -850,6 +850,8 @@ planner 和 Dynamo。随后增加的预算/取消测试及 enabled-environment �
 不加载用户 checkpoint、不读取数据集。配置为
 `sequence_true_125m_valres_mxfp8_ffnonly_slimpajama_3b_h768_h12_i1152_r32.json`，
 123,473,088 参数、12 层（6 层 DISM）、`[8,2048]`、backward scale `1/8`。
+本节记录时配置未指定 `layer_layout`，实际为 `ggggggdddddd`；随后用户要求改为
+`gggddddddggg` 的验证与吞吐结果另见 [CUDA_GRAPHS.md](CUDA_GRAPHS.md)。
 先保存 eager quadratic 参考，再释放 eager 模型；每轮原位复制该参考的 master
 和 quantized weights，避免独立 AdamW 轨迹差异混入同输入梯度对照。
 

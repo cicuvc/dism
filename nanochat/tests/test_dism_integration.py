@@ -31,6 +31,13 @@ def test_capped_hard_schedule_and_state():
         assert holder.hard_probability.item() == pytest.approx(expected)
 
 
+@pytest.mark.parametrize('layout',['', 'gggddddddgg', 'dddggggggddd', 'gggggggggggg', 'gggddddddggx'])
+def test_invalid_layer_layout(layout):
+    from nanochat.models.dism import DismConfig
+    with pytest.raises(ValueError,match='layer_layout'):
+        DismConfig(layer_layout=layout)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA')
 def test_dism_compiled_resume(tmp_path):
     pytest.importorskip('flash_dism')

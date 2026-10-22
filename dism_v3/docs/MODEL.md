@@ -6,8 +6,10 @@ baseline and its scaling variants.
 ## Architecture
 
 - Post-norm `DismBlock` with RMSNorm, mixer branch and SwiGLU MLP.
-- nanochat pretraining uses the first half as pure GDN and the rear half as
-  DISM+GDN.
+- nanochat's original layout is first-half pure GDN and rear-half DISM+GDN.
+  The current 123M config explicitly sets `layer_layout="gggddddddggg"`, with
+  `g` = pure GDN and `d` = GDN+DISM. The layout is part of model identity;
+  configs omitting it retain their original ordering.
 - DISM and GDN share the q/k input linear projections inside a hybrid layer.
 - Value residual is enabled and initialized with gate bias 2.0.
 - Q/K codebooks are independent per head. The selected vocabulary is dense,
@@ -25,8 +27,8 @@ baseline and its scaling variants.
 | Type | Class | Use |
 |---|---|---|
 | `dism` | `DismAttention` | DISM-only diagnostics and operator tests |
-| `hybrid_gdn` | `DismGdnAttention` | selected rear-half pretraining layer |
-| `pure_gdn` | `PureGdnAttention` | selected first-half pretraining layer |
+| `hybrid_gdn` | `DismGdnAttention` | `d` pretraining layer |
+| `pure_gdn` | `PureGdnAttention` | `g` pretraining layer |
 
 All training tensors use BNHD vectors and BHN labels/LSE. Training lengths and
 packed boundaries must be multiples of 256. The fixed and packed operators use

@@ -7,6 +7,8 @@
   RNG counter and hard-probability/training-step buffers across save/load.
 - Sequence hard means a packed batch row, not a document. Direction is true in
   the selected config. Single-forward loss, no implicit dual-path switch.
+- Explicit layer_layout reorders g=GDN and d=GDN+DISM; keep it in model identity.
+  Missing layout retains the original first-half GDN/rear-half GDN+DISM order.
 - Prefetch must not advance the checkpoint's consumed data position. Retain
   saved next batch, loader state and all RNG states. Run resume tests on changes.
 - GDN is intentionally outside Dynamo fullgraph; do not force fullgraph=True

@@ -36,15 +36,18 @@ def main():
     parser.add_argument('--nsys', action='store_true',
                         help='Trace graph capture origins and measured steps with Nsight Systems')
     parser.add_argument('--interp-backend', choices=['split','tma'], default='split')
+    parser.add_argument('--planner', action='store_true', help='Enable the explicit graph planner')
     args = parser.parse_args()
+    if args.planner and args.mode != 'graph':
+        parser.error('--planner requires --mode graph')
     if args.interp_backend == 'tma':
         from functools import partial
         from flash_dism.kernels import interp_bwd_split
         interp_bwd_split.emb_bwd_split = partial(interp_bwd_split.emb_bwd_split, fuse_dq_tma=True)
     if min(args.rows, args.microbatches, args.warmup, args.steps, args.threads) < 1:
         parser.error('counts must be positive')
-    if os.environ.get('DISM_HARD_PLANNER', '0') != '0':
-        parser.error('requires DISM_HARD_PLANNER=0')
+    if not args.planner and os.environ.get('DISM_HARD_PLANNER', '0') != '0':
+        parser.error('requires DISM_HARD_PLANNER=0 unless --planner is explicitly set')
     if args.nsys and args.mode != 'graph':
         parser.error('--nsys requires --mode graph')
 
@@ -97,90 +100,101 @@ def main():
     setup_start = time.perf_counter()
     graph = None
     runner = model
-    if args.mode == 'compile':
-        from torch.fx.experimental import _config as shape_config
-        shape_config.use_duck_shape = False
-        torch._dynamo.config.capture_dynamic_output_shape_ops = True
-        torch._inductor.config.compile_threads = 1
-        runner = torch.compile(model, dynamic=model.dynamic_compile)
-    elif args.mode == 'graph':
-        bounds = stage(batches[0])
-        if args.nsys:
-            from profile_training_cuda_graph import annotate_capture
-            torch.cuda.synchronize()
-            torch.cuda.profiler.start()
-            with annotate_capture(model), torch.autograd.profiler.emit_nvtx():
-                graph = PackedTrainingGraph(model, ids_gpu, labels_gpu, bounds,
-                                            microbatches=args.microbatches)
-            for name in ('_host_boundaries', '_stage'):
-                original = getattr(graph, name)
+    try:
+        if args.mode == 'compile':
+            from torch.fx.experimental import _config as shape_config
+            shape_config.use_duck_shape = False
+            torch._dynamo.config.capture_dynamic_output_shape_ops = True
+            torch._inductor.config.compile_threads = 1
+            runner = torch.compile(model, dynamic=model.dynamic_compile)
+        elif args.mode == 'graph':
+            bounds = stage(batches[0])
+            if args.nsys:
+                from profile_training_cuda_graph import annotate_capture
+                torch.cuda.synchronize()
+                torch.cuda.profiler.start()
+                with annotate_capture(model), torch.autograd.profiler.emit_nvtx():
+                    graph = PackedTrainingGraph(model, ids_gpu, labels_gpu, bounds,
+                                                microbatches=args.microbatches, planner=args.planner)
+                for name in ('_host_boundaries', '_stage'):
+                    original = getattr(graph, name)
 
-                def marked(*a, _fn=original, _name=name, **kw):
-                    with scope('profile/metadata/'+_name):
-                        return _fn(*a, **kw)
+                    def marked(*a, _fn=original, _name=name, **kw):
+                        with scope('profile/metadata/'+_name):
+                            return _fn(*a, **kw)
 
-                setattr(graph, name, marked)
-        else:
-            graph = PackedTrainingGraph(model, ids_gpu, labels_gpu, bounds,
-                                        microbatches=args.microbatches)
-
-    def step():
-        model.set_training_step(args.training_step)
-        document_step = DocumentLossAccumulator(args.microbatches, 'cuda')
-        for batch in batches:
-            with scope('profile/input_h2d'):
-                bounds = stage(batch)
-            if graph is None:
-                loss, count = runner(ids_gpu, labels_gpu, cu_seqlens=bounds,
-                                     loss_reduction='document_sum')
-                document_step.add(loss, count)
-                (loss/args.microbatches).backward()
+                    setattr(graph, name, marked)
             else:
-                with scope('profile/graph_forward_backward'):
-                    loss, count = graph.forward_backward(ids_gpu, labels_gpu, bounds)
-                with scope('profile/loss_accumulate'):
-                    document_step.add(loss, count)
-        with scope('profile/document_normalize'):
-            loss = document_step.finalize(model.parameters())
-        with scope('profile/gradient_clip'):
-            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.).item()
-        if not math.isfinite(norm):
-            raise FloatingPointError(f'nonfinite gradient norm: {norm}')
-        with scope('profile/optimizer'):
-            optimizer.step()
-        with scope('profile/gradient_clear'):
-            model.zero_grad(set_to_none=True)
-        value = loss.item()
-        if not math.isfinite(value):
-            raise FloatingPointError(f'nonfinite loss: {value}')
-        return value
+                graph = PackedTrainingGraph(model, ids_gpu, labels_gpu, bounds,
+                                            microbatches=args.microbatches, planner=args.planner)
 
-    for _ in range(args.warmup):
-        step()
-    torch.cuda.synchronize()
-    setup_seconds = time.perf_counter()-setup_start
-    torch.cuda.reset_peak_memory_stats()
-    elapsed = []
-    for index in range(args.steps):
-        start = time.perf_counter()
-        with scope(f'profile/step/{index}'):
-            loss = step()
-            torch.cuda.synchronize()
-        elapsed.append(time.perf_counter()-start)
-        print(json.dumps(dict(iteration=index, seconds=elapsed[-1], loss=loss)), flush=True)
-    if args.nsys:
-        torch.cuda.profiler.stop()
-    tokens = args.rows*length*args.microbatches
-    print(json.dumps(dict(result=True, **vars(args), tokens_per_step=tokens,
-                         hard_probability=model.hard_probability.item(),
-                         mean_ms=statistics.mean(elapsed)*1000,
-                         median_ms=statistics.median(elapsed)*1000,
-                         min_ms=min(elapsed)*1000, max_ms=max(elapsed)*1000,
-                         tokens_per_second=tokens/statistics.mean(elapsed),
-                         peak_allocated_mib=torch.cuda.max_memory_allocated()/2**20,
-                         peak_reserved_mib=torch.cuda.max_memory_reserved()/2**20,
-                         setup_and_warmup_seconds=setup_seconds,
-                         torch_version=torch.__version__, gpu=torch.cuda.get_device_name())), flush=True)
+        def step():
+            model.set_training_step(args.training_step)
+            document_step = DocumentLossAccumulator(args.microbatches, 'cuda')
+            for batch in batches:
+                with scope('profile/input_h2d'):
+                    bounds = stage(batch)
+                if graph is None:
+                    loss, count = runner(ids_gpu, labels_gpu, cu_seqlens=bounds,
+                                         loss_reduction='document_sum')
+                    document_step.add(loss, count)
+                    (loss/args.microbatches).backward()
+                else:
+                    with scope('profile/graph_forward_backward'):
+                        loss, count = graph.forward_backward(ids_gpu, labels_gpu, bounds)
+                    with scope('profile/loss_accumulate'):
+                        document_step.add(loss, count)
+            if graph is not None:
+                with scope('profile/planner_drain'):
+                    graph.drain()
+            with scope('profile/document_normalize'):
+                loss = document_step.finalize(model.parameters())
+            with scope('profile/gradient_clip'):
+                norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.).item()
+            if not math.isfinite(norm):
+                raise FloatingPointError(f'nonfinite gradient norm: {norm}')
+            with scope('profile/optimizer'):
+                optimizer.step()
+            with scope('profile/gradient_clear'):
+                model.zero_grad(set_to_none=True)
+            value = loss.item()
+            if not math.isfinite(value):
+                raise FloatingPointError(f'nonfinite loss: {value}')
+            return value
+
+        for _ in range(args.warmup):
+            step()
+        torch.cuda.synchronize()
+        setup_seconds = time.perf_counter()-setup_start
+        torch.cuda.reset_peak_memory_stats()
+        routes_before = dict(graph.route_counts) if graph is not None else {}
+        elapsed = []
+        for index in range(args.steps):
+            start = time.perf_counter()
+            with scope(f'profile/step/{index}'):
+                loss = step()
+                torch.cuda.synchronize()
+            elapsed.append(time.perf_counter()-start)
+            print(json.dumps(dict(iteration=index, seconds=elapsed[-1], loss=loss)), flush=True)
+        if args.nsys:
+            torch.cuda.profiler.stop()
+        tokens = args.rows*length*args.microbatches
+        print(json.dumps(dict(result=True, **vars(args), tokens_per_step=tokens,
+                             layer_layout=''.join('g' if getattr(l.attn, 'is_pure_mixer', False) else 'd' for l in model.layers),
+                             parameters=sum(p.numel() for p in model.parameters()),
+                             routes=({k: v-routes_before[k] for k,v in graph.route_counts.items()} if graph is not None else None),
+                             hard_probability=model.hard_probability.item(),
+                             mean_ms=statistics.mean(elapsed)*1000,
+                             median_ms=statistics.median(elapsed)*1000,
+                             min_ms=min(elapsed)*1000, max_ms=max(elapsed)*1000,
+                             tokens_per_second=tokens/statistics.mean(elapsed),
+                             peak_allocated_mib=torch.cuda.max_memory_allocated()/2**20,
+                             peak_reserved_mib=torch.cuda.max_memory_reserved()/2**20,
+                             setup_and_warmup_seconds=setup_seconds,
+                             torch_version=torch.__version__, gpu=torch.cuda.get_device_name())), flush=True)
+    finally:
+        if graph is not None:
+            graph.close()
 
 
 if __name__ == '__main__':

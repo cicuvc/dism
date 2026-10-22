@@ -9,11 +9,11 @@ from nanochat.cuda_graph import PackedTrainingGraph
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 
 
-def model_pair(mxfp8, planner=False, layers=2):
+def model_pair(mxfp8, planner=False, layers=2, layout=None):
     torch.manual_seed(981)
     spec = ModelSpec('dism_gdn_hybrid', 1, dict(
         sequence_len=512, vocab_size=128, n_layer=layers, n_head=4,
-        n_embd=128, intermediate_size=256, head_dim=32, value_dim=64 if planner else 32,
+        layer_layout=layout, n_embd=128, intermediate_size=256, head_dim=32, value_dim=64 if planner else 32,
         readout_dim=32 if planner else 16, qk_vocab_size=32, anneal_steps=10,
         hard_prob_max=.95, mxfp8=mxfp8, mxfp8_projections=False,
         mxfp8_optimizer=mxfp8,

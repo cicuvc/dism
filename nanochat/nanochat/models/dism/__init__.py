@@ -8,9 +8,9 @@ from nanochat.models import ModelCapabilities, register_model
 class DismConfig:
     """Scale-clean configuration for the selected valres architecture.
 
-    Layout and routing are deliberately not configurable: post-norm,
-    first-half pure GDN, rear-half GDN+DISM, fixed true direction and
-    sequence-level hard sampling are the deployed model contract.
+    Post-norm, fixed true direction and sequence-row hard sampling are fixed.
+    layer_layout reorders the equal numbers of pure GDN (g) and GDN+DISM (d)
+    layers. Omission preserves the original first-half GDN layout.
     """
 
     sequence_len: int = 1024
@@ -36,6 +36,7 @@ class DismConfig:
     mxfp8: bool = False
     mxfp8_projections: bool = False
     mxfp8_optimizer: bool = False
+    layer_layout: str | None = None
 
     def __post_init__(self):
         self.softcap = float(self.softcap)
@@ -47,6 +48,13 @@ class DismConfig:
             raise ValueError("sequence_len must be a positive multiple of 256")
         if self.n_layer <= 0 or self.n_layer % 2:
             raise ValueError("n_layer must be positive and even")
+        if self.layer_layout is not None:
+            if (not isinstance(self.layer_layout, str)
+                    or len(self.layer_layout) != self.n_layer
+                    or set(self.layer_layout) != {'g', 'd'}
+                    or not self.layer_layout.startswith('g')
+                    or self.layer_layout.count('d') != self.n_layer // 2):
+                raise ValueError('layer_layout must start with g and contain equal numbers of g/d, one per layer')
         if not self.post_norm:
             raise ValueError("the selected DISM architecture requires post_norm=True")
         if not self.value_residual:
