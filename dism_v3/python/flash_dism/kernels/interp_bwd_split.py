@@ -138,7 +138,8 @@ def _dkv(X, Key, Value, DO, LSE, DLSE, Delta, DK, DV, Tau,
 def emb_bwd_split(q, k, q_emb, k_emb, out_q, out_k, olse_q, olse_k,
                   doq, dok, dlq, dlk, sm_scale=1., tau=None, *, autotune=True,
                   splits=16, dq_m=64, dq_v=64, dkv_m=64, dkv_v=32,
-                  num_warps=4, num_stages=3, direction_true=False):
+                  num_warps=4, num_stages=3, direction_true=False,
+                  fuse_dq_tma=False):
     """Implementation of emb_bwd_wrapper, with an explicit diagnostic override.
 
     FP32 reduction order differs for codebooks. No changed production tolerances,
@@ -180,6 +181,13 @@ def emb_bwd_split(q, k, q_emb, k_emb, out_q, out_k, olse_q, olse_k,
     # of reset_to_zero which would erase that contribution on a second cache miss.
     deq.zero_()
     dek.zero_()
+    if fuse_dq_tma:
+        if torch.cuda.get_device_capability(q.device)[0] < 9:
+            raise ValueError('TMA interpolation backward requires SM90 or newer')
+        from triton.tools.tensor_descriptor import TensorDescriptor
+        from .interp_bwd_tma import _dkv_dq_tma
+        dq.zero_()
+        dk.zero_()
     for side, (x, key, value, do, lse, dlse, delta, dx, dkey, dvalue) in enumerate((
             (q, q_emb, k_emb, dok, olse_k, dlk, delta_k, dq, deq, dek),
             (k, k_emb, q_emb, doq, olse_q, dlq, delta_q, dk, dek, deq))):
@@ -188,7 +196,18 @@ def emb_bwd_split(q, k, q_emb, k_emb, out_q, out_k, olse_q, olse_k,
                   x.stride(0), x.stride(1), x.stride(2),
                   key.stride(0), key.stride(1), value.stride(0), value.stride(1),
                   do.stride(0), do.stride(1), do.stride(2))
-        if autotune:
+        if fuse_dq_tma:
+            descriptor = TensorDescriptor(dx, [b*n, h*d], [h*d, 1], [dkv_m, d])
+            arguments = (x, key, value, do, lse, dlse, delta, dkey, dvalue,
+                         dx, descriptor, tau, *common)
+            if autotune:
+                _dkv_dq_tma[lambda meta: (triton.cdiv(vocab, meta['K']), h, meta['SPLITS'])](
+                    *arguments, **options)
+            else:
+                _dkv_dq_tma.fn[(triton.cdiv(vocab, dkv_v), h, splits)](
+                    *arguments, dkv_m, dkv_v, splits, num_warps=num_warps,
+                    num_stages=num_stages, **options)
+        elif autotune:
             _dq[lambda meta: (triton.cdiv(n, meta['M']), b * h)](
                 x, key, value, do, lse, dlse, delta, dx, tau, *common, **options)
             _dkv[lambda meta: (triton.cdiv(vocab, meta['K']), h, meta['SPLITS'])](

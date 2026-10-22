@@ -304,3 +304,7 @@ python dism_v3/tools/profile_training_cuda_graph.py \
 
 Choose fresh output names for another run. Trace, SQLite and JSON artifacts stay
 under ignored `dism_v3/build/graph_profile/`; no checkpoint is accessed.
+
+The subsequent [interpolation TMA experiment](INTERPOLATION_TMA.md) fuses
+interpolation dQ into dKV. It shows no measured throughput gain and fails a
+strict full-model gradient diagnostic, so the default remains separate dQ/dKV.

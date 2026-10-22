@@ -35,7 +35,12 @@ def main():
     parser.add_argument('--threads', type=int, default=1)
     parser.add_argument('--nsys', action='store_true',
                         help='Trace graph capture origins and measured steps with Nsight Systems')
+    parser.add_argument('--interp-backend', choices=['split','tma'], default='split')
     args = parser.parse_args()
+    if args.interp_backend == 'tma':
+        from functools import partial
+        from flash_dism.kernels import interp_bwd_split
+        interp_bwd_split.emb_bwd_split = partial(interp_bwd_split.emb_bwd_split, fuse_dq_tma=True)
     if min(args.rows, args.microbatches, args.warmup, args.steps, args.threads) < 1:
         parser.error('counts must be positive')
     if os.environ.get('DISM_HARD_PLANNER', '0') != '0':

@@ -74,6 +74,7 @@ def main():
     parser.add_argument('--rows',type=int,default=8)
     parser.add_argument('--iterations',type=int,default=3)
     parser.add_argument('--microbatches',type=int,default=8)
+    parser.add_argument('--interp-backend',choices=['split','tma'],default='split')
     args = parser.parse_args()
     torch.set_num_threads(4)
     with open(args.model_spec) as source:
@@ -82,6 +83,10 @@ def main():
     gc.collect()
     torch.cuda.empty_cache()
     print(json.dumps(dict(phase='reference_released',allocated_mib=torch.cuda.memory_allocated()/2**20)),flush=True)
+    if args.interp_backend=='tma':
+        from functools import partial
+        from flash_dism.kernels import interp_bwd_split
+        interp_bwd_split.emb_bwd_split=partial(interp_bwd_split.emb_bwd_split,fuse_dq_tma=True)
     model = build_model(spec).cuda().train()
     model.load_state_dict(initial)
     opt = optimizer(model)
@@ -89,6 +94,7 @@ def main():
     graph = PackedTrainingGraph(model,first['ids'].cuda(),first['labels'].cuda(),first['cu'],
                                 microbatches=args.microbatches)
     del initial
+    all_strict=[]
     for index,record in enumerate(records):
         model.zero_grad(set_to_none=True)
         # Compare each step at identical master AND quantized weights. Tiny
@@ -123,14 +129,16 @@ def main():
                                    relative_l2=((a-b).norm()/b.norm().clamp_min(1e-30)).item(),
                                    cosine=torch.nn.functional.cosine_similarity(a,b,dim=0).item()))
         if strict:
-            print(json.dumps(dict(strict_gradient_failures=strict)),flush=True)
-            raise AssertionError('strict gradient diagnostic failed')
+            print(json.dumps(dict(iteration=index,strict_gradient_failures=strict)),flush=True)
+            all_strict.append((index,strict))
         opt.step()
         print(json.dumps(dict(phase='replay',iteration=index,loss=loss.item(),
                              peak_allocated_mib=torch.cuda.max_memory_allocated()/2**20)),flush=True)
     # Preserve the counter and annealing buffers exactly along the two paths.
     for name in ('rng_counter','training_step','hard_probability'):
         torch.testing.assert_close(model.state_dict()[name].cpu(),final[name],rtol=0,atol=0)
+    if all_strict:
+        raise AssertionError(f'strict gradient diagnostic failed at {len(all_strict)} reference steps')
 
 
 if __name__=='__main__':
