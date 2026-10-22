@@ -1,3 +1,4 @@
+#include "common/graph_route.cuh"
 #include <kittens.cuh>
 #include "summary/hard_chunk.cuh"
 
@@ -17,7 +18,8 @@ __device__ __forceinline__ void wait_hard_chunk(int remaining) {
 // chunk passing. Only one int32 state and one staged input replace affine A/B.
 template<class Configuration = ActiveConfig>
 __global__ __launch_bounds__(128) void hard_chunk_kernel(
-        const __grid_constant__ HardChunkArgs args) {
+        const __grid_constant__ HardChunkArgs args, const uint32_t* choice) {
+    if (!dism_graph_route::quadratic(choice)) return;
     constexpr int Stages = 4;
     __shared__ __align__(16) int staged[4][Stages][32];
     int n = args.n, diagonal_block = blockIdx.x;

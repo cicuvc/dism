@@ -2,10 +2,10 @@
 
 记录日期：2026-10-23。代码基线：`510b3eb`。
 
-状态：**设计记录，尚未实现。** 当前 `PackedTrainingGraph` 仍要求
-`DISM_HARD_PLANNER=0`。本文记录本轮讨论选定的实现方向与验收边界，
-不代表新的同步协议、persistent consumer 或整模型支持已经通过验证。
-本轮只写文档；后续每个阶段分别实现、验证、记录结果，暂不做性能优化。
+状态：**P2/P3/P4 已实现独立 runtime 和 hard backward API，验证见第 10 节。**
+P5/P6 模型/runner 接入尚未开始，`PackedTrainingGraph` 仍要求
+`DISM_HARD_PLANNER=0`。设计文档首次提交为 `b2da895`；P1 结果见第 9 节。
+不据此宣称整模型 planner graph 已支持；默认开关不变，暂不做性能优化。
 
 ## 1. 目标和范围
 
@@ -229,11 +229,11 @@ shared FP32 atomicAdd，不修改已有默认 launches 来追求性能。
 
 | 阶段 | 交付内容 | 依赖与退出条件 |
 |---|---|---|
-| P0：设计记录 | 本文、现状证据、接口边界与验收清单 | 本次完成；其余阶段均未开始 |
-| P1：最小交接协议 | 不含 DISM 的 D2H/external event/CPU producer/H2D/WriteValue32/一次采样/双分支探针 | 重复 replay、及时/迟到发布、完整 payload 可见性、旧 epoch 拒绝、无 GPU 等待；记录 memory-ordering 论证 |
-| P2：slot 与真实 planner runtime | 固定 snapshot、epoch/descriptor ownership、现有 native planner 接入、上传、回收、错误通道 | 基于 P1；label/hard/tau/doc 快照正确，旧 writer 不覆盖下一轮，资源预算与关闭/异常可控 |
-| P3：固定 launch 的 event consumer | descriptor 驱动 compact 各阶段、动态有效任务数、workspace/tau 处理 | 基于 P2 的 descriptor；先用预生成计划验证同一 graph 下计划形状变化，数值和 sanitizer 通过 |
-| P4：完整双路径门控 | quadratic 全链路门控、共享采样结果、输出初始化/合并 | 基于 P1/P3；每轮恰好一条 hard 路径生效，迟到发布不改变决定，未选中路径无无效读写 |
+| P0：设计记录 | 本文、现状证据、接口边界与验收清单 | 已提交 `b2da895` |
+| P1：最小交接协议 | 不含 DISM 的 D2H/external event/CPU producer/H2D/WriteValue32/一次采样/双分支探针 | 当前环境单 slot 探针通过，见第 9 节 |
+| P2：slot 与真实 planner runtime | 固定 snapshot、epoch/descriptor ownership、现有 native planner 接入、上传、回收、错误通道 | 独立 API 已实现；快照、预算、退役和错误路径验证见第 10 节 |
+| P3：固定 launch 的 event consumer | descriptor 驱动 compact 各阶段、动态有效任务数、workspace/tau 处理 | 独立 API 已实现；同图动态计划、原 compact/FP64 对照见第 10 节 |
+| P4：完整双路径门控 | quadratic 全链路门控、共享采样结果、输出初始化/合并 | 独立 API 已实现；完整 native fallback 门控、packed/双路径测试见第 10 节 |
 | P5：DISM core/vocabulary 接入 | capture 专用 runtime binding、D2H 节点、保存状态和梯度合并 | 基于 P2/P4；单层及多层完整前向反向，连续改变 labels/masks/tau/boundaries，旧 eager/AOT 回归通过 |
 | P6：nanochat runner 接入 | replay 调度、预热与 capture、累积梯度、optimizer 前错误检查、实际 GPU 路由统计 | 基于 P5；小模型后再到当前模型，RNG/恢复/数据位置保持，限定支持组合并显式启用 |
 | P7：完整验收与交付 | 跨轮压力、异常生命周期、数值与 sanitizer 证据、运行文档 | 所有必需项完成后才声明支持；保留默认 planner-disabled 行为，不做吞吐优化 |
@@ -244,7 +244,8 @@ shared FP32 atomicAdd，不修改已有默认 launches 来追求性能。
 按现有 `build.py` 接入，device TU 保持 Torch-free。使用受控的 CPU gate 和 GPU
 完成通知安排 ready/fallback 情况，不用依赖机器快慢的 sleep 作为唯一测试依据。
 边界竞态允许选中任一合法分支，但必须全局一致、payload 完整，且不能重复写结果。
-外部 event 与 WriteValue 的连通性尚未实测，P1 是后续设计的首个验证门槛。
+外部 event 与 WriteValue 的连通性是后续设计的首个验证门槛；已完成的 P1
+探针及覆盖范围见第 9 节。
 
 ### P2：先用轻量 consumer 检验真实计划
 
@@ -312,3 +313,329 @@ checkpoint。生成的日志、JSON、trace、cubin/SASS 放在忽略的 `dism_v
 相关背景：[CUDA Graph 当前支持](CUDA_GRAPHS.md)、
 [ready dispatch](HARD_READY_DISPATCH.md)、
 [native planner](NATIVE_TRAINING_PLANNER.md)。
+
+## 9. P1 同步可行性验证（2026-10-23）
+
+结论：当前 RTX 5090 / SM120、PyTorch 2.13.0+cu130、Triton 3.7.1 环境下，
+**图内 D2H/external record → 图外 CPU → H2D/WriteValue32 → 图内采样/双分支**
+的单 slot 协议可运行，并能在同一次完整 graph 尚未结束时完成交接。
+这不是吞吐结果，也没有接入真实 DISM 梯度或 CPU planner。
+
+代码：[check_planner_graph_sync.py](../tools/check_planner_graph_sync.py)，
+回归：[test_planner_graph_sync.py](../tests/test_planner_graph_sync.py)。
+探针用 ctypes 调用 `libcuda.so.1` 的 `cuStreamWriteValue32_v2`，小型 GPU kernel
+用 Triton 编译，因此此阶段无需新增 native binding、修改 `build.py` 或重编生产扩展。
+后续生产 host API 的位置仍在 P2 决定。
+
+### 9.1 原语与内存顺序
+
+实际采用以下发布链：
+
+```text
+upload stream:
+  payload H2D -> descriptor H2D -> cuStreamWriteValue32_v2(ready, epoch, 0)
+
+sampling kernel, thread 0 publishes the decision:
+  ld.acquire.sys.global.u32 ready
+  compare with expected epoch
+  st.release.sys.global.u32 flag_copy
+
+each selected consumer CTA:
+  ld.acquire.sys.global.u32 flag_copy
+  if selected: read descriptor, then payload
+```
+
+推理依据是 CUDA API 的同 stream 顺序、WriteValue32 默认写前 fence，以及 PTX
+release/acquire 的传递性。采样线程观察到本轮 ready 后，其 release 将这一关系
+传给 consumer 的 acquire，避免只在采样线程 acquire、其它 CTA 却无明确 acquire
+地解引用计划。参见第 3 节的 CUDA API 文档及
+[PTX release/acquire 与 API synchronization](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#memory-consistency-model)。
+
+采样 CTA 的各 lane 可能在发布边界读到不同的 live flag，因此只有 thread 0
+允许写 `flag_copy`；consumer 读取的是随后保持不变的副本。编译后的 PTX 保留
+`ld.acquire.sys.global.u32` / `st.release.sys.global.u32`。SASS 中可见
+`LDG.E.STRONG.SYS`、`CCTL.IVALL`、`MEMBAR.ALL.SYS`、`STG.E.STRONG.SYS`，
+且非发布线程在 release store 前退出。event consumer 在加载 descriptor 前
+检查选择并退出，不会在 fallback 时提前加载尚未发布的指针。
+
+以上论证依赖 CUDA 对 stream write fence 的公开保证；没有自行形式化驱动的内部
+DMA 实现。测试验证该组合在当前环境的行为，不作为所有 CUDA 版本/平台的普遍证明。
+此协议没有 GPU wait-value 或等待 CPU 的自旋循环，因此正确性不依赖 upload stream
+一定能抢在 graph 前执行：未赶上本次采样就执行 fallback。
+
+### 9.2 受控检查与异步压力
+
+每轮输入由 graph 中的小 kernel 生成，并 D2H 到固定 pinned storage；CPU 读取后
+精确检查全部 256 个 int32，确保 external event 对应本轮内容。CPU 根据这份快照
+构造 payload 和带指针/长度/epoch 的 descriptor，交替使用两块 GPU payload 存储。
+固定 32 CTA 的 consumer 用运行时长度做 grid-stride 遍历。
+
+每个结果检查所有有效输出、未触及尾部的 sentinel，以及每个 CTA 的分支执行标记。
+不是只检查 ready flag。ready 不在每轮清零，专门验证旧 epoch 不能被误认。
+容量为 1,048,576 个 int32（4 MiB），长度覆盖 0、1、255、256、257、capacity-17、capacity。
+
+受控检查使用同一组 slot 的三个分段 graph，确定性覆盖：
+
+- 完整上传后才采样：必须 event，payload 与 descriptor 都来自本轮。
+- 先采样、再完成上传、最后执行 consumer：live flag 已变 ready，仍必须 fallback。
+- descriptor 已有效但 payload 只写了半份，尚未发布：必须 fallback；完整发布不能
+  改变先前决定。
+- 保留旧 ready、把 descriptor 置零：必须 fallback，不能解引用空指针。
+
+另外使用单个完整 graph 验证实际异步交接。CPU worker 仅在 graph launch 返回后
+提交并等待本轮 external event。有限的 `torch.cuda._sleep` 只用于制造不同的计算
+窗口，既不读取 CPU flag，也不等待 producer；受控用例不以这些窗口来保证时序。
+每五轮中的一轮故意等 graph 结束后再启动 producer，确定性验证迟到发布和退役。
+
+| 运行 | 窗口 cycles | 完整 graph 轮数 | 另加受控检查 | 实际异步尝试的 event / fallback | graph 结束后才发布的轮数 |
+|---|---:|---:|---:|---:|---:|
+| `stress_window.json` | 20,000,000 | 600 | 28 | 480 / 0 | 120 |
+| `stress_no_window.json` | 0 | 600 | 28 | 0 / 480 | 120 |
+| `stress_racing.json` | 1,000,000 | 300 | 28 | 75 / 165 | 60 |
+
+共 **1,584 次结果检查通过**。短窗口同时出现两种合法路由，没有分支混用、半份
+数据消费或旧 generation 的输出。无窗口时直接 fallback，producer 缺席不阻塞 GPU。
+异步路由比例受调度和插桩影响，不作为 pytest 的时延断言。
+
+8 项 pytest 回归通过，还包括无 producer 仍完成、CPU 快照校验异常向调用者传播、
+`0xffffffff` 旧 tag 拒绝。正向 fixture epoch 使用小的正整数；没有据此声明 generation
+回绕、并发 replay、多层协调或真实 planner 异常生命周期已验证，这些属于后续阶段。
+
+### 9.3 编译产物与检查范围
+
+| Kernel | registers | spills | CALL |
+|---|---:|---:|---:|
+| snapshot producer | 12 | 0 | 0 |
+| sampler | 10 | 0 | 0 |
+| event consumer | 21 | 0 | 0 |
+| fallback consumer | 16 | 0 | 0 |
+
+CUDA 13.1 Compute Sanitizer 对全部 8 项回归分别检查：memcheck 0 errors，
+synccheck 0 errors，racecheck 0 errors / 0 warnings / 0 hazards。没有过滤 kernel
+或抑制报告。racecheck 主要检查 shared-memory hazards，不能将其零报告解释为对
+全局内存 flag 与 DMA 发布协议的独立证明；该部分依据上面的 API/PTX 顺序论证和
+逐元素协议测试。探针不使用 shared-memory 协作 pipeline。
+
+PTX/SASS/cubin、JSON 和检查日志保存在忽略的 `build/planner_graph_sync/`。
+探针没有 DISM 数学、TMA consumer、shared pipeline 或训练 state mutation；其结果
+不能替代 P3/P4 的真实反向 kernel 检查，也不能证明 GPU flags 之外的完整 runtime
+生命周期正确。
+
+### 9.4 复现
+
+从工作树根目录，在 conda `blkw` 中运行；JSON 输出必须使用新路径：
+
+```bash
+export PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat"
+export OMP_NUM_THREADS=1
+python -m pytest dism_v3/tests/test_planner_graph_sync.py -q
+python dism_v3/tools/check_planner_graph_sync.py \
+  --rounds 600 --capacity 1048576 --window-cycles 20000000 \
+  --output dism_v3/build/planner_graph_sync/reproduce_window.json
+python dism_v3/tools/check_planner_graph_sync.py \
+  --rounds 600 --capacity 1048576 --window-cycles 0 \
+  --output dism_v3/build/planner_graph_sync/reproduce_no_window.json
+python dism_v3/tools/check_planner_graph_sync.py \
+  --rounds 300 --capacity 1048576 --window-cycles 1000000 \
+  --output dism_v3/build/planner_graph_sync/reproduce_racing.json
+/usr/local/cuda-13.1/bin/compute-sanitizer --tool memcheck --error-exitcode 86 \
+  python -m pytest dism_v3/tests/test_planner_graph_sync.py -q
+```
+
+synccheck/racecheck 使用相同命令替换 `--tool`。无需设置 planner 环境变量；本工具
+不调用 planner，不改变其默认开关，也不创建模型、checkpoint 或 dataloader。
+
+## 10. P2/P3/P4 实现（2026-10-23）
+
+实现入口：
+
+- [planner_graph.py runtime](../python/flash_dism/planner_graph.py)：真实 native
+  planner、固定 slot、独立 upload stream、发布和退役，以及 standalone 双路径 API。
+- [planner_graph.py kernels](../python/flash_dism/kernels/planner_graph.py)：一次采样、
+  descriptor 驱动的 compact 各阶段及 tau 汇总。
+- [graph_route.cuh](../include/common/graph_route.cuh)：native quadratic 的 acquire
+  门控；host 通过可选 `choice` 参数传入。省略参数时保持 eager 调用行为。
+- [test_planner_graph.py](../tests/test_planner_graph.py)：真实计划、数值和生命周期回归。
+
+### 10.1 P2：所有权及接口
+
+`GraphPlannerRuntime` 显式创建，不加入默认 dispatcher，也不序列化。首版仅支持
+compact C64、BF16 R32/DV64、per-head tau、ready 语义。native planner 的 packing
+和数学保持不变；不支持的 graph 组合明确拒绝。
+
+每个 slot 固定持有 pinned/device labels/hard/tau、external input/finished events、
+expected/ready epoch、choice 和 64 个 int64 的 descriptor。`snapshot()` 只排入
+GPU copy/record 节点，不提交 CPU 工作；warmup/capture 不创建 ticket 或 Future。
+`arm(layout=...)` 在 replay 前排空旧 generation，并拷贝本轮 CPU 文档表。
+Packed BH(T) labels 还原成原始训练行的 `[2, rows, heads, row_tokens]`，hard mask
+仍按原始行索引，不按文档重新采样。
+
+推荐调用顺序：
+
+```python
+# 在同一个 CUDA stream 上 warmup/capture/stage/replay；packed table 也属于该 stream。
+# graph 的主体是 snapshot(...), backward(...), finish()，不含 CPU planning。
+slot.arm(layout=layout)
+runtime.replay(graph)  # graph launch 返回后才派发本轮 CPU 工作
+runtime.drain()        # 必须先检查后台错误，再允许 optimizer/checkpoint 修改
+```
+
+`runtime.replay` 在提交任何 CPU 任务前标记所有参与 slot 为 GPU 在途，线程池提交
+失败也会等待 GPU 退役。低层 `launched()` 保留给分段协议探针；手工 replay 的调用者
+必须在 launch 返回后通知 runtime，或自行等待 GPU 完成，不能直接丢弃仍在写 pinned
+snapshot 的 graph。每个 slot 的 `finish()` 必须位于其所有 GPU 消费之后。
+
+每 slot 独立等待 external event 的任务共享有界 native pool，因此一层的 CPU
+planning 不阻塞其它层的通知派发。每 slot 只允许一个 generation；`arm` 回收旧
+GPU、CPU、upload 后才复用。非零 uint32 epoch，回绕时 drain 后清零 ready；高位
+epoch 在 int32 tensor 中保留原始位模式。没有 GPU wait-value 或自旋等待。
+
+`max_slots` 限制存活 slot；`max_bytes` 等分为每 slot 预算，覆盖固定 tensor 快照、
+host/device payload、辅助 indices、descriptor、矩阵 workspace 和 tau partials。
+metadata 超预算在 pinned packing 前拒绝，workspace 超预算在 GPU 分配前拒绝。
+这些是明确记录原因的 fallback。预算不包含 native 算法临时 CPU working set、
+CUDA allocator 缓存、graph 自有分支输出及 quadratic workspace；它不是进程内存硬上限。
+索引检查覆盖 token/vector 和 chunk/width 的 int32 乘积，不能截断任务数。
+
+取消只跳过尚未开始的 planning/upload；已经排队的 H2D、发布及 GPU 消费仍退役。
+CPU/CUDA/提交异常进入 sticky error，`drain/close` 上报，失败 slot 不可再次 arm。
+上传中途异常也先同步 upload stream，再释放 copy 的 pinned/device owners。
+必须显式 `close()` 或使用 runtime context manager；P5/P6 再把这些边界接到模型退出、
+evaluation、optimizer 和 checkpoint。当前 standalone API 没有自动更新训练状态。
+
+### 10.2 P3：descriptor 与固定 launch
+
+ABI v1 是四个 16-word int64 record，依次对应 16/32/64 短桶及 multi：
+
+```text
+[chunks, streams, rows*, prefixes*, weights*, dlog*, lengths*, heads*,
+ offsets*, resets*, chunk_ids*, chunk_owners*, H*, G*, alpha*, tau_partials*]
+```
+
+`*` 为 device pointer。epoch 保存在 slot 的 expected/ready word 中，不重复写入
+descriptor。空 record 允许 null pointers。完整 payload/indices 和 descriptor H2D
+排在 WriteValue32 前；所有 owner 保持到 graph 与 upload 都完成。
+
+固定 grid 默认 32 CTA，测试用 3 CTA 强制遍历多个任务；只改变 graph consumer，
+原 eager launch 默认值不变。每 CTA acquire choice 后才加载 descriptor；根据本轮
+count 做 grid-stride 遍历，调用原 `_chunk_backward/_chunk_summaries/_summary_scan`
+中的数学。它们新增可选 TASK 索引，省略时仍取原 program_id。
+BF16 三项补偿、one-pair、reset 和跨 chunk tau 算法不变。
+
+short buckets、multi summaries、exclusive scan、multi backward、tau zero/reduce
+保留为独立节点。节点顺序提供全局阶段同步，不引入 CTA 间 barrier 或 shared FP32
+atomicAdd。multi tau 按 stream 初始化、累加，再按原 head mapping 汇总；每次 replay
+重新生成 summaries 和 partials，动态 counts 或 pointers 不会残留上一轮内容。
+
+### 10.3 P4：两条完整路径
+
+`slot.backward` 先采样一次 ready→choice，再调用 event 和 quadratic，最后合并
+私有输出。两路输出每轮单独清零；初始化和最终相加仍是固定图节点。未选中的
+event 不读取 payload；未选中的 quadratic 不进行 summary、chunk passing、LUT、
+readout、dlog、主 backward、tau reduction 的计算或状态读取。
+
+native 七个计算入口都在共享 pipeline/barrier/TMA 初始化前 acquire 并检查同一
+choice。既有 kernel 数学、grid/CTA 选择和默认 dispatch 不变。`choice=None` 时
+不加载 GPU flag；只有显式 graph fallback 的 dtau 输出需要预清零，eager 保留
+原来由 reducer 全量写入的 empty 分配。
+
+此版本只交付 standalone hard backward。core/vocabulary 的 saved tensors、soft
+梯度合并、nanochat replay/optimizer/route logging 仍属于 P5/P6；没有移除现有
+planner capture guards，没有启用词表 TMA 融合，没有变更 RNG 或 checkpoint schema。
+
+### 10.4 验证与数值限制
+
+使用本工作树源码、conda `blkw`、RTX 5090；`DISM_BUILD_JOBS=2` 通过 v3 的
+`build.py` 重建全部 8 个 native 配置。没有下载、训练或 checkpoint 修改。
+
+新增 19 项默认回归覆盖：
+
+- 同一 graph 的 random/repeat/boundary/periodic/disjoint/全 soft 计划、不同桶大小、
+  multi streams/chunks、指针变化、空计划、document 数变化和 tau 变化。
+- 对照原 compact 的四项梯度，五类输入对照 maintained FP64 oracle，使用既有
+  `gradient_acceptance.assert_gradient`；没有修改容差或替换 oracle。
+- 真实 CPU planning 的 ready、late、cancel、预算拒绝及 exception；完整 graph
+  replay 的实际异步交接和 producer 缺席；先采样、再发布、最后消费仍走 fallback。
+- 固定与 packed，原始训练行的混合 hard mask，空文档和动态文档边界，CPU 文档
+  快照与 caller table 分离，多 slot 独立通知，uint32 高位及 drain 后回绕。
+- 未提交就关闭、capture 中止、取消前置任务、H2D 后发布失败、部分 slot 派发失败
+  后所有已启动 GPU 工作均退役；错误向调用者传播，失败 runtime 不复用。
+
+联合回归 **405 passed / 5 strict diagnostics deselected**，包含 P1、上述 P2–P4、
+原 hard forward/summary/chunk/backward、compact/fused/one-pair、eager training/
+ready/disabled dispatch，以及 nanochat 原 planner-disabled graph 的 BF16/MXFP8、
+梯度累积和训练状态测试。首次联合运行暴露旧 disabled-planner 测试读取了此前测试
+遗留的全局 route log；只在该测试开始时清空日志，以检查其自身调用，未修改生产
+路由统计。修正后整组通过。
+
+另外显式运行 5 项更紧的逐元素诊断：**4 passed / 1 failed**。
+这是额外套用 quadratic 的 `atol=.008/rtol=.025` 向量标准（tau 为 `.003/.01`），
+不替代 event 的原验收标准。失败为 boundary fixture 的 dSK：1/16384 个元素，
+`(0,29,1,3)` 绝对误差约 `.0157846`；原 compact 和新 graph consumer 都失败。
+同一 fixture 的新旧梯度最大差约 `4.77e-7`，不是本轮新增的数学偏差。
+
+| 新 graph vs FP64（boundary fixture） | relative L2 | cosine | norm ratio | signed bias / RMS |
+|---|---:|---:|---:|---:|
+| dSQ | 1.598e-3 | 0.99999872 | 1.0000125 | -2.218e-5 |
+| dSK | 1.690e-3 | 0.99999857 | 0.9999907 | -2.445e-5 |
+| dV | 1.534e-3 | 0.99999887 | 1.0003044 | 8.260e-6 |
+| dtau | 6.04e-7 | 1.0 | 0.9999994 | -4.30e-7 |
+
+该诊断保留在 `strict_gradient` 中，运行方式见下文；没有 xfail 或放宽门槛来隐藏。
+本轮不能据此宣称修复了 event 的既有 BF16 逐元素误差，亦未重做整模型 strict
+gradient 验收（属于 P5/P7）。
+
+### 10.5 Sanitizer 和编译资源
+
+17 项完整 GPU 数值/协议回归分别运行 CUDA 13.1 memcheck、synccheck、racecheck：
+全部通过，分别为 0 errors、0 errors、0 hazards（0 errors / 0 warnings）。后补的
+capture/dispatch failure 及完整 replay helper 生命周期用例另做三工具检查，各自
+3 passed，memcheck/synccheck 0 errors，racecheck 0 hazards。
+未过滤 kernel、未 suppress 报告。racecheck 不能替代 CPU/DMA 与 GPU flag 的
+ordering 论证；该部分继续依据第 9 节协议。
+
+Triton 各 specialization 均无 CALL。固定循环和间接指针会增加寄存器压力，未将
+spill 隐去，也未为消除 spill 调整数学或原 launches：
+
+| Graph kernel | registers | Triton n_spills |
+|---|---:|---:|
+| sample | 8 | 0 |
+| tau zero / reduce | 20 / 34 | 0 / 0 |
+| bucket 16 / 32 / 64 backward | 157 / 240 / 255 | 0 / 0 / 22 |
+| multi summaries / scan / backward | 255 / 96 / 255 | 10 / 0 / 50 |
+
+`n_spills` 是 Triton 报告字段，不能与 ptxas 的 spill 字节数直接比较。
+native R32/D64/DV64 的七个入口也均无 CALL。SASS 中 acquire/退出在 TMA、
+pipeline/barrier 初始化之前。对照 `HEAD=b2da895` 的 device 源码，用同一工作树
+headers、同一编译参数和 `build.py` 的编译节点重建基线：
+
+- native summary、chunk、LUT、dlog、tau reduction 均无 spill。
+- hard backward：基线与改动均为 192 字节栈、200/208 字节 spill store/load。
+- hard readout：基线无 spill；改动后 8 字节栈、16/24 字节 spill store/load。
+
+这是功能阶段的已知编译资源变化；没有据此声称无性能回退或吞吐收益，也没有修改
+寄存器上限、launch defaults、共享存储布局来隐藏它。
+
+日志、PTX/SASS/cubin、资源和逐元素数值 JSON 位于忽略的
+`build/planner_graph_*.log`、`build/planner_graph_artifacts/`，不加入 Git。
+
+### 10.6 复现和下一步
+
+```bash
+# 从 dism_v3/ 构建，conda blkw；不缩减已有支持配置。
+DISM_BUILD_JOBS=2 python build.py
+
+# 从工作树根目录测试。
+export PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat"
+export OMP_NUM_THREADS=1
+python -m pytest dism_v3/tests/test_planner_graph.py -q
+python -m pytest dism_v3/tests/test_planner_graph.py -m strict_gradient -q
+/usr/local/cuda-13.1/bin/compute-sanitizer --tool memcheck --error-exitcode 86 \
+  python -m pytest dism_v3/tests/test_planner_graph.py -q
+```
+
+strict 命令预期保留上述 boundary-dSK 失败。synccheck/racecheck 替换 `--tool`；
+kernel artifacts 可通过 `slot.consumer.last_kernels` 和 native fatbin 用 cuobjdump
+审查。下一阶段是 P5：为 core/vocabulary 建立显式 graph runtime binding，保留
+真实前向的 saved tensors，再处理 soft/hard 梯度合并。P6 之前继续保留 nanochat
+对 planner-enabled capture 的拒绝。

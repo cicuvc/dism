@@ -175,7 +175,7 @@ class NativeTrainingPlanner:
         self.workers = workers
 
     def prepare(self, labels, tau, *, documents=None, hard=None, chunk_size=16, storage=None,
-                compact=False):
+                compact=False, max_metadata_bytes=None):
         start = time.perf_counter()
         if isinstance(labels, torch.Tensor):
             if labels.device.type != 'cpu' or labels.dtype != torch.int32 or not labels.is_contiguous():
@@ -209,6 +209,8 @@ class NativeTrainingPlanner:
         planned = time.perf_counter()
         stats = dict(native.statistics())
         spec, size = (_compact_specification if compact else _specification)(stats)
+        if max_metadata_bytes is not None and size > max_metadata_bytes:
+            raise PlanBudgetExceeded(f'metadata requires {size} bytes, budget {max_metadata_bytes}')
         if storage is None:
             storage = torch.empty(size, dtype=torch.uint8, pin_memory=True)
         elif (storage.device.type != 'cpu' or storage.dtype != torch.uint8 or storage.ndim != 1
@@ -242,3 +244,7 @@ class NativeTrainingPlanner:
             buckets, multi = _compact_view(storage, data)
             return HostCompactPlan(storage, buckets, multi, spec, stats, timings)
         return HostTrainingPlan(storage, data, spec, stats, timings)
+
+
+class PlanBudgetExceeded(Exception):
+    """Expected resource fallback; distinct from planner or CUDA failures."""

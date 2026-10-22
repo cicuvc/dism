@@ -1,10 +1,12 @@
+#include "common/graph_route.cuh"
 #include "summary/hard.cuh"
 
 namespace DISM_VARIANT {
 
 template<class Configuration = ActiveConfig>
 __global__ __launch_bounds__(384, 1) void hard_summary_kernel(
-        const __grid_constant__ HardSummaryArgs args) {
+        const __grid_constant__ HardSummaryArgs args, const uint32_t* choice) {
+    if (!dism_graph_route::quadratic(choice)) return;
     extern __shared__ __align__(1024) unsigned char smem[];
     kt::shared_allocator<1024> alloc{reinterpret_cast<int*>(smem)};
     const uint32_t group = kt::warpgroup::groupid();

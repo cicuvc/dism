@@ -52,11 +52,11 @@ py::object get_plan(const T& token) {
 
 #define DECLARE(R,D,DV) namespace dism_r##R##_d##D##_v##DV { \
 Pair summarization_cuda(T,T,T,T,T,T,T,T,T,int64_t,int64_t); \
-T hard_summary_cuda(T,T,T,std::optional<T>,int64_t); \
-T hard_chunk_cuda(T,std::optional<T>,int64_t); \
-T hard_log_weights_cuda(T,int64_t); \
-Pair hard_readout_cuda(V,T,T,std::optional<T>,int64_t); \
-V hard_backward_cuda(V,T,T,T,int64_t,std::optional<T>); \
+T hard_summary_cuda(T,T,T,std::optional<T>,int64_t,std::optional<T>); \
+T hard_chunk_cuda(T,std::optional<T>,int64_t,std::optional<T>); \
+T hard_log_weights_cuda(T,int64_t,std::optional<T>); \
+Pair hard_readout_cuda(V,T,T,std::optional<T>,int64_t,std::optional<T>); \
+V hard_backward_cuda(V,T,T,T,int64_t,std::optional<T>,std::optional<T>); \
 T chunk_scan_cuda(T,T,int64_t); \
 Pair forward_cuda(T,T,T,T,T,T,T,T,T,T,T,T,T,int64_t,int64_t,std::optional<T>,bool); \
 T backward_delta_cuda(T,T); \
@@ -74,11 +74,11 @@ DISM_CONFIGS(DECLARE)
 struct Backend {
     int r,d,dv;
     Pair (*summary)(T,T,T,T,T,T,T,T,T,int64_t,int64_t);
-    T (*hard_summary)(T,T,T,std::optional<T>,int64_t);
-    T (*hard_chunk)(T,std::optional<T>,int64_t);
-    T (*hard_log_weights)(T,int64_t);
-    Pair (*hard_readout)(V,T,T,std::optional<T>,int64_t);
-    V (*hard_backward)(V,T,T,T,int64_t,std::optional<T>);
+    T (*hard_summary)(T,T,T,std::optional<T>,int64_t,std::optional<T>);
+    T (*hard_chunk)(T,std::optional<T>,int64_t,std::optional<T>);
+    T (*hard_log_weights)(T,int64_t,std::optional<T>);
+    Pair (*hard_readout)(V,T,T,std::optional<T>,int64_t,std::optional<T>);
+    V (*hard_backward)(V,T,T,T,int64_t,std::optional<T>,std::optional<T>);
     T (*chunk)(T,T,int64_t);
     Pair (*forward)(T,T,T,T,T,T,T,T,T,T,T,T,T,int64_t,int64_t,std::optional<T>,bool);
     T (*delta)(T,T);
@@ -305,37 +305,37 @@ void bind_frontend(py::module_& m) {
         check_tensor(dlk,lk,at::kFloat,lk.sizes(),"dLk");
     });
     m.def("summary_chunk",[](T a,T b,int64_t n){return backends[0].chunk(a,b,n);});
-    m.def("hard_summary",[](T q,T k,T hard,std::optional<T> table,int64_t ctas) {
+    m.def("hard_summary",[](T q,T k,T hard,std::optional<T> table,int64_t ctas,std::optional<T> choice) {
         py::gil_scoped_release release;
-        return backends[0].hard_summary(q,k,hard,table,ctas);
-    });
-    m.def("hard_chunk",[](T summary,std::optional<T> table,int64_t heads) {
+        return backends[0].hard_summary(q,k,hard,table,ctas,choice);
+    },py::arg("q"),py::arg("k"),py::arg("hard"),py::arg("table"),py::arg("ctas"),py::arg("choice")=std::nullopt);
+    m.def("hard_chunk",[](T summary,std::optional<T> table,int64_t heads,std::optional<T> choice) {
         py::gil_scoped_release release;
-        return backends[0].hard_chunk(summary,table,heads);
-    });
-    m.def("hard_log_weights",[](T tau,int64_t n) {
+        return backends[0].hard_chunk(summary,table,heads,choice);
+    },py::arg("summary"),py::arg("table"),py::arg("heads"),py::arg("choice")=std::nullopt);
+    m.def("hard_log_weights",[](T tau,int64_t n,std::optional<T> choice) {
         py::gil_scoped_release release;
-        return backends[0].hard_log_weights(tau,n);
-    });
-    m.def("hard_readout",[](V x,T boundary,T lut,std::optional<T> table,int64_t ctas) {
+        return backends[0].hard_log_weights(tau,n,choice);
+    },py::arg("tau"),py::arg("n"),py::arg("choice")=std::nullopt);
+    m.def("hard_readout",[](V x,T boundary,T lut,std::optional<T> table,int64_t ctas,std::optional<T> choice) {
         py::gil_scoped_release release;
         TORCH_CHECK(x.size()==6 && x[0].dim()==4 && x[2].dim()==4,"invalid hard readout operands");
         for (const auto& backend:backends)
             if (backend.r==x[0].size(3) && backend.dv==x[2].size(3))
-                return backend.hard_readout(x,boundary,lut,table,ctas);
+                return backend.hard_readout(x,boundary,lut,table,ctas,choice);
         TORCH_CHECK(false,"unsupported hard readout (R,DV)");
-    });
+    },py::arg("x"),py::arg("boundary"),py::arg("lut"),py::arg("table"),py::arg("ctas"),py::arg("choice")=std::nullopt);
     m.def("core_forward",&core_forward,py::arg("raw"),py::arg("table"),py::arg("ctas"),
           py::arg("save"),py::arg("fp32"),py::arg("absorbed"),py::arg("direction_true")=false,py::arg("qb_key_bias")=false);
-    m.def("hard_backward",[](V x,T boundary,T lut,T norm,int64_t ctas,std::optional<T> table) {
+    m.def("hard_backward",[](V x,T boundary,T lut,T norm,int64_t ctas,std::optional<T> table,std::optional<T> choice) {
         py::gil_scoped_release release;
         TORCH_CHECK(x.size()==7 && x[0].dim()==4 && x[2].dim()==4,"invalid hard backward operands");
         for(const auto& backend:backends)
             if(backend.r==x[0].size(3) && backend.dv==x[2].size(3))
-                return backend.hard_backward(x,boundary,lut,norm,ctas,table);
+                return backend.hard_backward(x,boundary,lut,norm,ctas,table,choice);
         TORCH_CHECK(false,"unsupported hard backward (R,DV)");
     },py::arg("x"),py::arg("boundary"),py::arg("lut"),py::arg("norm"),
-      py::arg("ctas"),py::arg("table")=std::nullopt);
+      py::arg("ctas"),py::arg("table")=std::nullopt,py::arg("choice")=std::nullopt);
     m.def("core_backward",&core_backward,py::arg("operands"),py::arg("vertical"),
           py::arg("output"),py::arg("normalizer"),py::arg("dout"),py::arg("table"),
           py::arg("ctas"),py::arg("fp32"),py::arg("diagnostics"),py::arg("direction_true")=false);

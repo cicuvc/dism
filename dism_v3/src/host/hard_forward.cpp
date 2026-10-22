@@ -1,5 +1,6 @@
 #define DISM_HOST_API 1
 #include "host/torch.cuh"
+#include "host/graph_route.h"
 #include "forward/hard.cuh"
 #include "varlen/layout.cuh"
 
@@ -7,26 +8,28 @@ namespace DISM_VARIANT {
 const void* hard_forward_address();
 const void* hard_log_weights_address();
 
-at::Tensor hard_log_weights_cuda(at::Tensor tau,int64_t n) {
+at::Tensor hard_log_weights_cuda(at::Tensor tau,int64_t n, std::optional<at::Tensor> choice) {
     TORCH_CHECK(tau.is_cuda() && tau.scalar_type()==at::kFloat && tau.dim()==1 &&
                 tau.is_contiguous() && tau.numel()>0 && tau.numel()<=65535,
                 "tau must be contiguous CUDA FP32 [H]");
     TORCH_CHECK(n>0 && n<=INT_MAX-256 && n%256==0,"LUT maximum length must be positive and 256-aligned");
     c10::cuda::CUDAGuard guard(tau.device());
+    const auto* route=dism_graph_route::validate(choice,tau.device());
     auto result=at::empty({tau.numel(),n+1},tau.options());
     launch_kernel(hard_log_weights_address(),dim3((n+256)/256,tau.numel()),256,0,
-        at::cuda::getCurrentCUDAStream(),tau.data_ptr<float>(),result.data_ptr<float>(),int(n+1));
+        at::cuda::getCurrentCUDAStream(),tau.data_ptr<float>(),result.data_ptr<float>(),int(n+1),route);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return result;
 }
 
 std::tuple<at::Tensor,at::Tensor> hard_readout_cuda(std::vector<at::Tensor> x,
-        at::Tensor boundary,at::Tensor lut,std::optional<at::Tensor> table,int64_t requested_ctas) {
+        at::Tensor boundary,at::Tensor lut,std::optional<at::Tensor> table,int64_t requested_ctas, std::optional<at::Tensor> choice) {
     using namespace dism_forward;
     TORCH_CHECK(x.size()==6,"expected SQ,SK,V,query labels,key labels,hard flags");
     const auto& sq=x[0];
     TORCH_CHECK(sq.is_cuda() && sq.dim()==4,"SQ must be CUDA [B,N,H,R]");
     c10::cuda::CUDAGuard guard(sq.device());
+    const auto* route=dism_graph_route::validate(choice,sq.device());
     int64_t b=sq.size(0),n=sq.size(1),h=sq.size(2);
     TORCH_CHECK(b>0 && h>0 && b*h<=INT_MAX && n>0 && n<=INT_MAX-256 && n%256==0,
                 "positive dimensions and 256-aligned length required");
@@ -104,7 +107,7 @@ std::tuple<at::Tensor,at::Tensor> hard_readout_cuda(std::vector<at::Tensor> x,
     C10_CUDA_CHECK(cudaFuncSetAttribute(hard_forward_address(),cudaFuncAttributeMaxDynamicSharedMemorySize,
                                       dism_hard_forward::SharedBytes));
     launch_kernel(hard_forward_address(),ctas,384,dism_hard_forward::SharedBytes,
-                  at::cuda::getCurrentCUDAStream(),args);
+                  at::cuda::getCurrentCUDAStream(),args,route);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return {output,normalizer};
 }

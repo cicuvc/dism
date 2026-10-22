@@ -1,5 +1,6 @@
 #define DISM_HOST_API 1
 #include "host/torch.cuh"
+#include "host/graph_route.h"
 #include "summary/hard.cuh"
 #include "varlen/layout.cuh"
 
@@ -8,10 +9,11 @@ const void* hard_summary_address();
 
 // Explicit standalone prototype. No production dispatch, tau or readout.
 at::Tensor hard_summary_cuda(at::Tensor query, at::Tensor key, at::Tensor hard,
-                            std::optional<at::Tensor> table, int64_t requested_ctas) {
+                            std::optional<at::Tensor> table, int64_t requested_ctas, std::optional<at::Tensor> choice) {
     TORCH_CHECK(query.is_cuda() && query.scalar_type() == at::kInt && query.dim() == 3 &&
                 query.is_contiguous(), "query labels must be contiguous CUDA int32 [B,H,N]");
     c10::cuda::CUDAGuard guard(query.device());
+    const auto* route=dism_graph_route::validate(choice,query.device());
     int64_t b = query.size(0), h = query.size(1), n = query.size(2);
     TORCH_CHECK(b > 0 && h > 0 && b * h <= INT_MAX && n > 0 && n <= INT_MAX - 255 && n % 256 == 0,
                 "positive dimensions and 256-aligned sequence length required");
@@ -65,7 +67,7 @@ at::Tensor hard_summary_cuda(at::Tensor query, at::Tensor key, at::Tensor hard,
     int sms = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
     int ctas = std::min(int(tasks), requested_ctas ? int(requested_ctas) : sms);
     launch_kernel(hard_summary_address(), ctas, 384, HARD_SUMMARY_SHARED_BYTES,
-                  at::cuda::getCurrentCUDAStream(), args);
+                  at::cuda::getCurrentCUDAStream(), args,route);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return output;
 }

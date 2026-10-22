@@ -37,6 +37,8 @@ def test_disabled_planner_has_no_worker_pool_or_coordinator(monkeypatch):
 @pytest.mark.parametrize('mode', ['hard', 'mixed'])
 def test_disabled_planner_matches_the_quadratic_policy(monkeypatch, mode):
     """Same forward, same fallback backward, same gradients."""
+    # Route logging is process-wide; only inspect decisions from this test.
+    take_route_log()
     try:
         xs, layout = inputs(packed=False, mode=mode, pattern='random')
         torch.manual_seed(3)

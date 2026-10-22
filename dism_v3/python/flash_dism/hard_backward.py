@@ -5,7 +5,7 @@ import cu_flash_dism as cu
 
 @torch.no_grad()
 def backward_hard(sq, sk, v, dout, idx_q, idx_k, hard, normalizer, state, *,
-                  layout=None, ctas=0):
+                  layout=None, ctas=0, _graph_choice=None):
     """Return dSQ(FP32), dSK/dV(BF16), d(tau)(FP32), for sequence-hard rows.
 
     Requires forward_hard(..., save_state=True) state from the same inputs.
@@ -21,11 +21,12 @@ def backward_hard(sq, sk, v, dout, idx_q, idx_k, hard, normalizer, state, *,
         normalizer,
         ctas,
         None if layout is None else layout.table,
+        _graph_choice,
     )
 
 
 @torch.no_grad()
-def backward_hard_recompute(sq, sk, v, dout, iq, ik, hard, tau, *, layout=None, ctas=0):
+def backward_hard_recompute(sq, sk, v, dout, iq, ik, hard, tau, *, layout=None, ctas=0, _graph_choice=None):
     """Fallback with no retained quadratic state or CPU/GPU metadata readback.
 
     Packed execution consumes the original tensors and document task table
@@ -49,10 +50,10 @@ def backward_hard_recompute(sq, sk, v, dout, iq, ik, hard, tau, *, layout=None, 
     q,k = [x.to(torch.int32).contiguous() for x in labels]
     _,norm,state = forward_hard(
         a,b,c,q,k,hard.contiguous(),tau.contiguous(),
-        layout=layout,ctas=ctas,save_state=True,
+        layout=layout,ctas=ctas,save_state=True,_graph_choice=_graph_choice,
     )
     result=backward_hard(
         a,b,c,do,q,k,hard.contiguous(),norm,state,
-        layout=layout,ctas=ctas,
+        layout=layout,ctas=ctas,_graph_choice=_graph_choice,
     )
     return dict(zip(('sq_vec','sk_vec','v','rtau'),result))

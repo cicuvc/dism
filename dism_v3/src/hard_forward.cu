@@ -1,3 +1,4 @@
+#include "common/graph_route.cuh"
 #include "forward/hard.cuh"
 
 namespace DISM_VARIANT {
@@ -6,7 +7,8 @@ namespace hf = dism_hard_forward;
 // Stable geometric weights in log2 units. The table is invocation-owned and
 // rebuilt from current per-head tau, never cached across optimizer updates.
 template<class Configuration = ActiveConfig>
-__global__ void hard_log_weights_kernel(const float* tau,float* output,int stride) {
+__global__ void hard_log_weights_kernel(const float* tau,float* output,int stride,const uint32_t* choice) {
+    if (!dism_graph_route::quadratic(choice)) return;
     int length = blockIdx.x*blockDim.x+threadIdx.x;
     if (length>=stride) return;
     float t = tau[blockIdx.y];
@@ -24,7 +26,8 @@ __global__ void hard_log_weights_kernel(const float* tau,float* output,int strid
 
 template<class Configuration = ActiveConfig>
 __global__ __launch_bounds__(384,1) void hard_forward_kernel(
-        const __grid_constant__ hf::Args args) {
+        const __grid_constant__ hf::Args args, const uint32_t* choice) {
+    if (!dism_graph_route::quadratic(choice)) return;
     using namespace dism_forward;
     using hf::IntScan;
     using Shared = hf::Shared;

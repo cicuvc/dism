@@ -1,10 +1,12 @@
+#include "common/graph_route.cuh"
 #include "backward/hard.cuh"
 
 namespace DISM_VARIANT {
 namespace hb=dism_hard_backward;
 
 // Natural-tau derivative of log W_l; the near-zero series avoids cancellation.
-__global__ void hard_dlog_weights_kernel(const float* logw,float* result,int stride,int heads) {
+__global__ void hard_dlog_weights_kernel(const float* logw,float* result,int stride,int heads,const uint32_t* choice) {
+    if (!dism_graph_route::quadratic(choice)) return;
     int l=blockIdx.x*blockDim.x+threadIdx.x,head=blockIdx.y;
     if(l>=stride) return;
     float t=logw[int64_t(head)*stride+1]*0.6931471805599453f;
@@ -21,7 +23,8 @@ __global__ void hard_dlog_weights_kernel(const float* logw,float* result,int str
 }
 
 template<class Configuration=ActiveConfig>
-__global__ __launch_bounds__(384,1) void hard_backward_kernel(const __grid_constant__ hb::Args args) {
+__global__ __launch_bounds__(384,1) void hard_backward_kernel(const __grid_constant__ hb::Args args, const uint32_t* choice) {
+    if (!dism_graph_route::quadratic(choice)) return;
     using namespace dism_backward;
     extern __shared__ __align__(1024) unsigned char storage[];
     kt::shared_allocator<1024> allocator(reinterpret_cast<int*>(storage));
@@ -152,7 +155,8 @@ __global__ __launch_bounds__(384,1) void hard_backward_kernel(const __grid_const
 
 __global__ void hard_tau_reduce_kernel(const float* moments,const float* norm,const float* dlogw,
         float* output,int batch,int heads,int n,int lut_stride,
-        const bool* hard,const hb::Task* tasks,int task_count) {
+        const bool* hard,const hb::Task* tasks,int task_count,const uint32_t* choice) {
+    if (!dism_graph_route::quadratic(choice)) return;
     int head=blockIdx.x;
     int64_t size=int64_t(batch)*heads*n;
     float sum=0.f;

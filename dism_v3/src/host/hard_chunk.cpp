@@ -1,15 +1,17 @@
 #define DISM_HOST_API 1
 #include "host/torch.cuh"
+#include "host/graph_route.h"
 #include "summary/hard_chunk.cuh"
 #include "varlen/layout.cuh"
 
 namespace DISM_VARIANT {
 const void* hard_chunk_address();
 
-at::Tensor hard_chunk_cuda(at::Tensor summary, std::optional<at::Tensor> table, int64_t heads) {
+at::Tensor hard_chunk_cuda(at::Tensor summary, std::optional<at::Tensor> table, int64_t heads, std::optional<at::Tensor> choice) {
     TORCH_CHECK(summary.is_cuda() && summary.scalar_type() == at::kInt && summary.is_contiguous(),
                 "hard summary must be contiguous CUDA int32");
     c10::cuda::CUDAGuard guard(summary.device());
+    const auto* route=dism_graph_route::validate(choice,summary.device());
     at::Tensor task_storage;
     dim3 grid;
     int n = 0;
@@ -56,7 +58,7 @@ at::Tensor hard_chunk_cuda(at::Tensor summary, std::optional<at::Tensor> table, 
     auto output = at::empty_like(summary);
     HardChunkArgs args{summary.data_ptr<int>(), output.data_ptr<int>(),
         table ? reinterpret_cast<const HardChunkTask*>(task_storage.data_ptr()) : nullptr, n};
-    launch_kernel(hard_chunk_address(), grid, 128, 0, at::cuda::getCurrentCUDAStream(), args);
+    launch_kernel(hard_chunk_address(), grid, 128, 0, at::cuda::getCurrentCUDAStream(), args,route);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return output;
 }

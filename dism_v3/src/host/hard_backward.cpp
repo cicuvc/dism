@@ -1,5 +1,6 @@
 #define DISM_HOST_API 1
 #include "host/torch.cuh"
+#include "host/graph_route.h"
 #include "backward/hard.cuh"
 #include "backward/launch.cuh"
 #include "varlen/layout.cuh"
@@ -11,13 +12,14 @@ const void* hard_tau_reduce_address();
 
 std::vector<at::Tensor> hard_backward_cuda(std::vector<at::Tensor> x,at::Tensor boundary,
         at::Tensor logw,at::Tensor normalizer,int64_t requested_ctas,
-        std::optional<at::Tensor> table) {
+        std::optional<at::Tensor> table, std::optional<at::Tensor> choice) {
     namespace hb=dism_hard_backward;
     using namespace dism_backward;
     TORCH_CHECK(x.size()==7,"expected SQ,SK,V,dO,query labels,key labels,hard");
     const auto& sq=x[0];
     TORCH_CHECK(sq.is_cuda() && sq.dim()==4,"SQ must be CUDA BNHR");
     c10::cuda::CUDAGuard guard(sq.device());
+    const auto* route=dism_graph_route::validate(choice,sq.device());
     int64_t b=sq.size(0),n=sq.size(1),h=sq.size(2);
     TORCH_CHECK(b>0 && h>0 && b*h<=INT_MAX && n>0 && n<=INT_MAX-256 && n%256==0,
                 "positive dimensions and 256-aligned length required");
@@ -102,7 +104,8 @@ std::vector<at::Tensor> hard_backward_cuda(std::vector<at::Tensor> x,at::Tensor 
     TORCH_CHECK(task_count>0 && task_count<=INT_MAX,"invalid hard backward task count");
     auto options=sq.options().dtype(at::kFloat);
     auto dsq=at::zeros({b,n,h,R},options),dsk=at::zeros_like(x[1]),dv=at::zeros_like(x[2]);
-    auto moments=at::zeros({4,b,h,n},options),dlogw=at::empty_like(logw),dtau=at::empty({h},options);
+    auto moments=at::zeros({4,b,h,n},options),dlogw=at::empty_like(logw);
+    auto dtau=choice ? at::zeros({h},options) : at::empty({h},options);
     hb::Args args{{int(b),int(h),int(n)},int(task_count),int(lut_stride),
         SoftQueryGlobal(reinterpret_cast<kt::bf16*>(sq.data_ptr()),b,n,h,R),
         DerivativeGlobal(reinterpret_cast<kt::bf16*>(x[3].data_ptr()),b,n,h,DV),
@@ -123,16 +126,16 @@ std::vector<at::Tensor> hard_backward_cuda(std::vector<at::Tensor> x,at::Tensor 
     copy_output_map(args.query_output,query_map);
     auto stream=at::cuda::getCurrentCUDAStream();
     launch_kernel(hard_dlog_weights_address(),dim3((n+256)/256,h),256,0,stream,
-                  logw.data_ptr<float>(),dlogw.data_ptr<float>(),int(lut_stride),int(h));
+                  logw.data_ptr<float>(),dlogw.data_ptr<float>(),int(lut_stride),int(h),route);
     int sms=at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
     int ctas=std::min(int(task_count),requested_ctas?int(requested_ctas):sms);
     C10_CUDA_CHECK(cudaFuncSetAttribute(hard_backward_address(),cudaFuncAttributeMaxDynamicSharedMemorySize,hb::SharedBytes));
-    launch_kernel(hard_backward_address(),ctas,384,hb::SharedBytes,stream,args);
+    launch_kernel(hard_backward_address(),ctas,384,hb::SharedBytes,stream,args,route);
     launch_kernel(hard_tau_reduce_address(),h,256,0,stream,moments.data_ptr<float>(),normalizer.data_ptr<float>(),
                   dlogw.data_ptr<float>(),dtau.data_ptr<float>(),int(b),int(h),int(n),int(lut_stride),
                   x[6].data_ptr<bool>(),
                   table?reinterpret_cast<const dism_hard_backward::Task*>(tau_task_storage.data_ptr()):nullptr,
-                  int(tau_task_count));
+                  int(tau_task_count),route);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return {dsq,dsk,dv,dtau};
 }

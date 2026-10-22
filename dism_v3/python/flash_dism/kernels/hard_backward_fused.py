@@ -70,7 +70,7 @@ def _chunk_backward(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, IDS,
                            R: tl.constexpr, DV: tl.constexpr, C: tl.constexpr,
                            BR: tl.constexpr, BD: tl.constexpr, BF16: tl.constexpr,
                            H=None, G=None, CHUNKS=None, RESET=None, BC: tl.constexpr=0,
-                           LOCAL: tl.constexpr=0):
+                           LOCAL: tl.constexpr=0, TASK=None):
     # LOCAL marks a compact bucket arena: the program id is the block index
     # inside that arena and the arena itself is a padded plan of width C, so
     # chunk*C addressing and the per-block tau slot both stay valid unchanged.
@@ -78,7 +78,7 @@ def _chunk_backward(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, IDS,
                                 and SK.dtype.element_ty == tl.bfloat16
                                 and V.dtype.element_ty == tl.bfloat16
                                 and DO.dtype.element_ty == tl.bfloat16)
-    local = tl.program_id(0)
+    local = tl.program_id(0) if TASK is None else TASK
     if LOCAL:
         chunk = local
         stream = local
@@ -145,7 +145,7 @@ def _chunk_backward(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, IDS,
         tl.atomic_add(DSK + ki[:, None]*R + r[None, :], dsk,
                       key[:, None] & (r[None, :] < R), sem="relaxed")
         if CHUNKS is not None:
-            pos = tl.program_id(0).to(tl.int64)*R*DV
+            pos = local.to(tl.int64)*R*DV
             last = tl.sum(tl.where(t == length-1, p, 0.), 0)
             reset = tl.load(RESET + chunk)
             qs = tl.where(query & (reset == 0), w*tl.exp(p), 0.)
@@ -203,12 +203,12 @@ def _chunk_backward(SQ, SK, V, DO, DSQ, DSK, DV_OUT, TAU, IDS,
 def _chunk_summaries(SQ, SK, V, DO, H, G, A, CHUNKS, ROWS, PREFIX,
                      WEIGHT, LENGTH, RESET, R: tl.constexpr, DV: tl.constexpr,
                      C: tl.constexpr, BR: tl.constexpr, BD: tl.constexpr,
-                     BF16: tl.constexpr):
+                     BF16: tl.constexpr, TASK=None):
     COMPENSATED: tl.constexpr = (BF16 and SQ.dtype.element_ty == tl.bfloat16
                                 and SK.dtype.element_ty == tl.bfloat16
                                 and V.dtype.element_ty == tl.bfloat16
                                 and DO.dtype.element_ty == tl.bfloat16)
-    idx = tl.program_id(0)
+    idx = tl.program_id(0) if TASK is None else TASK
     chunk = tl.load(CHUNKS + idx).to(tl.int64)
     t, r, d = tl.arange(0, C), tl.arange(0, BR), tl.arange(0, BD)
     length = tl.load(LENGTH + chunk)
@@ -244,13 +244,14 @@ def _chunk_summaries(SQ, SK, V, DO, H, G, A, CHUNKS, ROWS, PREFIX,
 
 
 @tr.jit
-def _summary_scan(H, G, A, OFFSETS, M: tl.constexpr, BLOCK: tl.constexpr):
+def _summary_scan(H, G, A, OFFSETS, M: tl.constexpr, BLOCK: tl.constexpr, TASK=None):
     """Exclusive forward/reverse scan; overwrite summaries with boundaries.
 
     Each CTA owns disjoint matrix elements over its entire stream. No MMA,
     atomics, inter-CTA communication, or shared state in the serial loop.
     """
-    stream, tile = tl.program_id(0), tl.program_id(1)
+    stream = tl.program_id(0) if TASK is None else TASK
+    tile = tl.program_id(1)
     begin = tl.load(OFFSETS + stream)
     end = tl.load(OFFSETS + stream + 1)
     x = tile*BLOCK + tl.arange(0, BLOCK)

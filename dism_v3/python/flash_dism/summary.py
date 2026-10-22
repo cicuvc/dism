@@ -2,7 +2,7 @@
 import cu_flash_dism as cu
 
 
-def summarize_hard(idx_q, idx_k, hard, *, layout=None, ctas=0):
+def summarize_hard(idx_q, idx_k, hard, *, layout=None, ctas=0, _graph_choice=None):
     """Standalone integer hard summary, not a complete attention forward.
 
     Labels: contiguous CUDA int32 [B,H,N]; hard: bool [training_rows,H].
@@ -14,10 +14,10 @@ def summarize_hard(idx_q, idx_k, hard, *, layout=None, ctas=0):
     Compose with the preceding strip as max(R[c,j], prefix[c-1,j-32]) when
     j>=32, then L=j-prefix. This is NOT a soft affine/chunk_scan input.
     """
-    return cu.hard_summary(idx_q, idx_k, hard, None if layout is None else layout.table, ctas)
+    return cu.hard_summary(idx_q, idx_k, hard, None if layout is None else layout.table, ctas, _graph_choice)
 
 
-def hard_chunk_scan(summary, *, layout=None, heads=0):
+def hard_chunk_scan(summary, *, layout=None, heads=0, _graph_choice=None):
     """Compose hard R summaries into document-wide inclusive R boundaries.
 
     Returns a new int32 tensor with the same shape; input is not modified.
@@ -25,7 +25,7 @@ def hard_chunk_scan(summary, *, layout=None, heads=0):
     heads from [B,H,C,N]. Noncausal and skipped soft entries remain -1.
     On causal hard entries the match length is key_coordinate - boundary.
     """
-    return cu.hard_chunk(summary, None if layout is None else layout.table, heads)
+    return cu.hard_chunk(summary, None if layout is None else layout.table, heads, _graph_choice)
 
 
 def chunk_scan(summary_a,summary_b,seqlen,*,backend=None):
