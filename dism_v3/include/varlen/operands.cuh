@@ -61,10 +61,27 @@ template<class Common> struct PackedArgs {
 template<class Kernel,class Common>
 inline void launch_common(Kernel kernel,const Common& common,const Layout& layout,
         const std::vector<int2>& tasks,size_t shared_bytes,at::Device device,int threads=384,
-        int hard_row_tokens=256) {
+        int hard_row_tokens=256,int graph_heads=0,int graph_block=0) {
     if (tasks.empty()) return;
     auto documents=dism_metadata::documents(layout.cpu,device);
-    auto work=upload_records(tasks,device);
+    auto work=dism_graph::state(layout.cpu) ? dism_graph::records(layout.cpu,
+        "soft:"+std::to_string(graph_heads)+":"+std::to_string(graph_block),device,
+        [graph_heads,graph_block](const at::Tensor& table) {
+            Layout next(table);
+            std::vector<int2> result;
+            for (int s=0;s<next.sequences;++s) {
+                int n=next.get(s,Length);
+                if (!n) continue;
+                int blocks;
+                if (graph_block>0) blocks=n/graph_block;
+                else {
+                    int count=graph_block==-1?(n-1)/32:n/32;
+                    blocks=(n+(count-1)*32+127)/128;
+                }
+                append_tasks(result,s,graph_heads*blocks);
+            }
+            return dism_graph::bytes(result);
+        }) : upload_records(tasks,device);
     PackedArgs<Common> args{common,documents.data_ptr<int64_t>(),
                            reinterpret_cast<const int2*>(work.data_ptr()),hard_row_tokens};
     if (shared_bytes)

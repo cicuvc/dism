@@ -18,6 +18,8 @@ at::Tensor hard_chunk_cuda(at::Tensor summary, std::optional<at::Tensor> table, 
         Layout layout(*table);
         TORCH_CHECK(heads > 0 && heads <= 65535 && summary.dim() == 1 &&
                     summary.numel() == layout.forward * heads, "invalid packed hard summary/heads");
+        auto build=[heads](const at::Tensor& table) {
+        Layout layout(table);
         std::vector<HardChunkTask> records;
         for (int s = 0; s < layout.sequences; ++s) {
             int64_t length = layout.get(s, Length);
@@ -30,9 +32,15 @@ at::Tensor hard_chunk_cuda(at::Tensor summary, std::optional<at::Tensor> table, 
                     records.push_back({layout.get(s, ForwardOffset) * heads + h * checkpoints * length,
                                        int(length), block});
         }
+        return records;
+        };
+        auto records=build(*table);
         TORCH_CHECK(records.size() <= INT_MAX, "too many packed chunk tasks");
         if (records.empty()) return at::empty_like(summary);
-        task_storage = upload_records(records, summary.device());
+        task_storage = dism_graph::state(*table) ? dism_graph::records(*table,
+            "hard_chunk:"+std::to_string(heads),summary.device(),
+            [build](const at::Tensor& table) { return dism_graph::bytes(build(table)); })
+            : upload_records(records, summary.device());
         grid = dim3(records.size());
     } else {
         TORCH_CHECK(summary.dim() == 4, "fixed hard summary must be [B,H,C,N]");

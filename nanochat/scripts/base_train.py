@@ -66,6 +66,8 @@ print_banner()
 # -----------------------------------------------------------------------------
 # CLI arguments
 parser = argparse.ArgumentParser(description="Pretrain base model")
+parser.add_argument("--cuda-graph", action="store_true",
+                    help="Capture packed DISM microbatch forward/backward (DISM_HARD_PLANNER=0)")
 # Logging
 parser.add_argument("--wandb-project", type=str, default="nanochat")
 parser.add_argument("--dual-eval-valid-tokens", type=int, default=0)
@@ -441,7 +443,14 @@ if getattr(orig_model, 'dynamic_compile', False):
     shape_config.use_duck_shape = False
     torch._dynamo.config.capture_dynamic_output_shape_ops = True
     torch._inductor.config.compile_threads = 1
-model = torch.compile(model, dynamic=getattr(orig_model, 'dynamic_compile', False))
+if args.cuda_graph:
+    if not getattr(orig_model, 'document_balanced_loss', False) or device_type != 'cuda':
+        raise ValueError('--cuda-graph requires the packed DISM CUDA training model')
+    if COMPUTE_DTYPE == torch.float16:
+        raise ValueError('--cuda-graph requires BF16 training without GradScaler')
+else:
+    model = torch.compile(model, dynamic=getattr(orig_model, 'dynamic_compile', False))
+training_graph = None
 
 # -----------------------------------------------------------------------------
 # Scaling laws and muP extrapolations to determine the optimal training horizon, batch size, learning rates, weight decay.
@@ -872,7 +881,14 @@ while True:
         from nanochat.document_loss import DocumentLossAccumulator
         document_step = DocumentLossAccumulator(grad_accum_steps, device)
     for micro_step in range(grad_accum_steps):
-        if document_step is not None:
+        if args.cuda_graph:
+            if training_graph is None:
+                from nanochat.cuda_graph import PackedTrainingGraph
+                training_graph = PackedTrainingGraph(
+                    orig_model, x, y, cu_seqlens, microbatches=grad_accum_steps)
+            loss, count = training_graph.forward_backward(x, y, cu_seqlens)
+            document_step.add(loss, count)
+        elif document_step is not None:
             loss, count = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids,
                                 loss_reduction=getattr(orig_model, 'loss_sum_reduction', 'document_sum'))
             document_step.add(loss, count)
@@ -882,7 +898,9 @@ while True:
         # Document loss is a numerator, NOT a local document mean. This
         # temporary scale is undone in finalize with the global denominator.
         loss = loss / grad_accum_steps
-        if scaler is not None:
+        if args.cuda_graph:
+            pass  # Backward and accumulation ran inside the microbatch graph.
+        elif scaler is not None:
             scaler.scale(loss).backward()
         else:
             loss.backward()

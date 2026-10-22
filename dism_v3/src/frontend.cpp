@@ -12,6 +12,7 @@ using T=at::Tensor;
 using V=std::vector<T>;
 using Pair=std::tuple<T,T>;
 using Triple=std::tuple<T,T,T>;
+void bind_graph_layout(py::module_&);
 
 // AOT transports a Tensor, but ownership lives in its CPU Storage/DataPtr,
 // not a Python Tensor wrapper or an ID registry. detach/view keep ownership;
@@ -339,6 +340,7 @@ void bind_frontend(py::module_& m) {
           py::arg("output"),py::arg("normalizer"),py::arg("dout"),py::arg("table"),
           py::arg("ctas"),py::arg("fp32"),py::arg("diagnostics"),py::arg("direction_true")=false);
     m.def("make_varlen_layout",&make_layout);
+    bind_graph_layout(m);
     m.def("prepare_operands",[](V x,bool packed,bool absorbed){
         py::gil_scoped_release release;
         at::NoGradGuard guard;return prepare(x,packed,absorbed);

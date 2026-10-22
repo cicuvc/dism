@@ -27,7 +27,8 @@ at::Tensor launch_chunk(at::Tensor a,at::Tensor b,at::Tensor table,int64_t heads
         int blocks=(p+(count-1)*32+127)/128;
         append_tasks(tasks,s,heads*blocks);
     }
-    launch_common(varlen_chunk_address<Reverse>(),args,layout,tasks,0,a.device(),128);
+    launch_common(varlen_chunk_address<Reverse>(),args,layout,tasks,0,a.device(),128,
+                  256,heads,Reverse?-2:-1);
     return output;
 }
 } // namespace dism_varlen

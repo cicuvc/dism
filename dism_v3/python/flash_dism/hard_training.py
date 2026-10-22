@@ -294,7 +294,7 @@ def default_hard_planner(device):
     if device.index is None:
         device = torch.device('cuda', torch.cuda.current_device())
     with torch.cuda.device(device):
-        if torch.cuda.is_current_stream_capturing():
+        if torch.cuda.is_current_stream_capturing() and os.environ.get('DISM_HARD_PLANNER', '0') != '0':
             raise RuntimeError('DISM asynchronous training does not support CUDA Graph capture')
     key = (os.getpid(), device.index)
     with _runtime_lock:
@@ -307,7 +307,10 @@ def default_hard_planner(device):
                     max_inflight=int(os.environ.get('DISM_PLANNER_MAX_INFLIGHT', '32')),
                     backward_policy=os.environ.get('DISM_HARD_BACKWARD', 'ready'),
                     compact=bool(int(os.environ.get('DISM_PLANNER_COMPACT', '1'))))
-        return _runtimes[key]
+        planner = _runtimes[key]
+        if torch.cuda.is_current_stream_capturing() and not isinstance(planner, DisabledHardPlanner):
+            raise RuntimeError('DISM asynchronous training does not support CUDA Graph capture')
+        return planner
 
 
 def shutdown_hard_planners():
@@ -328,6 +331,8 @@ def layout_from_table(table, tokens):
         return None
     from .varlen import VarlenLayout
     table = table.view(-1, 7)
+    if cu.graph_layout_maximum(table):
+        return VarlenLayout.for_graph(table, tokens)
     lengths = tuple(table[:, 1].tolist())
     return VarlenLayout(table, lengths, tokens, tokens,
                         sum(((n-1)//32)*n for n in lengths if n),

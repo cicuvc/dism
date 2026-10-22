@@ -230,6 +230,21 @@ class FusedAdamWMXFP8(torch.optim.Optimizer):
         self._fp8_outputs[parameter] = (weight_fp8, weight_scale)
         return self
 
+    def load_state_dict(self, state_dict):
+        # Optimizer.load_state_dict casts floating state to each parameter's
+        # dtype, which would silently widen BF16 moments of FP32 parameters.
+        # Preserve this optimizer's checkpoint schema and all saved values.
+        for state in state_dict['state'].values():
+            for name in ('exp_avg', 'exp_avg_sq'):
+                if name in state and state[name].dtype != torch.bfloat16:
+                    raise TypeError('FusedAdamWMXFP8 checkpoint requires BF16 moments')
+        result = super().load_state_dict(state_dict)
+        for state in self.state.values():
+            for name in ('exp_avg', 'exp_avg_sq'):
+                if name in state:
+                    state[name] = state[name].to(torch.bfloat16)
+        return result
+
     def _parameter_state(self, parameter):
         state = self.state[parameter]
         if not state:

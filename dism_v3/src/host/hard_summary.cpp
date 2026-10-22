@@ -31,6 +31,8 @@ at::Tensor hard_summary_cuda(at::Tensor query, at::Tensor key, at::Tensor hard,
         TORCH_CHECK(n % hard.size(0) == 0 && (n / hard.size(0)) % 256 == 0,
                     "packed hard rows must evenly divide tokens into 256-aligned training rows");
         int64_t row_tokens = n / hard.size(0);
+        auto build=[h,n,row_tokens](const at::Tensor& table) {
+        Layout layout(table);
         std::vector<HardSummaryTask> records;
         for (int s = 0; s < layout.sequences; ++s) {
             int64_t begin = layout.get(s, Begin), length = layout.get(s, Length);
@@ -43,8 +45,14 @@ at::Tensor hard_summary_cuda(at::Tensor query, at::Tensor key, at::Tensor hard,
                         layout.get(s, ForwardOffset) * h + head * ((length - 1) / 32) * length,
                         (begin / row_tokens) * h + head, int(length), q});
         }
+        return records;
+        };
+        auto records=build(*table);
         tasks = records.size();
-        task_storage = upload_records(records, query.device());
+        task_storage = dism_graph::state(*table) ? dism_graph::records(*table,
+            "hard_summary:"+std::to_string(h),query.device(),
+            [build](const at::Tensor& table) { return dism_graph::bytes(build(table)); })
+            : upload_records(records, query.device());
         output = at::full({layout.forward * h}, -1, options);
     } else {
         TORCH_CHECK(hard.size(0) == b, "fixed hard must be [B,H]");

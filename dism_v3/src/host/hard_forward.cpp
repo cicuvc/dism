@@ -58,6 +58,8 @@ std::tuple<at::Tensor,at::Tensor> hard_readout_cuda(std::vector<at::Tensor> x,
         int64_t row_tokens=n/hard.size(0);
         check(boundary,at::kInt,{layout.forward*h},"packed hard boundary");
         max_length=layout.max_padded;
+        auto build=[h,n,row_tokens](const at::Tensor& table) {
+        Layout layout(table);
         std::vector<dism_hard_forward::Task> records;
         for (int s=0;s<layout.sequences;++s) {
             int64_t begin=layout.get(s,Begin),length=layout.get(s,Length);
@@ -70,8 +72,14 @@ std::tuple<at::Tensor,at::Tensor> hard_readout_cuda(std::vector<at::Tensor> x,
                         layout.get(s,ForwardOffset)*h+head*((length-1)/32)*length,
                         (begin/row_tokens)*h+head});
         }
+        return records;
+        };
+        auto records=build(*table);
         tasks=records.size();
-        task_storage=upload_records(records,sq.device());
+        task_storage=dism_graph::state(*table) ? dism_graph::records(*table,
+            "hard_forward:"+std::to_string(h),sq.device(),
+            [build](const at::Tensor& table) { return dism_graph::bytes(build(table)); })
+            : upload_records(records,sq.device());
     } else {
         TORCH_CHECK(hard.size(0)==b,"fixed hard must be [B,H]");
         check(boundary,at::kInt,{b,h,(n-1)/32,n},"hard boundary");

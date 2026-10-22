@@ -390,8 +390,9 @@ if __name__ == "__main__":
     base_flags = cxx_build_args.get_cxxflags() + ['-Ibuild', f'-DDISM_ENABLE_FP32={fp32}']
     target.add_cxx('src/module.cpp', base_flags)
     target.add_cxx('src/frontend.cpp', base_flags)
+    target.add_cxx('src/graph_layout.cpp', base_flags + ['-I/usr/local/cuda/include'])
     cxx_files = [p for p in glob.glob('src/**/*.cpp', recursive=True)
-                 if p not in ('src/module.cpp','src/frontend.cpp') and (probes or not p.startswith('src/probe/'))]
+                 if p not in ('src/module.cpp','src/frontend.cpp','src/graph_layout.cpp') and (probes or not p.startswith('src/probe/'))]
     cuda_files = glob.glob('src/*.cu')
     if probes:
         cuda_files += glob.glob('src/probe/*.cu')

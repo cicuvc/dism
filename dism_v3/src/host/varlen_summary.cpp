@@ -37,7 +37,7 @@ std::tuple<at::Tensor,at::Tensor> varlen_summary_cuda(
     for (int s=0;s<layout.sequences;++s)
         append_tasks(tasks,s,h*(layout.get(s,Length)/CONFIG.getQBlockSize()));
     launch_common(varlen_summary_address(direction_true),args,layout,tasks,SUMMARY_SHARED_BYTES,operands[0].device(),
-                  384,t/operands[9].size(0));
+                  384,t/operands[9].size(0),h,CONFIG.getQBlockSize());
     return {a,b};
 }
 

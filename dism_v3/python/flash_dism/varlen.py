@@ -23,6 +23,17 @@ class VarlenLayout:
     forward_elements: int
     vertical_elements: int
     backward_elements: int
+    max_length: int = 0  # Nonzero only for an explicitly prepared graph capacity.
+
+    @classmethod
+    def for_graph(cls, table, total_tokens):
+        maximum = cu.graph_layout_maximum(table)
+        if not maximum:
+            raise ValueError('expected an owned CUDA Graph layout')
+        return cls(table, tuple(table[:, 1].tolist()), total_tokens, total_tokens,
+                   total_tokens*((maximum-1)//32),
+                   total_tokens*((maximum-1)//16),
+                   total_tokens*(maximum//32), maximum)
 
     @classmethod
     def from_cu_seqlens(cls, cu_seqlens, total_tokens):

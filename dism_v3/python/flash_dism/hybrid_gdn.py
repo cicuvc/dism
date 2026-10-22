@@ -46,7 +46,7 @@ class DismGdnAttention(DismAttention):
         self.gdn_dt_bias.copy_(dt+torch.log(-torch.expm1(-dt)))
 
     @torch.compiler.disable
-    def gdn_raw(self,x,cu_seqlens,max_seqlen,v_first=None,linear_q=None,linear_k=None,conv_seq_idx=None):
+    def gdn_raw(self,x,cu_seqlens,max_seqlen,v_first=None,linear_q=None,linear_k=None,conv_seq_idx=None,gdn_chunk_indices=None):
         # Keep FLA metadata/custom autograd outside Dynamo (same policy as controls).
         from fla.ops.gated_delta_rule import chunk_gated_delta_rule
         def project(conv, channels, linear=None):
@@ -63,12 +63,15 @@ class DismGdnAttention(DismAttention):
             v = value_residual_mix(v, v_first, self.gdn_v_residual_gate(x))
         beta=self.gdn_b_proj(x).sigmoid()
         g=-self.gdn_A_log.float().exp()*F.softplus(self.gdn_a_proj(x).float()+self.gdn_dt_bias.float())
+        if gdn_chunk_indices is not None:
+            from .graph_gdn import prepared_gdn
+            return prepared_gdn(q,k,v,g,beta,cu_seqlens,gdn_chunk_indices)
         return chunk_gated_delta_rule(q=q,k=k,v=v,g=g,beta=beta,
             initial_state=None,output_final_state=False,cu_seqlens=cu_seqlens,
             use_qk_l2norm_in_kernel=True)[0]
 
-    def _combine_cuda(self,output,x,v,cu_seqlens,max_seqlen,v_first=None,linear_q=None,linear_k=None,conv_seq_idx=None):
-        return output+self.gdn_raw(x,cu_seqlens,max_seqlen,v_first,linear_q,linear_k,conv_seq_idx)
+    def _combine_cuda(self,output,x,v,cu_seqlens,max_seqlen,v_first=None,linear_q=None,linear_k=None,conv_seq_idx=None,gdn_chunk_indices=None):
+        return output+self.gdn_raw(x,cu_seqlens,max_seqlen,v_first,linear_q,linear_k,conv_seq_idx,gdn_chunk_indices)
 
     def forward(self,hidden_states,attention_mask=None,past_key_values=None,use_cache=False,**kwargs):
         if use_cache or past_key_values is not None:

@@ -29,6 +29,12 @@ compiled backward additionally requires Torch's `donated_buffer=False`, as for
 other AOT operators with donated buffers; this library does not alter that
 global compiler setting. Nanochat's existing GDN graph breaks remain unchanged.
 
+An explicit planner-disabled nanochat capture path is documented in
+[CUDA_GRAPHS.md](CUDA_GRAPHS.md). It stages mutable packed metadata outside
+replay and captures eager forward/backward, including GDN and MXFP8. This does
+not make arbitrary `torch.compile(mode='reduce-overhead')` calls compatible
+with the CPU metadata/handle outputs of the ordinary operators.
+
 ## Repair and supported compilation recipe
 
 The issues below describe the original c2a9ed9 baseline. They are now fixed

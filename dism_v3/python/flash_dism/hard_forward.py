@@ -35,7 +35,7 @@ def forward_hard(sq, sk, v, idx_q, idx_k, hard, tau, *, layout=None, ctas=0, sav
     """
     summary = summarize_hard(idx_q,idx_k,hard,layout=layout,ctas=ctas)
     boundary = hard_chunk_scan(summary,layout=layout,heads=sq.shape[2])
-    max_length = sq.shape[1] if layout is None else max(layout.lengths)
+    max_length = sq.shape[1] if layout is None else (layout.max_length or max(layout.lengths))
     lut = hard_log_weights(tau,max_length)
     output,normalizer = hard_readout(sq,sk,v,idx_q,idx_k,hard,boundary,lut,layout=layout,ctas=ctas)
     if save_state:

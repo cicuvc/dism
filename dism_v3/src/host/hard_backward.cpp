@@ -51,6 +51,8 @@ std::vector<at::Tensor> hard_backward_cuda(std::vector<at::Tensor> x,at::Tensor 
         int64_t row_tokens=n/x[6].size(0);
         check(boundary,at::kInt,{layout.forward*h},"packed integer boundary");
         check(logw,at::kFloat,{h,layout.max_padded+1},"packed log weight LUT");
+        auto build=[h,n,row_tokens](const at::Tensor& table) {
+        Layout layout(table);
         std::vector<dism_hard_backward::Task> records;
         std::vector<dism_hard_backward::Task> tau_records;
         for(int s=0;s<layout.sequences;++s) {
@@ -73,10 +75,25 @@ std::vector<at::Tensor> hard_backward_cuda(std::vector<at::Tensor> x,at::Tensor 
                 }
             }
         }
+        if (dism_graph::state(table)) {
+            dism_hard_backward::Task empty{};
+            empty.head=-1; // tau reducer skips before touching the hard mask.
+            tau_records.resize(layout.sequences*h,empty);
+        }
+        return std::make_pair(records,tau_records);
+        };
+        auto [records,tau_records]=build(*table);
         task_count=records.size();
-        task_storage=upload_records(records,sq.device());
         tau_task_count=tau_records.size();
-        tau_task_storage=upload_records(tau_records,sq.device());
+        if (dism_graph::state(*table)) {
+            task_storage=dism_graph::records(*table,"hard_backward:"+std::to_string(h),sq.device(),
+                [build](const at::Tensor& table) { return dism_graph::bytes(build(table).first); });
+            tau_task_storage=dism_graph::records(*table,"hard_tau:"+std::to_string(h),sq.device(),
+                [build](const at::Tensor& table) { return dism_graph::bytes(build(table).second); });
+        } else {
+            task_storage=upload_records(records,sq.device());
+            tau_task_storage=upload_records(tau_records,sq.device());
+        }
     } else {
         check(x[6],at::kBool,{b,h},"sequence hard flags");
         check(boundary,at::kInt,{b,h,(n-1)/32,n},"integer boundary");

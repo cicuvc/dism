@@ -44,6 +44,14 @@ struct Layout {
             backward+=(n+31)/32*p;
             max_padded=std::max(max_padded,p);
         }
+        if (auto* graph=dism_graph::state(table)) {
+            // Exact document offsets above stay unchanged. Only allocation and
+            // launch bounds use the fixed capacity required by graph replay.
+            forward=tokens*((graph->maximum-1)/32);
+            vertical=tokens*((graph->maximum-1)/16);
+            backward=tokens*(graph->maximum/32);
+            max_padded=graph->maximum;
+        }
     }
     int64_t get(int64_t sequence,Field field) const {
         return cpu.data_ptr<int64_t>()[sequence*Fields+field];

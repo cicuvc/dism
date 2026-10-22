@@ -396,7 +396,7 @@ def _validate_inputs(hidden_states, weight, labels, ignore_index):
         raise ValueError("weight.shape[1] must equal hidden_states.shape[2]")
     # A device-to-host label check would break the Dynamo graph.  Keep the
     # diagnostic in eager mode only, like the existing fused entry.
-    if not torch.compiler.is_compiling():
+    if not torch.compiler.is_compiling() and not torch.cuda.is_current_stream_capturing():
         invalid = ((labels != ignore_index)
                    & ((labels < 0) | (labels >= vocab_size)))
         if bool(invalid.any().item()):
@@ -415,7 +415,7 @@ def _varlen_documents(hidden_states, cu_seqlens, max_seqlen):
         raise ValueError(
             "cu_seqlens must be a contiguous CUDA int32 or int64 tensor")
     total_tokens = hidden_states.shape[1]
-    if not torch.compiler.is_compiling():
+    if not torch.compiler.is_compiling() and not torch.cuda.is_current_stream_capturing():
         lengths = cu_seqlens[1:] - cu_seqlens[:-1]
         if (int(cu_seqlens[0].item()) != 0
                 or int(cu_seqlens[-1].item()) != total_tokens

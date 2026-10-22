@@ -5,6 +5,7 @@
 #include <cstring>
 #include <list>
 #include <string>
+#include "host/graph_layout.h"
 
 namespace dism_metadata {
 // Only immutable integer document/task records belong here. Content identity
@@ -47,6 +48,13 @@ inline at::Tensor upload(const void* data, size_t bytes, at::Device device) {
 }
 
 inline at::Tensor documents(const at::Tensor& table, at::Device device) {
+    if (dism_graph::state(table)) {
+        return dism_graph::records(table,"documents",device,[](const at::Tensor& cpu) {
+            dism_graph::Bytes data(cpu.nbytes());
+            std::memcpy(data.data(),cpu.data_ptr(),data.size());
+            return data;
+        }).view(at::kLong).view(table.sizes());
+    }
     return upload(table.data_ptr(), table.nbytes(), device)
         .view(at::kLong).view(table.sizes());
 }

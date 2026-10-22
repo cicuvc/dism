@@ -141,7 +141,15 @@ inline void launch_backward(Kernel kernel,const dism_backward::Args& common,
         append_tasks(tasks,s,common.score.heads*(layout.get(s,Length)/128));
     if (tasks.empty()) return;
     auto documents=dism_metadata::documents(layout.cpu,device);
-    auto work=upload_records(tasks,device);
+    auto work=dism_graph::state(layout.cpu) ? dism_graph::records(layout.cpu,
+        "soft_backward:"+std::to_string(common.score.heads),device,
+        [heads=common.score.heads](const at::Tensor& table) {
+            Layout next(table);
+            std::vector<int2> result;
+            for (int s=0;s<next.sequences;++s)
+                append_tasks(result,s,heads*(next.get(s,Length)/128));
+            return dism_graph::bytes(result);
+        }) : upload_records(tasks,device);
     BackwardArgs args{common,documents.data_ptr<int64_t>(),reinterpret_cast<const int2*>(work.data_ptr()),hard_row_tokens};
     C10_CUDA_CHECK(cudaFuncSetAttribute(kernel,cudaFuncAttributeMaxDynamicSharedMemorySize,
                                       dism_backward::SharedBytes));

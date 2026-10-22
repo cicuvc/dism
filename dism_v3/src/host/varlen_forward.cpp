@@ -55,7 +55,7 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor> varlen_forward_cuda(
         for (int s=0;s<layout.sequences;++s)
             append_tasks(tasks,s,h*(layout.get(s,Length)/QROWS));
         launch_common(varlen_forward_address<FP32Output>(direction_true),args,layout,tasks,shared_bytes<FP32Output>,operands[0].device(),
-                      384,t/operands[9].size(0));
+                      384,t/operands[9].size(0),h,QROWS);
         return {output,normalizer,vertical};
     };
     #if DISM_ENABLE_FP32

@@ -42,7 +42,8 @@ class PureGdnAttention(nn.Module):
             raise NotImplementedError('Packed prefill only')
         x=hidden_states;b,n,_=x.shape
         out=self.gdn_raw(x,kwargs.get('cu_seqlens'),kwargs.get('max_seqlen'),kwargs.get('v_first'),
-                         conv_seq_idx=kwargs.get('conv_seq_idx'))
+                         conv_seq_idx=kwargs.get('conv_seq_idx'),
+                         gdn_chunk_indices=kwargs.get('gdn_chunk_indices'))
         gate=self.g_proj_up(self.g_proj_down(x)).reshape(b,n,self.heads,self.value_dim)
         if torch.compiler.is_compiling():
             values=out.float()*torch.rsqrt(out.float().square().mean(-1,keepdim=True)+self.norm.eps)

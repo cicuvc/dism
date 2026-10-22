@@ -145,7 +145,7 @@ class DismAttention(nn.Module):
             self.v_residual_gate = nn.Linear(width, heads)
             self.v_residual_gate._value_residual_gate = True
     def _combine_cuda(self, output, x, v, cu_seqlens, max_seqlen, v_first=None,
-                      linear_q=None, linear_k=None, conv_seq_idx=None):
+                      linear_q=None, linear_k=None, conv_seq_idx=None, gdn_chunk_indices=None):
         return output
 
     def _activate_readout(self, projected, *, is_key=False, heads=None):
@@ -233,6 +233,8 @@ class DismAttention(nn.Module):
         output = self._forward_cuda(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen,
                                     v_first=v_first, conv_seq_idx=kwargs.get('conv_seq_idx'),
                                     share_branch_boundaries=kwargs.get('_share_branch_boundaries', False),
+                                    graph_layout=kwargs.get('graph_layout'),
+                                    gdn_chunk_indices=kwargs.get('gdn_chunk_indices'),
                                     direction_true=kwargs.get('direction_true', False), **options)
         if indices is not None:
             from fla.layers.utils import pad_input
@@ -242,7 +244,8 @@ class DismAttention(nn.Module):
     def _forward_cuda(self, x, hard_prob=None, *, direction=None, hard=None,
                 hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None,
                 v_first=None, vocab_temperature=None, conv_seq_idx=None, direction_true=False,
-                share_branch_boundaries=False, tau_override=None):
+                share_branch_boundaries=False, tau_override=None, graph_layout=None,
+                gdn_chunk_indices=None):
         """Default: soft training, hard evaluation; explicit flags override sampling.
 
         direction: bool [B,H] (True selects k-to-qemb, the query-LSE path).
@@ -278,7 +281,13 @@ class DismAttention(nn.Module):
         if cu_seqlens is not None:
             if batch != 1:
                 raise ValueError("packed execution requires batch=1")
-            if compiling:
+            if graph_layout is not None:
+                if compiling:
+                    raise ValueError('prepared CUDA Graph execution uses eager capture')
+                layout = graph_layout
+                if layout.tokens != length or not layout.max_length:
+                    raise ValueError('invalid prepared graph layout')
+            elif compiling:
                 from .compiler import prepare_pack
                 # A total-token upper bound is safe and independent of the
                 # number/lengths of documents; explicit bounds avoid overlaunch.
@@ -372,7 +381,8 @@ class DismAttention(nn.Module):
         output = self._combine_cuda(output, x, v,
                                     branch_cu_seqlens if share_branch_boundaries else cu_seqlens,
                                     max_seqlen, v_first=v_first,
-                                    linear_q=linear_q, linear_k=linear_k, conv_seq_idx=conv_seq_idx)
+                                    linear_q=linear_q, linear_k=linear_k, conv_seq_idx=conv_seq_idx,
+                                    gdn_chunk_indices=gdn_chunk_indices)
         gate = self.g_proj_up(self.g_proj_down(x)).unflatten(
             -1, (self.heads, self.value_dim)
         )

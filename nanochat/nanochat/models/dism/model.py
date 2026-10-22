@@ -459,6 +459,8 @@ class DismLM(nn.Module):
         cu_seqlens=None,
         segment_ids=None,
         loss_reduction="mean",
+        graph_layout=None,
+        gdn_chunk_indices=None,
     ):
         del segment_ids
         batch, length = input_ids.shape
@@ -496,6 +498,7 @@ class DismLM(nn.Module):
                         use_cache=False,
                         v_first=v_first,
                         conv_seq_idx=conv_seq_idx,
+                        gdn_chunk_indices=gdn_chunk_indices,
                     )
                     continue
 
@@ -534,6 +537,8 @@ class DismLM(nn.Module):
                     conv_seq_idx=conv_seq_idx,
                     direction_true=True,
                     _share_branch_boundaries=True,
+                    graph_layout=graph_layout,
+                    gdn_chunk_indices=gdn_chunk_indices,
                 )
 
             x = self.norm(x).to(torch.bfloat16)
