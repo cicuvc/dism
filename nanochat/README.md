@@ -32,7 +32,10 @@ These are historical remote results, not fresh evaluation of this tree.
 `--cuda-graph` optionally captures packed DISM microbatch forward/backward with
 `DISM_HARD_PLANNER=0`, including GDN and MXFP8 FFN. Changed document boundaries
 are validated and staged before replay; optimizer, loader and checkpoint flows
-remain outside capture. See [CUDA Graph training](../dism_v3/docs/CUDA_GRAPHS.md)
+remain outside capture. Add `--cuda-graph-planner` to explicitly enable the
+compact C64 `ready` planner (one rank, R32/DV64, D32/64); the runner drains
+background work and reports errors before optimizer updates. Planner graphs
+remain off by default. See [CUDA Graph training](../dism_v3/docs/CUDA_GRAPHS.md)
 for lifecycle, memory requirements and validation commands.
 
 Quadratic hard backward is the default. Set `DISM_HARD_PLANNER=1` to opt into

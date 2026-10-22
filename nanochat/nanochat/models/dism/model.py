@@ -461,8 +461,12 @@ class DismLM(nn.Module):
         loss_reduction="mean",
         graph_layout=None,
         gdn_chunk_indices=None,
+        graph_planner_bindings=None,
     ):
         del segment_ids
+        if graph_planner_bindings is not None:
+            if not self.training or graph_layout is None or len(graph_planner_bindings) != len(self.layers):
+                raise ValueError('planner graph bindings require one entry per layer in packed training')
         batch, length = input_ids.shape
         if length > self.config.sequence_len or cu_seqlens is None:
             raise ValueError(
@@ -538,6 +542,7 @@ class DismLM(nn.Module):
                     direction_true=True,
                     _share_branch_boundaries=True,
                     graph_layout=graph_layout,
+                    graph_binding=None if graph_planner_bindings is None else graph_planner_bindings[i],
                     gdn_chunk_indices=gdn_chunk_indices,
                 )
 

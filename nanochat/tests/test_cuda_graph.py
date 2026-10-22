@@ -9,12 +9,12 @@ from nanochat.cuda_graph import PackedTrainingGraph
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 
 
-def model_pair(mxfp8):
+def model_pair(mxfp8, planner=False, layers=2):
     torch.manual_seed(981)
     spec = ModelSpec('dism_gdn_hybrid', 1, dict(
-        sequence_len=512, vocab_size=128, n_layer=2, n_head=4,
-        n_embd=128, intermediate_size=256, head_dim=32, value_dim=32,
-        readout_dim=16, qk_vocab_size=32, anneal_steps=10,
+        sequence_len=512, vocab_size=128, n_layer=layers, n_head=4,
+        n_embd=128, intermediate_size=256, head_dim=32, value_dim=64 if planner else 32,
+        readout_dim=32 if planner else 16, qk_vocab_size=32, anneal_steps=10,
         hard_prob_max=.95, mxfp8=mxfp8, mxfp8_projections=False,
         mxfp8_optimizer=mxfp8,
     ))
@@ -25,14 +25,16 @@ def model_pair(mxfp8):
     return a, b
 
 
+@pytest.mark.parametrize('planner', [False, True])
 @pytest.mark.parametrize('mxfp8', [False, True])
-def test_packed_replay_matches_training(monkeypatch, mxfp8):
+def test_packed_replay_matches_training(monkeypatch, mxfp8, planner):
     monkeypatch.setenv('DISM_HARD_PLANNER', '0')
-    model, reference = model_pair(mxfp8)
+    model, reference = model_pair(mxfp8, planner)
     ids = torch.randint(128, (2, 512), device='cuda')
     labels = torch.randint(128, (2, 512), device='cuda')
     initial = torch.tensor([0,512,1024], dtype=torch.int32, device='cuda')
-    graph = PackedTrainingGraph(model, ids, labels, initial, microbatches=2)
+    graph = PackedTrainingGraph(model, ids, labels, initial, microbatches=2,
+                                planner=planner, planner_workers=2)
     assert model.rng_counter.item() == reference.rng_counter.item() == 0
     configs = ([0,256,512,1024], [0,512,768,1024], [0,256,512,768,1024],
                [0,0,512,512,1024])
@@ -43,8 +45,8 @@ def test_packed_replay_matches_training(monkeypatch, mxfp8):
     for step in range(2):
         model.set_training_step(3 + step*6)
         reference.set_training_step(3 + step*6)
-        model.zero_grad(set_to_none=True)
-        reference.zero_grad(set_to_none=True)
+        model.zero_grad(set_to_none=step==0)
+        reference.zero_grad(set_to_none=step==0)
         for micro in range(2):
             bounds = configs[step*2+micro]
             cu = cu_storage[:len(bounds)]
@@ -55,6 +57,7 @@ def test_packed_replay_matches_training(monkeypatch, mxfp8):
             if step==1 and micro==0:
                 labels.fill_(-1)  # No valid documents: no stale loss/gradient contribution.
             got, count = graph.forward_backward(ids, labels, cu)
+            graph.drain()
             # Installed FLA's CPU index builder numbers only nonempty chunks
             # but leaves empty intervals in cu_seqlens. Compare with the
             # mathematically equivalent compact pack, not that NaN-producing
@@ -78,11 +81,14 @@ def test_packed_replay_matches_training(monkeypatch, mxfp8):
             model(ids, labels, cu_seqlens=torch.unique_consecutive(cu))
         model.train()
     assert set(model.state_dict()) == set(reference.state_dict())
+    assert sum(graph.route_counts.values()) == 4*graph.hard_layers
+    graph.close()
 
 
-def test_capture_preserves_resumed_state_and_existing_gradients(monkeypatch):
+@pytest.mark.parametrize('planner', [False, True])
+def test_capture_preserves_resumed_state_and_existing_gradients(monkeypatch, planner):
     monkeypatch.setenv('DISM_HARD_PLANNER', '0')
-    model, restored = model_pair(True)
+    model, restored = model_pair(True, planner)
     ids = torch.randint(128,(1,512),device='cuda')
     labels = torch.randint(128,(1,512),device='cuda')
     bounds = torch.tensor([0,256,512],device='cuda',dtype=torch.int32)
@@ -105,12 +111,16 @@ def test_capture_preserves_resumed_state_and_existing_gradients(monkeypatch):
     restored(ids,labels,cu_seqlens=bounds,loss_reduction='document_sum')[0].backward()
     before = {n:p.grad.clone() for n,p in restored.named_parameters() if p.grad is not None}
     counter = restored.rng_counter.clone()
-    graph = PackedTrainingGraph(restored,ids,labels,bounds)
+    cpu_rng, cuda_rng = torch.get_rng_state(), torch.cuda.get_rng_state()
+    graph = PackedTrainingGraph(restored,ids,labels,bounds,planner=planner,planner_workers=2)
+    assert torch.equal(cpu_rng,torch.get_rng_state())
+    assert torch.equal(cuda_rng,torch.cuda.get_rng_state())
     torch.testing.assert_close(restored.rng_counter,counter,rtol=0,atol=0)
     for n,p in restored.named_parameters():
         if n in before:
             torch.testing.assert_close(p.grad,before[n],rtol=0,atol=0)
     got,_ = graph.forward_backward(ids,labels,bounds)
+    graph.drain()
     want,_ = model(ids,labels,cu_seqlens=bounds,loss_reduction='document_sum')
     want.backward()
     torch.testing.assert_close(got,want,rtol=.02,atol=.005)
@@ -122,6 +132,7 @@ def test_capture_preserves_resumed_state_and_existing_gradients(monkeypatch):
     for a,b in zip(restored_optimizer.state.values(),optimizer.state.values()):
         assert a.keys() == b.keys()
         assert a['step'] == b['step']
+    graph.close()
 
 
 def test_graph_rejects_changed_invalid_boundaries(monkeypatch):

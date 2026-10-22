@@ -2,11 +2,10 @@
 
 记录日期：2026-10-23。代码基线：`510b3eb`。
 
-状态：**P2/P3/P4 独立 runtime 与 hard backward 已提交为 `5f99856`；
-P5 core/vocabulary 显式 graph binding 已实现，验证见第 11 节。**
-P6 模型/runner 接入尚未开始，`PackedTrainingGraph` 仍要求
-`DISM_HARD_PLANNER=0`。设计文档首次提交为 `b2da895`；P1 结果见第 9 节。
-不据此宣称整模型 planner graph 已支持；默认开关不变，暂不做性能优化。
+状态：**P2/P3/P4 已提交为 `5f99856`；P5 已提交为 `141f395`。
+P6 模型/runner 接入与 P7 验收见第 12 节。**
+整模型通过独立 `--cuda-graph-planner` 显式启用，默认开关不变，不做性能优化。
+设计文档首次提交为 `b2da895`；P1 结果见第 9 节。
 
 ## 1. 目标和范围
 
@@ -236,8 +235,8 @@ shared FP32 atomicAdd，不修改已有默认 launches 来追求性能。
 | P3：固定 launch 的 event consumer | descriptor 驱动 compact 各阶段、动态有效任务数、workspace/tau 处理 | 独立 API 已实现；同图动态计划、原 compact/FP64 对照见第 10 节 |
 | P4：完整双路径门控 | quadratic 全链路门控、共享采样结果、输出初始化/合并 | 独立 API 已实现；完整 native fallback 门控、packed/双路径测试见第 10 节 |
 | P5：DISM core/vocabulary 接入 | capture 专用 runtime binding、D2H 节点、保存状态和梯度合并 | 已实现，见第 11 节；单层及多层完整前向反向，连续改变 labels/masks/tau/boundaries，旧 eager/AOT 回归通过 |
-| P6：nanochat runner 接入 | replay 调度、预热与 capture、累积梯度、optimizer 前错误检查、实际 GPU 路由统计 | 基于 P5；小模型后再到当前模型，RNG/恢复/数据位置保持，限定支持组合并显式启用 |
-| P7：完整验收与交付 | 跨轮压力、异常生命周期、数值与 sanitizer 证据、运行文档 | 所有必需项完成后才声明支持；保留默认 planner-disabled 行为，不做吞吐优化 |
+| P6：nanochat runner 接入 | replay 调度、预热与 capture、累积梯度、optimizer 前错误检查、实际 GPU 路由统计 | 已实现；小模型及当前 123M 配置通过，见第 12 节 |
+| P7：完整验收与交付 | 跨轮压力、异常生命周期、数值与 sanitizer 证据、运行文档 | 结果与限制见第 12 节；默认关闭，不做吞吐优化 |
 
 ### P1：先解决同步原语，不碰模型
 
@@ -758,8 +757,8 @@ Memcheck 和 synccheck 各运行 21 项集成/生命周期用例，均为 0 erro
 launch defaults 或编译配置。第 10 节的 spill/CALL 结果和已知 strict dSK boundary
 失败仍适用；没有据此声称性能改进或消除历史数值限制。
 
-P6 尚未开始：`PackedTrainingGraph` 的 planner guard 保留，正式 runner 的梯度累积、
-RNG 恢复、optimizer 错误边界及路由日志仍须在下一阶段接入并验证。
+P5 交付时 `PackedTrainingGraph` 的 planner guard 保留。后续正式 runner 的梯度
+累积、RNG 恢复、optimizer 错误边界及路由日志接入见第 12 节。
 
 
 ### 11.4 检查复现
@@ -784,3 +783,139 @@ synccheck/racecheck 替换 `--tool`；完整 racecheck 含 soft F1/F3 已知告�
 后半组复查在上述 `-k` 表达式外加括号并追加 `and not full_graph`，使用
 `--tool racecheck --print-limit 0`。日志、SASS 和 ARRIVES 定位保存在忽略的
 `build/planner_graph_p5_*` 中，不进入 Git。
+
+## 12. P6/P7：整模型 runner 接入与验收（2026-10-23）
+
+### 12.1 接入与边界
+
+`nanochat.cuda_graph.PackedTrainingGraph(..., planner=True)` 为每个 DISM 层创建
+一个 vocabulary binding；纯 GDN 层保持原路径。模型通过显式 forward 参数传递
+bindings，不在 module 上注册 runtime，不新增 state_dict key，不改变 Parameter
+别名、no-decay 标记或 optimizer schema。普通 eager/compile 和默认 disabled graph
+仍使用原 dispatcher。
+
+正式训练入口使用 `--cuda-graph --cuda-graph-planner`。只支持单 rank/GPU、固定
+true direction、sequence-row hard sampling、BF16（含 MXFP8 FFN）、compact C64、
+R32/DV64、D32/64、`ready`。非 compact、其它 policy/尺寸、多 rank 被明确拒绝。
+只设置 `DISM_HARD_PLANNER=1` 不会绕过 graph guard，仍需独立显式开关。
+`DISM_PLANNER_WORKERS` 默认 16；`--cuda-graph-planner-max-bytes` 默认 1 GiB，
+等分给各层，覆盖快照与计划 payload/workspace，不包含整个 graph/model 或 native
+planner 的临时 CPU 算法内存。预算不足保留 quadratic；真正异常不静默降级。
+
+Warmup/capture 使用同一 owning stream，保存并恢复 CPU/CUDA RNG、模型 counter
+及原有梯度；正式 replay 恰好递增一次 counter。每个 microbatch 复用输入、layout、
+梯度与 slot 前先 drain 上一轮，再更新 packed 边界、arm、replay 和派发 host 工作。
+整个 microbatch 的前向/反向仍在一张图中；optimizer、归一化、clipping 留在图外。
+
+`forward_backward` 返回不代表后台 planner 已完成。训练循环在每步最后一个
+microbatch 后、document normalization / clipping / optimizer 前调用 `drain()`，
+并在 `finally` 中 `close()`。evaluation/checkpoint 位于上一步 drain 之后。
+独立 API 使用者必须遵守同样边界；支持 context manager。异常先退役 GPU、CPU、
+upload 工作再传播，失败 runner 不可继续 replay。参数、顶层状态 buffer、FP8
+weight storage 被替换时拒绝复用；正常原位更新允许。
+
+`last_routes` / `route_counts` 以及已有训练 route logger 读取 GPU `choice`；
+`last_planner_reasons` 区分预算或取消原因。统计不包含预热/capture。全 soft 也可
+选择空 event 计划，因此 `e` 数量不是 hard token 数量。Checkpoint 不保存 graph、
+event、epoch、descriptor、Future 或 worker；恢复模型和 optimizer 后重新 capture，
+不推进 dataloader，也不丢弃已保存的 next batch。
+
+### 12.2 回归、恢复和资源验收
+
+实现与测试入口：
+
+- `nanochat/nanochat/cuda_graph.py`、`models/dism/model.py`、`scripts/base_train.py`。
+- `nanochat/tests/test_cuda_graph.py`：disabled/enabled × BF16/MXFP8，累积梯度、
+  两种 zero_grad、空/忽略文档、reused boundaries、eval 后继续、已有梯度与恢复状态。
+- `nanochat/tests/test_planner_cuda_graph.py`：完整模型控制真实计划提前/延迟发布，
+  验证双 DISM 层的 event/fallback 选择及梯度；planner、upload、submit 异常；
+  capture 中 D2H 后失败；预算不足、取消、close、storage 替换及不支持配置拒绝。
+  异常使用可控注入；没有主动制造 CUDA context 损坏。
+- 36 次连续 replay 改变 inputs、边界和 soft/mixed/hard 概率，交替隐式/显式 drain。
+  预热后 allocator-active 波动小于 16 MiB；期间仅一个 graph layout owner，
+  close 并释放 graph、GC 后 native handle count 回到基线。
+- 真实 `torch.save`/`torch.load` 字节流恢复 model/optimizer、schema、RNG、prefetch
+  队列和已消费但未训练的 next batch，再连续执行两个 MXFP8 optimizer step。
+  counter/annealing、BF16 moments dtype/step、no-decay 标记、schema 和数据位置保持。
+  同时覆盖 eager 环境开关为 1、两个 graph 都明确 opt-in 的情况。
+
+合并回归 **171 passed / 5 strict_gradient deselected**，覆盖 checkpoint、prefetch、
+document CE/loss、GDN、MXFP8、selector、model integration、P2–P5 graph、disabled
+planner 和 Dynamo。随后增加的预算/取消测试及 enabled-environment 恢复测试所在
+文件单独运行 **16 passed**。没有放宽测试容差；strict marker 的已知限制仍见第 10 节。
+
+### 12.3 当前 123M 配置
+
+`tools/check_training_cuda_graph.py --planner` 在 RTX 5090 上用合成输入和随机模型，
+不加载用户 checkpoint、不读取数据集。配置为
+`sequence_true_125m_valres_mxfp8_ffnonly_slimpajama_3b_h768_h12_i1152_r32.json`，
+123,473,088 参数、12 层（6 层 DISM）、`[8,2048]`、backward scale `1/8`。
+先保存 eager quadratic 参考，再释放 eager 模型；每轮原位复制该参考的 master
+和 quantized weights，避免独立 AdamW 轨迹差异混入同输入梯度对照。
+
+| hard probability | 文档数 | eager / graph loss | 六层 GPU 路由 |
+|---|---:|---:|---|
+| 0 | 16 | 168.40597534 / 168.40597534 | eeeeee |
+| 约 0.475 | 64 | 673.45129395 / 673.45129395 | eeeeee |
+| 0.95 | 8 | 84.17779541 / 84.17779541 | eeqqqq |
+
+三轮 loss、count、RNG/annealing 均通过；所有参数梯度通过原有逐元素
+`atol=.001, rtol=.03`，loss 使用原有 `.005/.02`。参考与 graph 两阶段合计观测
+peak allocation 12,390 MiB。`reason` 均为空：最后一轮的 q 为采样时尚未就绪，
+不是预算不足。此处是三次真实异步路由观测，不代表稳定命中率或吞吐收益。
+
+没有改 CUDA/Triton kernel、数学、launch default 或编译配置；CALL/spill 证据
+沿用第 10 节。第 10/11 节的 strict dSK、FP32 词表转 BF16 导致离散 argmax
+变化以及 fixed soft F1/F3 racecheck 限制仍然存在。完整模型对照不替代独立
+FP64 oracle，也不消除已有数值限制。
+
+### 12.4 工具检查与复现
+
+Compute Sanitizer 2025.4.1（CUDA 13.1）对两个整模型 graph 测试文件进行检查：
+memcheck **23 passed，0 errors**；synccheck **23 passed，0 errors**。
+两者包含 enabled/disabled、BF16/MXFP8、累积梯度、异常退役、capture 失败、预算/
+取消、36 轮复用与序列化恢复。没有 kernel filter 或 suppression。
+
+整模型 racecheck 两项代表性测试（双 DISM 层提前/迟到发布、MXFP8 累积梯度）
+**2 passed**，工具汇总 **0 errors / 69 warnings**，退出码 **86**。使用
+`--print-limit 0` 完整展示全部 69 组报告，逐组核对均为 PyTorch 原生 RMSNorm
+backward，每组 1024 或 4096 hazards。这不是 clean racecheck 结果。内核为
+`layer_norm_grad_input_kernel_vectorized<float,float,true>`，read PC `+0x1b50`、
+write PC `+0x1c70`。单独运行纯 eager `torch.nn.RMSNorm(128, eps=1e-5)`，输入
+FP32 `[1,256,128]`、随机同形状上游梯度，也复现完全相同的 PC 和 1024 hazards：
+工具汇总 **0 errors / 1 warning**。此最小复现不导入 DISM、不使用 planner 或 graph。
+这说明该报告不依赖新增交接协议；**不据此认定误报，也不扩展 ARRIVES 例外**。
+该上游归一化告警保留为未解决限制，没有改 kernel 或过滤报告来消除它。
+最小复现也以 86 退出；核心 Python 代码如下，使用同样的 racecheck 命令运行即可：
+
+```python
+import torch
+torch.manual_seed(981)
+model = torch.nn.RMSNorm(128, eps=1e-5, device='cuda')
+x = torch.randn(1, 256, 128, device='cuda', requires_grad=True)
+model(x).backward(torch.randn_like(x))
+torch.cuda.synchronize()
+assert torch.isfinite(x.grad).all().item()
+```
+
+```bash
+export PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat"
+export DISM_HARD_PLANNER=0
+export OMP_NUM_THREADS=1
+export TORCHINDUCTOR_COMPILE_THREADS=1
+python -m pytest nanochat/tests/test_cuda_graph.py nanochat/tests/test_planner_cuda_graph.py -q
+python dism_v3/tools/check_training_cuda_graph.py --planner \
+  --model-spec nanochat/configs/sequence_true_125m_valres_mxfp8_ffnonly_slimpajama_3b_h768_h12_i1152_r32.json \
+  --rows 8 --iterations 3 --microbatches 8
+/usr/local/cuda-13.1/bin/compute-sanitizer --tool memcheck --error-exitcode 86 --print-limit 0 \
+  python -m pytest nanochat/tests/test_cuda_graph.py nanochat/tests/test_planner_cuda_graph.py -q
+# synccheck 使用同一命令替换 --tool。
+/usr/local/cuda-13.1/bin/compute-sanitizer --tool racecheck --error-exitcode 86 --print-limit 0 \
+  python -m pytest nanochat/tests/test_planner_cuda_graph.py::test_model_routes_and_snapshots \
+  'nanochat/tests/test_cuda_graph.py::test_packed_replay_matches_training[True-True]' -q
+```
+
+工具和测试使用 conda `blkw`；已核对 `flash_dism` 与 `cu_flash_dism` 均来自本工作树。
+CLI `--help`、修改文件的 Python 语法及 `git diff --check` 通过。原始日志保存在忽略的
+`build/planner_graph_p6_*` / `build/planner_graph_p7_*`，不进入 Git。测试未使用真实
+训练任务、数据集或用户 checkpoint，也未修改 TMA 插值实验的默认开关。

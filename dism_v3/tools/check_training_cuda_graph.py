@@ -8,6 +8,7 @@ storage. Both paths execute optimizer steps and preserve RNG/annealing state.
 import argparse
 import gc
 import json
+import os
 import torch
 
 from nanochat.models import ModelSpec, build_model, PretrainOptimizerConfig
@@ -75,7 +76,11 @@ def main():
     parser.add_argument('--iterations',type=int,default=3)
     parser.add_argument('--microbatches',type=int,default=8)
     parser.add_argument('--interp-backend',choices=['split','tma'],default='split')
+    parser.add_argument('--planner',action='store_true',help='Explicit compact ready graph planner')
+    parser.add_argument('--planner-max-bytes',type=int,default=2**30)
     args = parser.parse_args()
+    if os.environ.get('DISM_HARD_PLANNER','0') != '0':
+        parser.error('Use DISM_HARD_PLANNER=0 for the quadratic eager reference; --planner enables the graph planner')
     torch.set_num_threads(4)
     with open(args.model_spec) as source:
         spec = ModelSpec.from_dict(json.load(source))
@@ -92,53 +97,59 @@ def main():
     opt = optimizer(model)
     first = records[0]
     graph = PackedTrainingGraph(model,first['ids'].cuda(),first['labels'].cuda(),first['cu'],
-                                microbatches=args.microbatches)
+                                microbatches=args.microbatches,planner=args.planner,
+                                planner_max_bytes=args.planner_max_bytes)
     del initial
-    all_strict=[]
-    for index,record in enumerate(records):
-        model.zero_grad(set_to_none=True)
-        # Compare each step at identical master AND quantized weights. Tiny
-        # nondeterministic BF16 gradient differences otherwise produce diverging
-        # AdamW trajectories, which is not a same-input graph/eager comparison.
-        # Copy into existing storage: graph pointers and optimizer bindings stay
-        # unchanged, and subsequent replay must read the updated contents.
-        with torch.no_grad():
+    try:
+        all_strict=[]
+        for index,record in enumerate(records):
+            model.zero_grad(set_to_none=True)
+            # Compare each step at identical master AND quantized weights. Tiny
+            # nondeterministic BF16 gradient differences otherwise produce diverging
+            # AdamW trajectories, which is not a same-input graph/eager comparison.
+            # Copy into existing storage: graph pointers and optimizer bindings stay
+            # unchanged, and subsequent replay must read the updated contents.
+            with torch.no_grad():
+                for name,parameter in model.named_parameters():
+                    parameter.copy_(record['weights'][name])
+                for name,buffer in model.named_buffers():
+                    buffer.copy_(record['buffers'][name])
+            for module in model.modules():
+                if callable(getattr(module,'mark_fp8_synced',None)):
+                    module.mark_fp8_synced()
+            model.set_training_step(record['step'])
+            loss,count = graph.forward_backward(record['ids'].cuda(),record['labels'].cuda(),record['cu'])
+            graph.drain()
+            torch.testing.assert_close(loss.cpu(),torch.tensor(record['loss']),atol=.005,rtol=.02)
+            assert count.item()==record['count']
+            assert model.rng_counter.item()==record['counter']
+            strict=[]
             for name,parameter in model.named_parameters():
-                parameter.copy_(record['weights'][name])
-            for name,buffer in model.named_buffers():
-                buffer.copy_(record['buffers'][name])
-        for module in model.modules():
-            if callable(getattr(module,'mark_fp8_synced',None)):
-                module.mark_fp8_synced()
-        model.set_training_step(record['step'])
-        loss,count = graph.forward_backward(record['ids'].cuda(),record['labels'].cuda(),record['cu'])
-        torch.testing.assert_close(loss.cpu(),torch.tensor(record['loss']),atol=.005,rtol=.02)
-        assert count.item()==record['count']
-        assert model.rng_counter.item()==record['counter']
-        strict=[]
-        for name,parameter in model.named_parameters():
-            assert (parameter.grad is not None)==(name in record['gradients']),name
-            if parameter.grad is None:
-                continue
-            actual,expected=parameter.grad.cpu(),record['gradients'][name]
-            try:
-                torch.testing.assert_close(actual,expected,atol=.001,rtol=.03)
-            except AssertionError:
-                a,b=actual.float().flatten(),expected.float().flatten()
-                strict.append(dict(parameter=name,max_error=(a-b).abs().max().item(),
-                                   relative_l2=((a-b).norm()/b.norm().clamp_min(1e-30)).item(),
-                                   cosine=torch.nn.functional.cosine_similarity(a,b,dim=0).item()))
-        if strict:
-            print(json.dumps(dict(iteration=index,strict_gradient_failures=strict)),flush=True)
-            all_strict.append((index,strict))
-        opt.step()
-        print(json.dumps(dict(phase='replay',iteration=index,loss=loss.item(),
-                             peak_allocated_mib=torch.cuda.max_memory_allocated()/2**20)),flush=True)
-    # Preserve the counter and annealing buffers exactly along the two paths.
-    for name in ('rng_counter','training_step','hard_probability'):
-        torch.testing.assert_close(model.state_dict()[name].cpu(),final[name],rtol=0,atol=0)
-    if all_strict:
-        raise AssertionError(f'strict gradient diagnostic failed at {len(all_strict)} reference steps')
+                assert (parameter.grad is not None)==(name in record['gradients']),name
+                if parameter.grad is None:
+                    continue
+                actual,expected=parameter.grad.cpu(),record['gradients'][name]
+                try:
+                    torch.testing.assert_close(actual,expected,atol=.001,rtol=.03)
+                except AssertionError:
+                    a,b=actual.float().flatten(),expected.float().flatten()
+                    strict.append(dict(parameter=name,max_error=(a-b).abs().max().item(),
+                                       relative_l2=((a-b).norm()/b.norm().clamp_min(1e-30)).item(),
+                                       cosine=torch.nn.functional.cosine_similarity(a,b,dim=0).item()))
+            if strict:
+                print(json.dumps(dict(iteration=index,strict_gradient_failures=strict)),flush=True)
+                all_strict.append((index,strict))
+            opt.step()
+            print(json.dumps(dict(phase='replay',iteration=index,loss=loss.item(),
+                                 routes=graph.last_routes,planner_reasons=graph.last_planner_reasons,
+                                 peak_allocated_mib=torch.cuda.max_memory_allocated()/2**20)),flush=True)
+        # Preserve the counter and annealing buffers exactly along the two paths.
+        for name in ('rng_counter','training_step','hard_probability'):
+            torch.testing.assert_close(model.state_dict()[name].cpu(),final[name],rtol=0,atol=0)
+        if all_strict:
+            raise AssertionError(f'strict gradient diagnostic failed at {len(all_strict)} reference steps')
+    finally:
+        graph.close()
 
 
 if __name__=='__main__':

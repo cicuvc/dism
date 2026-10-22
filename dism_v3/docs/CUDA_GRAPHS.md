@@ -46,7 +46,7 @@ semantically equivalent compact eager pack.
 
 ## State and lifecycle
 
-Warmup restores the DISM RNG counter and existing gradients. Actual replay
+Warmup restores the DISM RNG counter, CPU/CUDA RNG states and existing gradients. Actual replay
 increments the counter once, reads the current GPU hard-probability buffer,
 and uses current parameters/FP8 weights. Runtime MXFP8 plans are rebuilt on the
 capture stream to release stale autograd nodes; referenced workspaces remain
@@ -64,24 +64,51 @@ pending. Metadata staging, capture and replay use its owning stream; the caller
 stream waits before consuming results. Returned loss/count tensors must be
 consumed before the next replay. Both gradient zeroing modes are supported.
 
-Changed batch/row shape, parameter storage, FP8 weight storage, host temperature
+Changed batch/row shape, parameter or model-state buffer storage, FP8 weight storage, host temperature
 or training mode requires a new graph. Changing host tau-scale schedules and
 FP16 GradScaler are currently rejected. The selected configuration uses constant
 host tau scale and BF16. Fused MXFP8 AdamW updates quantized weights in place;
 optimizers replacing their storage require recapture.
 
-## Future planner support
+## Explicit planner support
 
-Planner-enabled capture remains explicitly unsupported. Async submission,
-completion, per-invocation handle ownership and event/quadratic routing cannot
-be frozen during capture. The proposed [planner graph protocol and staged
-implementation plan](PLANNER_CUDA_GRAPHS.md) keeps full microbatch replay:
-captured D2H/external-event notification feeds a host coordinator, which uploads
-each replay's plan and publishes a generation flag. A device sampling node
-selects one hard-backward path for that invocation. Publication, lifetimes and
-dynamic task consumers still require implementation and validation; the packed
-metadata interface can be reused. This design does not change current support
-or enable the planner by default.
+Add `--cuda-graph-planner` to `scripts.base_train --cuda-graph`, or construct
+`PackedTrainingGraph(..., planner=True)`. This is an independent opt-in: the
+default remains planner-disabled, and setting `DISM_HARD_PLANNER=1` alone does
+not authorize graph capture. The graph planner supports one rank/GPU, BF16,
+fixed true direction, original-row hard sampling, compact C64, R32/DV64 and
+D32/64. It requires `DISM_HARD_BACKWARD=ready` and `DISM_PLANNER_COMPACT=1`
+(both defaults); classic metadata and forced event/quadratic policy are rejected.
+MXFP8 FFN and its existing eager optimizer are supported.
+
+Each DISM layer owns a binding/slot. Captured D2H and an external event notify
+its CPU worker, which prepares and uploads a fresh plan before publishing the
+epoch with `cuStreamWriteValue32`. A GPU sampler makes one choice shared by the
+event and quadratic backward nodes. Late publication cannot change that choice.
+See [the protocol, ownership rules and validation](PLANNER_CUDA_GRAPHS.md).
+
+`forward_backward` retires the previous generation before staging another
+microbatch. It returns while CPU planning/upload may still be pending. **Call
+`drain()` before document normalization, clipping, optimizer, evaluation or
+checkpoint**, and `close()` on exit, including exceptions. A context manager
+closes automatically. `base_train` performs these steps. Errors are sticky and
+propagated after all work retires; subsequent use requires a new runner.
+Returned loss/count storage is reused on the next replay, as in disabled mode.
+
+After draining, `last_routes` reports the actual GPU choices (`e`/`q`),
+`route_counts` accumulates those choices, and `last_planner_reasons` records
+budget/cancellation outcomes. The existing training route logger receives the
+same choices. Warmup/capture do not contribute to these statistics. An all-soft
+invocation may still select `e`; this is a route count, not a hard-token count.
+
+`--cuda-graph-planner-max-bytes` (API `planner_max_bytes`) defaults to 1 GiB
+across all DISM slots. It bounds snapshots and plan payload/workspaces, not the
+entire model/graph pool or native planner's temporary CPU algorithm storage.
+A plan exceeding its per-slot share falls back without publication; genuine
+planner/upload errors abort the step. `DISM_PLANNER_WORKERS` controls the native
+pool (API `planner_workers`, default 16). Runtime threads, events, payloads,
+bindings and graph handles never enter a checkpoint; reconstruct after loading
+model/optimizer state and before consuming the saved next batch.
 
 ## Validation
 
@@ -90,9 +117,12 @@ Use conda `blkw`, `DISM_HARD_PLANNER=0` and this worktree's
 
 ```bash
 python -m pytest nanochat/tests/test_cuda_graph.py -q
+python -m pytest nanochat/tests/test_planner_cuda_graph.py -q
 python dism_v3/tools/check_training_cuda_graph.py \
   --model-spec nanochat/configs/sequence_true_125m_valres_mxfp8_ffnonly_slimpajama_3b_h768_h12_i1152_r32.json \
   --rows 8
+# Add --planner for the explicitly enabled graph planner; keep the eager
+# reference at DISM_HARD_PLANNER=0. No dataset or user checkpoint is accessed.
 ```
 
 The regression suite passed 81 tests covering graph replay, checkpoint resume,
@@ -313,3 +343,22 @@ under ignored `dism_v3/build/graph_profile/`; no checkpoint is accessed.
 The subsequent [interpolation TMA experiment](INTERPOLATION_TMA.md) fuses
 interpolation dQ into dKV. It shows no measured throughput gain and fails a
 strict full-model gradient diagnostic, so the default remains separate dQ/dKV.
+
+## Planner-enabled validation (2026-10-23)
+
+The explicit planner runner passed the same three production-shape comparisons
+above with the original tolerances. Actual six-layer routes were `eeeeee`,
+`eeeeee`, `eeqqqq`; these are correctness observations, not a performance or
+hit-rate estimate. The combined regression passed 171 tests (five strict-gradient
+diagnostics deselected); the updated lifecycle/resume file passed 16 tests.
+The two model graph test files passed 23 tests under both memcheck and synccheck,
+each with zero errors. No CUDA/Triton kernel or tolerance changed.
+
+Representative full-model racecheck passed both numerical tests but reported
+69 warnings, all in PyTorch's native RMSNorm backward. A standalone eager
+`torch.nn.RMSNorm(128)` reproduces the same read/write PCs without DISM, planner
+or graph. This remains an unresolved warning, **not a clean racecheck result or
+a classified false positive**. Earlier fixed-soft racecheck and strict numerical
+limitations also remain. See [P6/P7 evidence and reproduction](PLANNER_CUDA_GRAPHS.md)
+for scope, exact results and commands. No user checkpoint or training task was
+accessed or restarted.

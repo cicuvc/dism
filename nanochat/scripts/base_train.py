@@ -67,7 +67,11 @@ print_banner()
 # CLI arguments
 parser = argparse.ArgumentParser(description="Pretrain base model")
 parser.add_argument("--cuda-graph", action="store_true",
-                    help="Capture packed DISM microbatch forward/backward (DISM_HARD_PLANNER=0)")
+                    help="Capture packed DISM microbatch forward/backward (planner disabled unless explicitly enabled)")
+parser.add_argument("--cuda-graph-planner", action="store_true",
+                    help="Enable compact ready CPU planner with --cuda-graph (R32/DV64, D32/64)")
+parser.add_argument("--cuda-graph-planner-max-bytes", type=int, default=2**30,
+                    help="Planner snapshot/payload/workspace byte budget across graph layers")
 # Logging
 parser.add_argument("--wandb-project", type=str, default="nanochat")
 parser.add_argument("--dual-eval-valid-tokens", type=int, default=0)
@@ -132,6 +136,8 @@ parser.add_argument("--qk-hist-every", type=int, default=500, help="log DISM q/k
 # Output
 parser.add_argument("--model-tag", type=str, default=None, help="override model tag for checkpoint directory name")
 args = parser.parse_args()
+if args.cuda_graph_planner and not args.cuda_graph:
+    parser.error('--cuda-graph-planner requires --cuda-graph')
 if args.eval_device_batch_size is None:
     args.eval_device_batch_size = args.device_batch_size
 if args.eval_device_batch_size <= 0:
@@ -735,303 +741,311 @@ def log_cuda_memory(phase, step):
 
 
 last_hard_route_step = step
-while True:
-    last_step = step == num_iterations # loop runs num_iterations+1 times so that we can eval/save at the end
-    flops_so_far = num_flops_per_token * total_batch_size * step
-    # A checkpoint is captured after this step's eval/sample hooks. Re-running
-    # those hooks on the resume entry could consume RNG and break exactness.
-    resume_entry = resuming and step == args.resume_from_step
+try:
+    while True:
+        last_step = step == num_iterations # loop runs num_iterations+1 times so that we can eval/save at the end
+        flops_so_far = num_flops_per_token * total_batch_size * step
+        # A checkpoint is captured after this step's eval/sample hooks. Re-running
+        # those hooks on the resume entry could consume RNG and break exactness.
+        resume_entry = resuming and step == args.resume_from_step
 
-    # once in a while: evaluate the val bpb (all ranks participate)
-    if not resume_entry and args.eval_every > 0 and (last_step or step % args.eval_every == 0):
-        log_cuda_memory("before_validation", step)
-        model.eval()
-        val_loader = build_val_loader()
-        eval_steps = args.eval_tokens // (args.eval_device_batch_size * args.max_seq_len * ddp_world_size)
-        with disable_fp8(model):
-            # FlashAttention's no-grad multi-layer Dynamo trace currently hits
-            # a compiler assertion. Keep training compiled; validation is eager.
-            eval_model = orig_model if getattr(orig_model, 'dynamic_compile', False) else model
-            dual_metrics = None
-            if args.dual_eval_valid_tokens:
-                dual_metrics = evaluate_hard_soft(eval_model, val_loader, args.dual_eval_valid_tokens, token_bytes)
-                val_bpb = dual_metrics['hard_bpb']
-                print0("DUAL_VALIDATION " + json.dumps(dict(step=step, **dual_metrics)))
-                with open(os.path.join(base_dir, "dual_validation.jsonl"), "a") as handle:
-                    handle.write(json.dumps(dict(step=step, **dual_metrics)) + "\n")
-            else:
-                val_bpb = evaluate_bpb(eval_model, val_loader, eval_steps, token_bytes)
-        niah_metrics = {}
-        if niah_evaluator is not None:
-            # Independent local inputs, eager unwrapped model, rank-0 execution.
-            # This helper cannot access train_loader, val_loader or the prefetched batch.
-            with disable_fp8(orig_model):
-                niah_result = niah_evaluator.evaluate_distributed(orig_model, tokenizer)
-            niah_metrics = niah_result['metrics']
-            if master_process:
-                record = dict(step=step, **niah_result)
-                print0("NIAH_VALIDATION " + json.dumps(record))
-                with open(os.path.join(base_dir, "niah_validation.jsonl"), "a") as handle:
-                    handle.write(json.dumps(record) + "\n")
-        log_cuda_memory("after_validation", step)
-        print0(f"Step {step:05d} | Validation bpb: {val_bpb:.6f}")
-        if val_bpb < min_val_bpb:
-            min_val_bpb = val_bpb
-        wandb_run.log({
-            "step": step,
-            "total_training_flops": flops_so_far,
-            "total_training_time": total_training_time,
-            "val/bpb": val_bpb,
-            **niah_metrics,
-            **({"val/"+key: value for key, value in dual_metrics.items()} if dual_metrics else {}),
-        })
-        model.train()
-
-    # once in a while: estimate the CORE metric (all ranks participate)
-    # use the original uncompiled model because the inputs keep changing shape
-    # disable FP8 for evaluation to use BF16 for more consistent/accurate results
-    results = {}
-    if not resume_entry and args.core_metric_every > 0 and (last_step or (step > 0 and step % args.core_metric_every == 0)):
-        model.eval()
-        with disable_fp8(orig_model):
-            results = evaluate_core(orig_model, tokenizer, device, max_per_task=args.core_metric_max_per_task)
-        print0(f"Step {step:05d} | CORE metric: {results['core_metric']:.4f}")
-        wandb_run.log({
-            "step": step,
-            "total_training_flops": flops_so_far,
-            "core_metric": results["core_metric"],
-            "centered_results": results["centered_results"],
-        })
-        model.train()
-
-    # once in a while: sample from the model (only on master process)
-    # use the original uncompiled model because the inputs keep changing shape
-    if not resume_entry and args.sample_every > 0 and master_process and (last_step or (step > 0 and step % args.sample_every == 0)):
-        model.eval()
-        prompts = [
-            "The capital of France is",
-            "The chemical symbol of gold is",
-            "If yesterday was Friday, then tomorrow will be",
-            "The opposite of hot is",
-            "The planets of the solar system are:",
-            "My favorite color is",
-            "If 5*x + 3 = 13, then x is",
-        ]
-        engine = Engine(orig_model, tokenizer) # use orig_model to avoid recompilation
-        for prompt in prompts:
-            tokens = tokenizer(prompt, prepend="<|bos|>")
-            with disable_fp8(orig_model):
-                sample, _ = engine.generate_batch(tokens, num_samples=1, max_tokens=16, temperature=0)
-            print0(tokenizer.decode(sample[0]))
-        model.train()
-
-    # save checkpoint: at the end of the run, or every save_every steps, except at the first step or the resume step
-    if last_step or (step > 0 and step != args.resume_from_step and args.save_every > 0 and step % args.save_every == 0):
-        from nanochat.checkpoint_retention import check_space, prune
-        check_space(checkpoint_dir)
-        exact_rank_state = capture_rank_training_state()
-        save_checkpoint(
-            checkpoint_dir,
-            step,
-            orig_model.state_dict(), # model parameters
-            optimizer.state_dict(), # optimizer state
-            { # metadata saved as json
+        # once in a while: evaluate the val bpb (all ranks participate)
+        if not resume_entry and args.eval_every > 0 and (last_step or step % args.eval_every == 0):
+            log_cuda_memory("before_validation", step)
+            model.eval()
+            val_loader = build_val_loader()
+            eval_steps = args.eval_tokens // (args.eval_device_batch_size * args.max_seq_len * ddp_world_size)
+            with disable_fp8(model):
+                # FlashAttention's no-grad multi-layer Dynamo trace currently hits
+                # a compiler assertion. Keep training compiled; validation is eager.
+                eval_model = orig_model if getattr(orig_model, 'dynamic_compile', False) else model
+                dual_metrics = None
+                if args.dual_eval_valid_tokens:
+                    dual_metrics = evaluate_hard_soft(eval_model, val_loader, args.dual_eval_valid_tokens, token_bytes)
+                    val_bpb = dual_metrics['hard_bpb']
+                    print0("DUAL_VALIDATION " + json.dumps(dict(step=step, **dual_metrics)))
+                    with open(os.path.join(base_dir, "dual_validation.jsonl"), "a") as handle:
+                        handle.write(json.dumps(dict(step=step, **dual_metrics)) + "\n")
+                else:
+                    val_bpb = evaluate_bpb(eval_model, val_loader, eval_steps, token_bytes)
+            niah_metrics = {}
+            if niah_evaluator is not None:
+                # Independent local inputs, eager unwrapped model, rank-0 execution.
+                # This helper cannot access train_loader, val_loader or the prefetched batch.
+                with disable_fp8(orig_model):
+                    niah_result = niah_evaluator.evaluate_distributed(orig_model, tokenizer)
+                niah_metrics = niah_result['metrics']
+                if master_process:
+                    record = dict(step=step, **niah_result)
+                    print0("NIAH_VALIDATION " + json.dumps(record))
+                    with open(os.path.join(base_dir, "niah_validation.jsonl"), "a") as handle:
+                        handle.write(json.dumps(record) + "\n")
+            log_cuda_memory("after_validation", step)
+            print0(f"Step {step:05d} | Validation bpb: {val_bpb:.6f}")
+            if val_bpb < min_val_bpb:
+                min_val_bpb = val_bpb
+            wandb_run.log({
                 "step": step,
-                "val_bpb": val_bpb, # loss at last step
-                "model_config": model_config_kwargs,
-                "model_spec": model_spec.to_dict(),
-                "model_fingerprint": model_spec.fingerprint(),
-                "tokenizer_spec": tokenizer_spec,
-                "optimizer_schema": current_optimizer_schema,
-                "optimizer_schema_fingerprint": current_optimizer_fingerprint,
-                "user_config": user_config, # inputs to the training script
-                "device_batch_size": args.device_batch_size,
-                "max_seq_len": args.max_seq_len,
-                "total_batch_size": total_batch_size,
-                "loss_normalization": loss_normalization,
-                # JSON-safe cursor for degraded legacy fallback. Exact resume uses
-                # the per-rank binary state, which also contains the token buffer.
-                "dataloader_state_dict": train_loader.fallback_state_dict(),
-                "exact_resume_version": exact_rank_state["version"],
-                "loop_state": { # all loop state (other than step) so that we can resume training
-                    "min_val_bpb": min_val_bpb,
-                    "smooth_train_loss": smooth_train_loss,
-                    "total_training_time": total_training_time,
+                "total_training_flops": flops_so_far,
+                "total_training_time": total_training_time,
+                "val/bpb": val_bpb,
+                **niah_metrics,
+                **({"val/"+key: value for key, value in dual_metrics.items()} if dual_metrics else {}),
+            })
+            model.train()
+
+        # once in a while: estimate the CORE metric (all ranks participate)
+        # use the original uncompiled model because the inputs keep changing shape
+        # disable FP8 for evaluation to use BF16 for more consistent/accurate results
+        results = {}
+        if not resume_entry and args.core_metric_every > 0 and (last_step or (step > 0 and step % args.core_metric_every == 0)):
+            model.eval()
+            with disable_fp8(orig_model):
+                results = evaluate_core(orig_model, tokenizer, device, max_per_task=args.core_metric_max_per_task)
+            print0(f"Step {step:05d} | CORE metric: {results['core_metric']:.4f}")
+            wandb_run.log({
+                "step": step,
+                "total_training_flops": flops_so_far,
+                "core_metric": results["core_metric"],
+                "centered_results": results["centered_results"],
+            })
+            model.train()
+
+        # once in a while: sample from the model (only on master process)
+        # use the original uncompiled model because the inputs keep changing shape
+        if not resume_entry and args.sample_every > 0 and master_process and (last_step or (step > 0 and step % args.sample_every == 0)):
+            model.eval()
+            prompts = [
+                "The capital of France is",
+                "The chemical symbol of gold is",
+                "If yesterday was Friday, then tomorrow will be",
+                "The opposite of hot is",
+                "The planets of the solar system are:",
+                "My favorite color is",
+                "If 5*x + 3 = 13, then x is",
+            ]
+            engine = Engine(orig_model, tokenizer) # use orig_model to avoid recompilation
+            for prompt in prompts:
+                tokens = tokenizer(prompt, prepend="<|bos|>")
+                with disable_fp8(orig_model):
+                    sample, _ = engine.generate_batch(tokens, num_samples=1, max_tokens=16, temperature=0)
+                print0(tokenizer.decode(sample[0]))
+            model.train()
+
+        # save checkpoint: at the end of the run, or every save_every steps, except at the first step or the resume step
+        if last_step or (step > 0 and step != args.resume_from_step and args.save_every > 0 and step % args.save_every == 0):
+            from nanochat.checkpoint_retention import check_space, prune
+            check_space(checkpoint_dir)
+            exact_rank_state = capture_rank_training_state()
+            save_checkpoint(
+                checkpoint_dir,
+                step,
+                orig_model.state_dict(), # model parameters
+                optimizer.state_dict(), # optimizer state
+                { # metadata saved as json
+                    "step": step,
+                    "val_bpb": val_bpb, # loss at last step
+                    "model_config": model_config_kwargs,
+                    "model_spec": model_spec.to_dict(),
+                    "model_fingerprint": model_spec.fingerprint(),
+                    "tokenizer_spec": tokenizer_spec,
+                    "optimizer_schema": current_optimizer_schema,
+                    "optimizer_schema_fingerprint": current_optimizer_fingerprint,
+                    "user_config": user_config, # inputs to the training script
+                    "device_batch_size": args.device_batch_size,
+                    "max_seq_len": args.max_seq_len,
+                    "total_batch_size": total_batch_size,
+                    "loss_normalization": loss_normalization,
+                    # JSON-safe cursor for degraded legacy fallback. Exact resume uses
+                    # the per-rank binary state, which also contains the token buffer.
+                    "dataloader_state_dict": train_loader.fallback_state_dict(),
+                    "exact_resume_version": exact_rank_state["version"],
+                    "loop_state": { # all loop state (other than step) so that we can resume training
+                        "min_val_bpb": min_val_bpb,
+                        "smooth_train_loss": smooth_train_loss,
+                        "total_training_time": total_training_time,
+                    },
                 },
-            },
-            rank=ddp_rank,
-            rank_training_state=exact_rank_state,
-        )
+                rank=ddp_rank,
+                rank_training_state=exact_rank_state,
+            )
 
-        if master_process: prune(checkpoint_dir, keep=2)
+            if master_process: prune(checkpoint_dir, keep=2)
 
-    # termination conditions (TODO: possibly also add loss explosions etc.)
-    if last_step:
-        break
+        # termination conditions (TODO: possibly also add loss explosions etc.)
+        if last_step:
+            break
 
-    # -------------------------------------------------------------------------
-    # single training step
-    # evaluate the gradient
-    synchronize()
-    t0 = time.time()
-    if hasattr(orig_model, 'set_training_step'):
-        orig_model.set_training_step(step)
-    document_step = None
-    if getattr(orig_model, 'count_normalized_loss', getattr(orig_model, 'document_balanced_loss', False)):
-        from nanochat.document_loss import DocumentLossAccumulator
-        document_step = DocumentLossAccumulator(grad_accum_steps, device)
-    for micro_step in range(grad_accum_steps):
-        if args.cuda_graph:
-            if training_graph is None:
-                from nanochat.cuda_graph import PackedTrainingGraph
-                training_graph = PackedTrainingGraph(
-                    orig_model, x, y, cu_seqlens, microbatches=grad_accum_steps)
-            loss, count = training_graph.forward_backward(x, y, cu_seqlens)
-            document_step.add(loss, count)
-        elif document_step is not None:
-            loss, count = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids,
-                                loss_reduction=getattr(orig_model, 'loss_sum_reduction', 'document_sum'))
-            document_step.add(loss, count)
+        # -------------------------------------------------------------------------
+        # single training step
+        # evaluate the gradient
+        synchronize()
+        t0 = time.time()
+        if hasattr(orig_model, 'set_training_step'):
+            orig_model.set_training_step(step)
+        document_step = None
+        if getattr(orig_model, 'count_normalized_loss', getattr(orig_model, 'document_balanced_loss', False)):
+            from nanochat.document_loss import DocumentLossAccumulator
+            document_step = DocumentLossAccumulator(grad_accum_steps, device)
+        for micro_step in range(grad_accum_steps):
+            if args.cuda_graph:
+                if training_graph is None:
+                    from nanochat.cuda_graph import PackedTrainingGraph
+                    training_graph = PackedTrainingGraph(
+                        orig_model, x, y, cu_seqlens, microbatches=grad_accum_steps,
+                        planner=args.cuda_graph_planner, planner_max_bytes=args.cuda_graph_planner_max_bytes)
+                loss, count = training_graph.forward_backward(x, y, cu_seqlens)
+                document_step.add(loss, count)
+            elif document_step is not None:
+                loss, count = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids,
+                                    loss_reduction=getattr(orig_model, 'loss_sum_reduction', 'document_sum'))
+                document_step.add(loss, count)
+            else:
+                loss = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids)
+            train_loss = loss.detach() # for logging
+            # Document loss is a numerator, NOT a local document mean. This
+            # temporary scale is undone in finalize with the global denominator.
+            loss = loss / grad_accum_steps
+            if args.cuda_graph:
+                pass  # Backward and accumulation ran inside the microbatch graph.
+            elif scaler is not None:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
+            x, y, cu_seqlens, segment_ids, dataloader_state_dict = next(train_loader) # prefetch while GPU is busy
+        if training_graph is not None:
+            training_graph.drain()  # retire planner/upload and surface errors before any gradient update
+        if document_step is not None:
+            train_loss = document_step.finalize(orig_model.parameters())
+        # step the optimizer
+        lrm = get_lr_multiplier(step)
+        muon_momentum = get_muon_momentum(step)
+        muon_weight_decay = get_weight_decay(step)
+        for group in optimizer.param_groups:
+            group["lr"] = group["initial_lr"] * lrm
+            if group['kind'] == 'muon':
+                group["momentum"] = muon_momentum
+                group["weight_decay"] = muon_weight_decay
+        if scaler is not None:
+            scaler.unscale_(optimizer)
+            # In distributed training, all ranks must agree on whether to skip the step.
+            # Each rank may independently encounter inf/nan gradients, so we all-reduce
+            # the found_inf flag (MAX = if any rank found inf, all ranks skip).
+            if is_ddp_initialized():
+                for v in scaler._found_inf_per_device(optimizer).values():
+                    dist.all_reduce(v, op=dist.ReduceOp.MAX)
+        grad_norm = torch.nn.utils.clip_grad_norm_(orig_model.parameters(), max_norm=args.grad_clip)
+        grad_norm_f = grad_norm.item()
+        if not math.isfinite(grad_norm_f):
+            raise FloatingPointError(f"Non-finite gradient norm at step {step}: {grad_norm_f}")
+        log_this_step = step % args.log_every == 0
+        update_snapshot = snapshot_parameters(orig_model) if (args.log_update_rms and log_this_step) else None
+        if scaler is not None:
+            scaler.step(optimizer)
+            scaler.update()
         else:
-            loss = model(x, y, cu_seqlens=cu_seqlens, segment_ids=segment_ids)
-        train_loss = loss.detach() # for logging
-        # Document loss is a numerator, NOT a local document mean. This
-        # temporary scale is undone in finalize with the global denominator.
-        loss = loss / grad_accum_steps
-        if args.cuda_graph:
-            pass  # Backward and accumulation ran inside the microbatch graph.
-        elif scaler is not None:
-            scaler.scale(loss).backward()
+            optimizer.step()
+        update_rms = update_rms_max_per_group(orig_model, update_snapshot) if update_snapshot is not None else {}
+        model.zero_grad(set_to_none=True)
+        train_loss_f = train_loss.item() # .item() is a CPU-GPU sync point
+        synchronize()
+        t1 = time.time()
+        if step < 5 or step % 100 == 0:
+            log_cuda_memory("after_train_step", step)
+        dt = t1 - t0
+        # -------------------------------------------------------------------------
+
+        # logging (CPU action only)
+        ema_beta = 0.9 # EMA decay factor for some smoothing just for nicer logging
+        smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * train_loss_f # EMA the training loss
+        debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1)) # debias the EMA
+        pct_done = 100 * step / num_iterations
+        tok_per_sec = int(total_batch_size / dt)
+        flops_per_sec = num_flops_per_token * total_batch_size / dt
+        mfu = 100 * flops_per_sec / (gpu_peak_flops * ddp_world_size)
+        if step > 10:
+            total_training_time += dt # only count the time after the first 10 steps
+        # Calculate ETA based on average time per step (excluding first 10 steps)
+        steps_done = step - 10
+        if steps_done > 0:
+            avg_time_per_step = total_training_time / steps_done
+            remaining_steps = num_iterations - step
+            eta_seconds = remaining_steps * avg_time_per_step
+            eta_str = f" | eta: {eta_seconds/60:.1f}m"
         else:
-            loss.backward()
-        x, y, cu_seqlens, segment_ids, dataloader_state_dict = next(train_loader) # prefetch while GPU is busy
-    if document_step is not None:
-        train_loss = document_step.finalize(orig_model.parameters())
-    # step the optimizer
-    lrm = get_lr_multiplier(step)
-    muon_momentum = get_muon_momentum(step)
-    muon_weight_decay = get_weight_decay(step)
-    for group in optimizer.param_groups:
-        group["lr"] = group["initial_lr"] * lrm
-        if group['kind'] == 'muon':
-            group["momentum"] = muon_momentum
-            group["weight_decay"] = muon_weight_decay
-    if scaler is not None:
-        scaler.unscale_(optimizer)
-        # In distributed training, all ranks must agree on whether to skip the step.
-        # Each rank may independently encounter inf/nan gradients, so we all-reduce
-        # the found_inf flag (MAX = if any rank found inf, all ranks skip).
-        if is_ddp_initialized():
-            for v in scaler._found_inf_per_device(optimizer).values():
-                dist.all_reduce(v, op=dist.ReduceOp.MAX)
-    grad_norm = torch.nn.utils.clip_grad_norm_(orig_model.parameters(), max_norm=args.grad_clip)
-    grad_norm_f = grad_norm.item()
-    if not math.isfinite(grad_norm_f):
-        raise FloatingPointError(f"Non-finite gradient norm at step {step}: {grad_norm_f}")
-    log_this_step = step % args.log_every == 0
-    update_snapshot = snapshot_parameters(orig_model) if (args.log_update_rms and log_this_step) else None
-    if scaler is not None:
-        scaler.step(optimizer)
-        scaler.update()
-    else:
-        optimizer.step()
-    update_rms = update_rms_max_per_group(orig_model, update_snapshot) if update_snapshot is not None else {}
-    model.zero_grad(set_to_none=True)
-    train_loss_f = train_loss.item() # .item() is a CPU-GPU sync point
-    synchronize()
-    t1 = time.time()
-    if step < 5 or step % 100 == 0:
-        log_cuda_memory("after_train_step", step)
-    dt = t1 - t0
-    # -------------------------------------------------------------------------
+            eta_str = ""
+        epoch = f"{dataloader_state_dict['epoch']} pq: {dataloader_state_dict['pq_idx']} rg: {dataloader_state_dict['rg_idx']}"
+        print0(f"step {step:05d}/{num_iterations:05d} ({pct_done:.2f}%) | loss: {debiased_smooth_loss:.6f} | grad norm: {grad_norm_f:.6f} | lrm: {lrm:.2f} | dt: {dt * 1000:.2f}ms | tok/sec: {tok_per_sec:,} | bf16_mfu: {mfu:.2f} | epoch: {epoch} | total time: {total_training_time/60:.2f}m{eta_str}")
+        if log_this_step:
+            log_data = {
+                "step": step,
+                "total_training_flops": flops_so_far,
+                "total_training_time": total_training_time,
+                "train/loss": debiased_smooth_loss,
+                "train/loss_raw": train_loss_f,
+                "train/grad_norm": grad_norm_f,
+                "train/lrm": lrm,
+                "train/dt": dt,
+                "train/tok_per_sec": tok_per_sec,
+                "train/mfu": mfu,
+                "train/epoch": epoch,
+            }
+            if hasattr(orig_model, "hard_probability"):
+                log_data["train/hard_probability"] = orig_model.hard_probability.item()
+            if hard_dispatch_layers:
+                # Diagnostic census of the DISM hard-backward dispatch decision
+                # (prepared event kernel vs quadratic recompute). Draining it never
+                # changes the decision, the objective or any checkpoint content.
+                from flash_dism.hard_training import take_route_log
+                routes = take_route_log()
+                log_data.update(hard_route_log_data(
+                    routes, hard_dispatch_layers, hard_dispatch_layers * grad_accum_steps,
+                    max(1, step - last_hard_route_step)))
+                last_hard_route_step = step
+            for key, value in update_rms.items():
+                log_data[f"train/update_rms_max/{key}"] = value
+            if hidden_rms_buffer is not None:
+                for layer_index, value in enumerate(hidden_rms_buffer.tolist()):
+                    log_data[f"train/hidden_rms_max/layer{layer_index:02d}"] = value
+            if args.qk_hist_every > 0 and step % args.qk_hist_every == 0:
+                qk_stats = probe_qk_vocab_usage(orig_model, x, cu_seqlens, args.max_seq_len)
+                for layer_index, tags in qk_stats.items():
+                    for tag, stats in tags.items():
+                        prefix = f"qk/{tag}"
+                        log_data[f"{prefix}_entropy/layer{layer_index:02d}"] = stats["entropy"]
+                        log_data[f"{prefix}_max_share/layer{layer_index:02d}"] = stats["max_share"]
+                        log_data[f"{prefix}_coverage/layer{layer_index:02d}"] = stats["coverage"]
+                        log_data[f"{prefix}_coverage_pooled/layer{layer_index:02d}"] = stats.get("coverage_pooled", stats["coverage"])
+                        for head_index, head_coverage in enumerate(stats.get("coverage_per_head", ())):
+                            log_data[f"{prefix}_coverage_head{head_index}/layer{layer_index:02d}"] = head_coverage
+                        # Hard-assignment usage is the capacity signal; probability
+                        # entropy alone cannot reveal codebook collapse.
+                        for extra in ("active_codes", "usage_entropy", "effective_symbols",
+                                      "max_load", "capacity_residual"):
+                            if extra in stats:
+                                log_data[f"{prefix}_{extra}/layer{layer_index:02d}"] = stats[extra]
+                        counts = np.asarray(stats["counts"], dtype=np.float64)
+                        log_data[f"{prefix}_hist/layer{layer_index:02d}"] = wandb.Histogram(
+                            np_histogram=(counts, np.arange(counts.size + 1)))
+            wandb_run.log(log_data)
 
-    # logging (CPU action only)
-    ema_beta = 0.9 # EMA decay factor for some smoothing just for nicer logging
-    smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * train_loss_f # EMA the training loss
-    debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1)) # debias the EMA
-    pct_done = 100 * step / num_iterations
-    tok_per_sec = int(total_batch_size / dt)
-    flops_per_sec = num_flops_per_token * total_batch_size / dt
-    mfu = 100 * flops_per_sec / (gpu_peak_flops * ddp_world_size)
-    if step > 10:
-        total_training_time += dt # only count the time after the first 10 steps
-    # Calculate ETA based on average time per step (excluding first 10 steps)
-    steps_done = step - 10
-    if steps_done > 0:
-        avg_time_per_step = total_training_time / steps_done
-        remaining_steps = num_iterations - step
-        eta_seconds = remaining_steps * avg_time_per_step
-        eta_str = f" | eta: {eta_seconds/60:.1f}m"
-    else:
-        eta_str = ""
-    epoch = f"{dataloader_state_dict['epoch']} pq: {dataloader_state_dict['pq_idx']} rg: {dataloader_state_dict['rg_idx']}"
-    print0(f"step {step:05d}/{num_iterations:05d} ({pct_done:.2f}%) | loss: {debiased_smooth_loss:.6f} | grad norm: {grad_norm_f:.6f} | lrm: {lrm:.2f} | dt: {dt * 1000:.2f}ms | tok/sec: {tok_per_sec:,} | bf16_mfu: {mfu:.2f} | epoch: {epoch} | total time: {total_training_time/60:.2f}m{eta_str}")
-    if log_this_step:
-        log_data = {
-            "step": step,
-            "total_training_flops": flops_so_far,
-            "total_training_time": total_training_time,
-            "train/loss": debiased_smooth_loss,
-            "train/loss_raw": train_loss_f,
-            "train/grad_norm": grad_norm_f,
-            "train/lrm": lrm,
-            "train/dt": dt,
-            "train/tok_per_sec": tok_per_sec,
-            "train/mfu": mfu,
-            "train/epoch": epoch,
-        }
-        if hasattr(orig_model, "hard_probability"):
-            log_data["train/hard_probability"] = orig_model.hard_probability.item()
-        if hard_dispatch_layers:
-            # Diagnostic census of the DISM hard-backward dispatch decision
-            # (prepared event kernel vs quadratic recompute). Draining it never
-            # changes the decision, the objective or any checkpoint content.
-            from flash_dism.hard_training import take_route_log
-            routes = take_route_log()
-            log_data.update(hard_route_log_data(
-                routes, hard_dispatch_layers, hard_dispatch_layers * grad_accum_steps,
-                max(1, step - last_hard_route_step)))
-            last_hard_route_step = step
-        for key, value in update_rms.items():
-            log_data[f"train/update_rms_max/{key}"] = value
-        if hidden_rms_buffer is not None:
-            for layer_index, value in enumerate(hidden_rms_buffer.tolist()):
-                log_data[f"train/hidden_rms_max/layer{layer_index:02d}"] = value
-        if args.qk_hist_every > 0 and step % args.qk_hist_every == 0:
-            qk_stats = probe_qk_vocab_usage(orig_model, x, cu_seqlens, args.max_seq_len)
-            for layer_index, tags in qk_stats.items():
-                for tag, stats in tags.items():
-                    prefix = f"qk/{tag}"
-                    log_data[f"{prefix}_entropy/layer{layer_index:02d}"] = stats["entropy"]
-                    log_data[f"{prefix}_max_share/layer{layer_index:02d}"] = stats["max_share"]
-                    log_data[f"{prefix}_coverage/layer{layer_index:02d}"] = stats["coverage"]
-                    log_data[f"{prefix}_coverage_pooled/layer{layer_index:02d}"] = stats.get("coverage_pooled", stats["coverage"])
-                    for head_index, head_coverage in enumerate(stats.get("coverage_per_head", ())):
-                        log_data[f"{prefix}_coverage_head{head_index}/layer{layer_index:02d}"] = head_coverage
-                    # Hard-assignment usage is the capacity signal; probability
-                    # entropy alone cannot reveal codebook collapse.
-                    for extra in ("active_codes", "usage_entropy", "effective_symbols",
-                                  "max_load", "capacity_residual"):
-                        if extra in stats:
-                            log_data[f"{prefix}_{extra}/layer{layer_index:02d}"] = stats[extra]
-                    counts = np.asarray(stats["counts"], dtype=np.float64)
-                    log_data[f"{prefix}_hist/layer{layer_index:02d}"] = wandb.Histogram(
-                        np_histogram=(counts, np.arange(counts.size + 1)))
-        wandb_run.log(log_data)
+        # state update
+        first_step_of_run = (step == 0) or (resuming and step == args.resume_from_step)
+        step += 1
 
-    # state update
-    first_step_of_run = (step == 0) or (resuming and step == args.resume_from_step)
-    step += 1
+        # The garbage collector is sadly a little bit overactive and for some poorly understood reason,
+        # it spends ~500ms scanning for cycles quite frequently, just to end up cleaning up very few tiny objects each time.
+        # So we manually manage and help it out here
+        if first_step_of_run:
+            gc.collect() # manually collect a lot of garbage from setup
+            gc.freeze() # immediately freeze all currently surviving objects and exclude them from GC
+            gc.disable() # nuclear intervention here: disable GC entirely except:
+        elif step % 5000 == 0: # every 5000 steps...
+            gc.collect() # manually collect, just to be safe for very, very long runs
 
-    # The garbage collector is sadly a little bit overactive and for some poorly understood reason,
-    # it spends ~500ms scanning for cycles quite frequently, just to end up cleaning up very few tiny objects each time.
-    # So we manually manage and help it out here
-    if first_step_of_run:
-        gc.collect() # manually collect a lot of garbage from setup
-        gc.freeze() # immediately freeze all currently surviving objects and exclude them from GC
-        gc.disable() # nuclear intervention here: disable GC entirely except:
-    elif step % 5000 == 0: # every 5000 steps...
-        gc.collect() # manually collect, just to be safe for very, very long runs
+finally:
+    if training_graph is not None:
+        training_graph.close()
 
 # print a few more stats
 print0(f"Peak memory usage: {get_max_memory() / 1024 / 1024:.2f}MiB")

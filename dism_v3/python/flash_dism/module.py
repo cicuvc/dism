@@ -234,6 +234,7 @@ class DismAttention(nn.Module):
                                     v_first=v_first, conv_seq_idx=kwargs.get('conv_seq_idx'),
                                     share_branch_boundaries=kwargs.get('_share_branch_boundaries', False),
                                     graph_layout=kwargs.get('graph_layout'),
+                                    graph_binding=kwargs.get('graph_binding'),
                                     gdn_chunk_indices=kwargs.get('gdn_chunk_indices'),
                                     direction_true=kwargs.get('direction_true', False), **options)
         if indices is not None:
@@ -244,7 +245,7 @@ class DismAttention(nn.Module):
     def _forward_cuda(self, x, hard_prob=None, *, direction=None, hard=None,
                 hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None,
                 v_first=None, vocab_temperature=None, conv_seq_idx=None, direction_true=False,
-                share_branch_boundaries=False, tau_override=None, graph_layout=None,
+                share_branch_boundaries=False, tau_override=None, graph_layout=None, graph_binding=None,
                 gdn_chunk_indices=None):
         """Default: soft training, hard evaluation; explicit flags override sampling.
 
@@ -369,7 +370,12 @@ class DismAttention(nn.Module):
             tau = tau * self.tau_scale
         dism_v = v
         beta = self.vocab_temperature if vocab_temperature is None else vocab_temperature
-        if compiling or direction_true:
+        if graph_binding is not None:
+            if compiling or not self.training or not direction_true or graph_layout is None:
+                raise ValueError('planner graph binding requires eager packed fixed-true training')
+            output = graph_binding.vocabulary(q, k, sq, sk, dism_v, eq, ek, tau,
+                                               direction=direction, hard=hard, beta=beta)
+        elif compiling or direction_true:
             from .compiler import voc_forward
             if not compiling and layout is not None:
                 compiled_layout = layout.table.flatten()
