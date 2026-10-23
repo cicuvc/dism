@@ -1,5 +1,15 @@
 # Native parallel hard-backward planning
 
+## CPU planner optimization (2026-10-23)
+
+This branch replaces offline SAM node maps with contiguous transitions, uses
+CSR adjacency and worker-local Builder scratch, caches discovered chunk
+boundaries, and accepts concurrent bounded submissions with pack priority.
+Online decode, packed metadata, numerical order and CUDA publication stay
+unchanged. See [CPU optimization measurements and validation](PLANNER_CPU_OPTIMIZATION.md)
+for the baseline, stage/PMU profiles, concurrency tests and GPU validation limits.
+The historical merge/default sections below describe earlier changes.
+
 ## Production default promotion (2026-10-15)
 
 Following the merge below, compact metadata and the `ready` policy are now

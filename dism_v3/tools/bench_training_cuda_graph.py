@@ -168,6 +168,23 @@ def main():
         setup_seconds = time.perf_counter()-setup_start
         torch.cuda.reset_peak_memory_stats()
         routes_before = dict(graph.route_counts) if graph is not None else {}
+        layer_routes = []
+        native_planner_module = None
+        if args.planner:
+            from flash_dism.inference.build import load_prefill
+            native_planner_module = load_prefill().__file__
+            layer_routes = [dict(layer=i, e=0, q=0) for i, layer in enumerate(model.layers)
+                            if not getattr(layer.attn, 'is_pure_mixer', False)]
+            original_record = graph._record_routes
+
+            def record_routes(routes):
+                original_record(routes)
+                if len(routes) != len(layer_routes):
+                    raise RuntimeError('planner route count does not match hybrid layers')
+                for counts, route in zip(layer_routes, routes):
+                    counts[route] += 1
+
+            graph._record_routes = record_routes
         elapsed = []
         for index in range(args.steps):
             start = time.perf_counter()
@@ -183,6 +200,7 @@ def main():
                              layer_layout=''.join('g' if getattr(l.attn, 'is_pure_mixer', False) else 'd' for l in model.layers),
                              parameters=sum(p.numel() for p in model.parameters()),
                              routes=({k: v-routes_before[k] for k,v in graph.route_counts.items()} if graph is not None else None),
+                             layer_routes=layer_routes, native_planner_module=native_planner_module,
                              hard_probability=model.hard_probability.item(),
                              mean_ms=statistics.mean(elapsed)*1000,
                              median_ms=statistics.median(elapsed)*1000,

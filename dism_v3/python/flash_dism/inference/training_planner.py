@@ -218,7 +218,6 @@ class NativeTrainingPlanner:
             raise ValueError('storage must be a sufficiently large contiguous pinned CPU uint8 buffer')
         storage = storage[:size]
         data = _views(storage, spec)
-        buffers = {name: tensor.numpy() for name, tensor in data.items()}
         allocated = time.perf_counter()
         if compact:
             bucket_args = []
@@ -232,7 +231,7 @@ class NativeTrainingPlanner:
                                        'lengths', 'resets', 'stream_heads')}
             native.pack_into_compact(bucket_args, multi_args)
         else:
-            native.pack_into(buffers)
+            native.pack_into({name: tensor.numpy() for name, tensor in data.items()})
         packed = time.perf_counter()
         del native
         finished = time.perf_counter()

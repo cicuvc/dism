@@ -12,23 +12,20 @@
 
 namespace dism_prefill {
 class PlanningWorkers {
-    // Each run() owns one completion record; job entries are plain POD so
-    // submitting a job costs no heap allocation. The previous design allocated
-    // a packaged_task plus a shared future per job, twice per plan.
-    struct Done {
-        std::atomic<size_t> remaining{0};
-        std::mutex mutex;
+    // One stack-owned submission per run, rather than one queue entry per
+    // job. Multiple callers may submit concurrently; workers are still bounded.
+    struct Batch {
+        const std::function<void(size_t)> &fn;
+        size_t count, next=0, remaining;
+        bool pack;
         std::condition_variable cv;
         std::exception_ptr error;
+        Batch(const std::function<void(size_t)> &fn_,size_t n,bool pack_)
+            : fn(fn_),count(n),remaining(n),pack(pack_) {}
     };
-    struct Task {
-        const std::function<void(size_t)> *fn;
-        size_t index;
-        Done *done;
-    };
-    std::mutex mutex, invocation;
+    std::mutex mutex;
     std::condition_variable cv;
-    std::queue<Task> queue;
+    std::deque<Batch*> queue;
     std::vector<std::thread> threads;
     bool stopping=false;
   public:
@@ -37,25 +34,27 @@ class PlanningWorkers {
         try {
             for (int i=0;i<count;++i) threads.emplace_back([this] {
                 for (;;) {
-                    Task task;
+                    Batch *batch; size_t index;
                     {
                         std::unique_lock<std::mutex> lock(mutex);
                         cv.wait(lock,[this]{return stopping || !queue.empty();});
                         if (stopping && queue.empty()) return;
-                        task=queue.front(); queue.pop();
+                        // Packing releases retained programs and lets the caller
+                        // upload immediately. FIFO within each stage prevents
+                        // arbitrary overtaking between equal-priority callers.
+                        auto it=std::find_if(queue.begin(),queue.end(),[](Batch *b){return b->pack;});
+                        if (it==queue.end()) it=queue.begin();
+                        batch=*it; index=batch->next++;
+                        if (batch->next==batch->count) queue.erase(it);
                     }
-                    try { (*task.fn)(task.index); }
-                    catch (...) {
-                        std::lock_guard<std::mutex> lock(task.done->mutex);
-                        if (!task.done->error) task.done->error=std::current_exception();
-                    }
+                    std::exception_ptr error;
+                    try { batch->fn(index); } catch (...) { error=std::current_exception(); }
                     {
-                        // Publish completion while holding the waiter's mutex.
-                        // Otherwise run() can observe zero and destroy its stack
-                        // Done before this worker locks/notifies it.
-                        std::lock_guard<std::mutex> lock(task.done->mutex);
-                        if (task.done->remaining.fetch_sub(1,std::memory_order_acq_rel)==1)
-                            task.done->cv.notify_all();
+                        // Same mutex protects dispatch, completion, and waiter
+                        // lifetime. No worker may touch Batch after notifying.
+                        std::lock_guard<std::mutex> lock(mutex);
+                        if (error && !batch->error) batch->error=error;
+                        if (--batch->remaining==0) batch->cv.notify_one();
                     }
                 }
             });
@@ -71,32 +70,16 @@ class PlanningWorkers {
         cv.notify_all();
         for (auto &thread:threads) thread.join();
     }
-    void run(size_t count,const std::function<void(size_t)> &fn) {
-        // Serialize invocations, not jobs. Callers must separately bound the
-        // number of outstanding plans to control retained metadata memory.
-        std::lock_guard<std::mutex> invocation_lock(invocation);
+    void run(size_t count,const std::function<void(size_t)> &fn,bool pack=false) {
         if (!count) return;
-        Done done;
-        done.remaining.store(count,std::memory_order_relaxed);
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            size_t submitted=0;
-            try {
-                for (;submitted<count;++submitted) queue.push(Task{&fn,submitted,&done});
-            } catch (...) {
-                // Even a failed queue allocation must drain already-submitted
-                // jobs before the stack-owned completion record is destroyed.
-                done.error=std::current_exception();
-                done.remaining.store(submitted,std::memory_order_relaxed);
-            }
-        }
+        Batch batch(fn,count,pack);
+        std::unique_lock<std::mutex> lock(mutex);
+        // A failed push exposes no jobs; every successful submission is drained
+        // before run returns, including exceptions from individual jobs.
+        queue.push_back(&batch);
         cv.notify_all();
-        // Drain every job before propagating errors: jobs reference caller data.
-        {
-            std::unique_lock<std::mutex> lock(done.mutex);
-            done.cv.wait(lock,[&]{return done.remaining.load(std::memory_order_acquire)==0;});
-        }
-        if (done.error) std::rethrow_exception(done.error);
+        batch.cv.wait(lock,[&]{return batch.remaining==0;});
+        if (batch.error) std::rethrow_exception(batch.error);
     }
 };
 
@@ -134,6 +117,11 @@ struct TrainingBatchProgram {
     // pinned buffer by pack_into(); only the compact per-job event program is
     // retained between the two phases. The final bytes are unchanged.
     std::vector<Program> programs;
+    // Boundary discovery is shared by sizing and packing; never rescan events.
+    struct Boundaries {
+        std::vector<int64_t> ends, stream_chunks{0};
+    };
+    std::vector<Boundaries> boundaries;
     std::vector<int64_t> stream_base{0}, chunk_base{0};
     // Compact mode: single-chunk streams live in per-width buckets, the arrays
     // above then describe only the multi-chunk streams.
@@ -167,7 +155,7 @@ struct TrainingBatchProgram {
         for (int64_t i=0;i<int64_t(b)*h;++i) if (hard[i]>1) throw std::invalid_argument("hard flags must be 0 or 1");
         for (int64_t i=0;i<int64_t(tau_rows)*h;++i) if (!std::isfinite(tau[i]))
             throw std::invalid_argument("finite tau required");
-        programs.resize(jobs.size());
+        programs.resize(jobs.size()); boundaries.resize(jobs.size());
         std::vector<int64_t> event_counts(jobs.size()), chunk_counts(jobs.size(),0);
         std::vector<std::array<int64_t,3>> single_counts(jobs.size());
         std::vector<int64_t> multi_stream_counts(jobs.size(),0);
@@ -176,19 +164,27 @@ struct TrainingBatchProgram {
             const auto &job=jobs[i];
             int64_t base=(int64_t(job.batch)*h+job.head)*n+job.start;
             int count=job.end-job.start;
-            Ids q(labels+base,labels+base+count);
-            Ids k(labels+int64_t(b)*h*n+base,labels+int64_t(b)*h*n+base+count);
-            auto p=Builder(q,k,Ids(count,0),job.tau,false,true).finish();
+            // Worker-local scratch is retained across jobs, bounded by the
+            // largest document handled by this worker. Program output owns its
+            // arrays independently and remains valid through pack completion.
+            static thread_local Builder builder;
+            builder.build(labels+base,labels+int64_t(b)*h*n+base,nullptr,count,job.tau,false,true);
+            auto p=builder.finish();
             event_counts[i]=p.rows.size();
             // Discover chunk boundaries once; slot arrays are built by pack_into*.
+            auto &bounds=boundaries[i];
+            bounds.stream_chunks.reserve(p.offsets.size());
+            bounds.ends.reserve(p.rows.size()/width+p.offsets.size());
             for (size_t s=1;s<p.offsets.size();++s) {
                 int64_t start=p.offsets[s-1], end=p.offsets[s], chunks=0;
                 while (start<end) {
                     int64_t stop=std::min(start+int64_t(width),end);
                     for (int64_t e=start+1;e<stop;++e)
                         if (p.rows[e]>=0 && p.decay[e]==0.) { stop=e; break; }
+                    bounds.ends.push_back(stop);
                     start=stop; ++chunks;
                 }
+                bounds.stream_chunks.push_back(bounds.ends.size());
                 if (compact && chunks==1)
                     single_counts[i][compact_bucket(int(p.offsets[s]-p.offsets[s-1]))]++;
                 else {
@@ -217,6 +213,7 @@ struct TrainingBatchProgram {
     void pack_into(const TrainingBuffers &out) const {
         workers->run(jobs.size(),[&](size_t i) {
             const auto &p=programs[i]; const auto &job=jobs[i];
+            const auto &bounds=boundaries[i]; size_t boundary=0;
             int64_t cb=chunk_base[i], sb=stream_base[i];
             int64_t token_base=int64_t(job.batch)*n+job.start;
             const bool has_dlog=!p.dlogweight.empty();
@@ -232,9 +229,7 @@ struct TrainingBatchProgram {
             for (size_t stream=1;stream<p.offsets.size();++stream) {
                 int64_t start=p.offsets[stream-1], end=p.offsets[stream];
                 while (start<end) {
-                    int64_t stop=std::min(start+int64_t(width),end);
-                    for (int64_t e=start+1;e<stop;++e)
-                        if (p.rows[e]>=0 && p.decay[e]==0.) { stop=e; break; }
+                    int64_t stop=bounds.ends[boundary++];
                     int length=int(stop-start);
                     int reset=int(p.rows[start]>=0 && p.decay[start]==0.);
                     int *rows=out.rows+cb*width;
@@ -265,7 +260,7 @@ struct TrainingBatchProgram {
                 if (stream+1<p.offsets.size()) out.offsets[sb+stream]=local_cb;
                 out.stream_heads[sb+stream-1]=head_offset;
             }
-        });
+        },true);
         out.offsets[stream_base.back()]=chunk_base.back();
     }
 
@@ -276,6 +271,7 @@ struct TrainingBatchProgram {
                            const TrainingBuffers &multi) const {
         workers->run(jobs.size(),[&](size_t i) {
             const Program &p=programs[i]; const auto &job=jobs[i];
+            const auto &bounds=boundaries[i]; size_t boundary=0;
             std::array<int64_t,3> blk=job_block_base[i];
             int64_t mc=chunk_base[i], sb=stream_base[i];
             const int64_t token_base=int64_t(job.batch)*n+job.start;
@@ -288,14 +284,9 @@ struct TrainingBatchProgram {
             int64_t msl=0;
             for (size_t s=1;s<p.offsets.size();++s) {
                 const int64_t stream_start=p.offsets[s-1], stream_end=p.offsets[s];
-                int64_t cursor=stream_start, chunks=0;
-                while (cursor<stream_end) {
-                    int64_t stop=std::min(cursor+int64_t(width),stream_end);
-                    for (int64_t e=cursor+1;e<stop;++e)
-                        if (p.rows[e]>=0 && p.decay[e]==0.) { stop=e; break; }
-                    cursor=stop; ++chunks;
-                }
+                const int64_t chunks=bounds.stream_chunks[s]-bounds.stream_chunks[s-1];
                 if (chunks==1) {
+                    ++boundary;
                     const int length=int(stream_end-stream_start);
                     const int b=compact_bucket(length), w=compact_widths[b];
                     const int64_t block=blk[b]++;
@@ -324,9 +315,7 @@ struct TrainingBatchProgram {
                 multi.offsets[sb+msl]=mc;
                 int64_t cursor2=stream_start;
                 while (cursor2<stream_end) {
-                    int64_t stop=std::min(cursor2+int64_t(width),stream_end);
-                    for (int64_t e=cursor2+1;e<stop;++e)
-                        if (p.rows[e]>=0 && p.decay[e]==0.) { stop=e; break; }
+                    int64_t stop=bounds.ends[boundary++];
                     const int length=int(stop-cursor2);
                     const int reset=int(p.rows[cursor2]>=0 && p.decay[cursor2]==0.);
                     int *rows=multi.rows+mc*width;
@@ -354,7 +343,7 @@ struct TrainingBatchProgram {
                 ++msl;
             }
             if (msl!=job_ms) throw std::logic_error("multi-chunk stream count mismatch");
-        });
+        },true);
         multi.offsets[stream_base.back()]=chunk_base.back();
     }
 };

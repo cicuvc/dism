@@ -2,6 +2,7 @@
 
 // Offline control plane. No Torch/CUDA dependencies and no vector payloads.
 #include "planner.hpp"
+#include "prefill_matcher.hpp"
 #include <deque>
 #include <functional>
 #include <limits>
@@ -102,18 +103,29 @@ class Builder {
         if (size_t(depth)>=scratch.size()) scratch.resize(depth+1);
         return scratch[depth];
     }
-    dism_decode::Planner sam;
-    int n;
-    double tau;
-    bool reference_lca;
-    bool gradients;
+    PrefillMatcher sam;
+    int n=0;
+    double tau=0.;
+    double cached_tau=std::numeric_limits<double>::quiet_NaN();
+    int cached_length=0;
+    bool reference_lca=false;
+    bool gradients=false;
     std::vector<double> logweights, derivatives;
     Ids endpoint, qnode, matched, depth, owner, parent, size, lca_node, lca_chain, lca_stack;
-    std::vector<Ids> adj, up;
+    std::vector<Ids> up;
+    Ids adj_offsets, adj_nodes, adj_cursor;
+    struct Neighbors {
+        const int *b, *e;
+        const int *begin() const { return b; }
+        const int *end() const { return e; }
+    };
+    Neighbors neighbors(int v) const {
+        return {adj_nodes.data()+adj_offsets[v],adj_nodes.data()+adj_offsets[v+1]};
+    }
     std::vector<char> on_path;
     std::vector<bool> removed;
     std::vector<Stream> streams;
-    Ids stream_q, stream_k;
+    Ids stream_q, stream_k, ids;
     std::vector<double> stream_a, stream_b, stream_da, stream_db;
 
     double logweight(int length) const {
@@ -160,7 +172,7 @@ class Builder {
         lca_stack.push_back(p);
         while (!lca_stack.empty()) {
             int v=lca_stack.back(); lca_stack.pop_back();
-            for (int w: adj[v]) {
+            for (int w: neighbors(v)) {
                 if (w==sam.nodes[v].link || removed[w]) continue;
                 lca_node[w] = on_path[w] ? w : lca_node[v];
                 lca_stack.push_back(w);
@@ -242,7 +254,7 @@ class Builder {
         order.clear(); order.push_back(root); parent[root]=-1;
         for (size_t i=0;i<order.size();++i) {
             int v=order[i]; size[v]=1;
-            for (int w:adj[v]) if (!removed[w] && w!=parent[v]) {
+            for (int w:neighbors(v)) if (!removed[w] && w!=parent[v]) {
                 parent[w]=v; order.push_back(w);
             }
         }
@@ -250,21 +262,21 @@ class Builder {
         int c=root, best=int(order.size());
         for (int v:order) {
             int largest=int(order.size())-size[v];
-            for (int w:adj[v]) if (!removed[w] && parent[w]==v) largest=std::max(largest,size[w]);
+            for (int w:neighbors(v)) if (!removed[w] && parent[w]==v) largest=std::max(largest,size[w]);
             if (largest<best) { best=largest; c=v; }
         }
         removed[c]=true;
         S.node_arena.clear(); S.comps.clear();
         S.node_arena.push_back(c); S.comps.push_back(Range{0,1});
         int pg=-1; owner[c]=0;
-        for (int neighbor:adj[c]) if (!removed[neighbor]) {
+        for (int neighbor:neighbors(c)) if (!removed[neighbor]) {
             int g=int(S.comps.size());
             if (neighbor==sam.nodes[c].link) pg=g;
             Range r{int(S.node_arena.size()),0};
             S.node_arena.push_back(neighbor); parent[neighbor]=c;
             for (int t=r.b;t<int(S.node_arena.size());++t) {
                 int v=S.node_arena[t]; owner[v]=g;
-                for (int w:adj[v]) if (!removed[w] && w!=parent[v]) {
+                for (int w:neighbors(v)) if (!removed[w] && w!=parent[v]) {
                     parent[w]=v; S.node_arena.push_back(w);
                 }
             }
@@ -326,39 +338,65 @@ class Builder {
     }
 
   public:
-    Builder(const Ids &q, const Ids &k, const Ids &reset, double tau_, bool reference_lca_=false, bool gradients_=false)
-        : sam(1,1,1,2,0.), n(int(k.size())), tau(tau_), reference_lca(reference_lca_), gradients(gradients_) {
-        if (!n || q.size()!=k.size() || reset.size()!=k.size() || !std::isfinite(tau))
-            throw std::invalid_argument("nonempty equal label/reset lengths and finite tau required");
+    Builder() = default;
+    Builder(const Ids &q, const Ids &k, const Ids &reset, double tau_, bool reference_lca_=false, bool gradients_=false) {
+        if (q.size()!=k.size() || reset.size()!=k.size())
+            throw std::invalid_argument("equal label/reset lengths required");
+        build(q.data(),k.data(),reset.data(),k.size(),tau_,reference_lca_,gradients_);
+    }
+    // Inputs are borrowed only until build returns. A null reset means no
+    // interior resets (the training job already represents one document).
+    void build(const int *q, const int *k, const int *reset, size_t count_,
+               double tau_, bool reference_lca_=false, bool gradients_=false) {
+        if (!q || !k || !count_ || count_>size_t(std::numeric_limits<int>::max()/8) || !std::isfinite(tau_))
+            throw std::invalid_argument("nonempty bounded label lengths and finite tau required");
+        n=int(count_); tau=tau_; reference_lca=reference_lca_; gradients=gradients_;
+        endpoint.clear(); qnode.clear(); matched.clear(); up.clear();
+        streams.clear(); stream_q.clear(); stream_k.clear();
+        stream_a.clear(); stream_b.clear(); stream_da.clear(); stream_db.clear();
         if (std::abs(tau)>std::numeric_limits<double>::max()/n)
             throw std::invalid_argument("tau*N exceeds FP64 log-domain range");
         if (gradients) {
-            logweights.resize(n+1,neg_inf); derivatives.resize(n+1,0.);
-            for (int l=1;l<=n;++l) {
+            if (cached_tau!=tau) {
+                cached_tau=std::numeric_limits<double>::quiet_NaN(); cached_length=0;
+                logweights.assign(1,neg_inf); derivatives.assign(1,0.);
+            }
+            int first=cached_length+1;
+            if (first<=n) { logweights.resize(n+1); derivatives.resize(n+1); }
+            for (int l=first;l<=n;++l) {
                 logweights[l]=logweight(l);
                 derivatives[l]=std::exp(logweights[l-1]-logweights[l])*derivatives[l-1]
                     + std::exp(l*tau-logweights[l])*l;
             }
+            cached_tau=tau; cached_length=std::max(cached_length,n);
         }
-        // Reuse the existing SAM extension primitive, not its online snapshots.
+        // Build the offline SAM with the same node/link order as online decode.
         int last=0;
-        sam.nodes.reserve(2*size_t(n)); endpoint.reserve(n);
+        sam.reset(n); endpoint.reserve(n);
         for (int j=0;j<n;++j) {
-            if (reset[j]!=0 && reset[j]!=1) throw std::invalid_argument("reset must be 0 or 1");
+            if (reset && reset[j]!=0 && reset[j]!=1) throw std::invalid_argument("reset must be 0 or 1");
             sam.extend(k[j],j,last); endpoint.push_back(last);
         }
         int count=int(sam.nodes.size());
-        adj.resize(count); owner.resize(count);
-        parent.resize(count); size.resize(count); removed.resize(count,false);
+        owner.resize(count);
+        parent.resize(count); size.resize(count); removed.assign(count,false);
         lca_node.resize(count);
         on_path.assign(count,0);
+        adj_offsets.assign(count+1,0);
         for (int v=1;v<count;++v) {
-            int p=sam.nodes[v].link; adj[v].push_back(p); adj[p].push_back(v);
+            ++adj_offsets[v+1]; ++adj_offsets[sam.nodes[v].link+1];
+        }
+        for (int v=1;v<=count;++v) adj_offsets[v]+=adj_offsets[v-1];
+        adj_nodes.resize(2*(count-1)); adj_cursor=adj_offsets;
+        for (int v=1;v<count;++v) {
+            int p=sam.nodes[v].link;
+            adj_nodes[adj_cursor[v]++]=p;
+            adj_nodes[adj_cursor[p]++]=v;
         }
         if (reference_lca) {
-            depth.resize(count);
+            depth.resize(count); depth[0]=0;
             Ids order{0};
-            for (size_t i=0;i<order.size();++i) for (int w:adj[order[i]])
+            for (size_t i=0;i<order.size();++i) for (int w:neighbors(order[i]))
                 if (w!=sam.nodes[order[i]].link) { depth[w]=depth[order[i]]+1; order.push_back(w); }
             up.emplace_back(count);
             for (int v=0;v<count;++v) up[0][v]=std::max(0,sam.nodes[v].link);
@@ -371,20 +409,22 @@ class Builder {
         int state=0, length=0;
         qnode.reserve(n); matched.reserve(n);
         for (int i=0;i<n;++i) {
-            if (reset[i]) state=length=0;
-            while (state && !sam.nodes[state].next.count(q[i])) {
+            if (reset && reset[i]) state=length=0;
+            int edge=sam.find(state,q[i]);
+            while (state && edge<0) {
                 state=sam.nodes[state].link; length=std::min(length,sam.nodes[state].length);
+                edge=sam.find(state,q[i]);
             }
-            auto it=sam.nodes[state].next.find(q[i]);
-            if (it==sam.nodes[state].next.end()) state=length=0;
-            else { state=it->second; ++length; }
+            if (edge<0) state=length=0;
+            else { state=sam.edges[edge].target; ++length; }
             qnode.push_back(state); matched.push_back(length);
         }
-        Ids ids(n); std::iota(ids.begin(),ids.end(),0);
+        ids.resize(n); std::iota(ids.begin(),ids.end(),0);
         decompose(0,ids,{0,n},ids,{0,n},0);
     }
 
     Program finish() const {
+        if (!n) throw std::logic_error("build must precede finish");
         Program out; out.n=n; out.states=int(sam.nodes.size()); out.logden.assign(n,0.);
         if (gradients) out.dlogden.assign(n,0.);
         // Scalar pass. Only causal keys participate in each stream's pivot.
