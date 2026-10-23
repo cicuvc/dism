@@ -1,5 +1,6 @@
 #include "prefill.hpp"
 #include "prefill_training.hpp"
+#include "prefill_inference.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
@@ -154,8 +155,60 @@ PYBIND11_MODULE(_dism_prefill,m) {
     using Taus=py::array_t<double,py::array::c_style>;
     using Docs=py::array_t<int64_t,py::array::c_style>;
     using Hard=py::array_t<uint8_t,py::array::c_style>;
+    py::class_<PrefillBatchProgram,std::shared_ptr<PrefillBatchProgram>>(m,"PrefillBatchProgram")
+        .def("statistics",[](const PrefillBatchProgram &batch) {
+            const auto &p=*batch.program;
+            py::dict d;
+            d["batch"]=p.batch; d["heads"]=p.heads; d["n"]=p.n;
+            d["chunk_size"]=p.width; d["streams"]=p.stream_base.back();
+            d["chunks"]=p.chunk_base.back(); d["events"]=p.events;
+            d["short_streams"]=batch.short_base.back(); d["long_streams"]=batch.long_base.back();
+            d["long_chunks"]=batch.long_chunk_base.back(); d["dispatch_threshold"]=batch.threshold;
+            d["native_plan_ms"]=p.plan_ms;
+            return d;
+        })
+        .def("pack_into",[](const PrefillBatchProgram &p,const py::dict &buffers) {
+            int64_t streams=p.program->stream_base.back(), chunks=p.program->chunk_base.back();
+            int64_t slots=chunks*p.program->width, longs=p.long_base.back();
+            std::vector<std::pair<uintptr_t,uintptr_t>> ranges;
+            TrainingBuffers out{};
+            out.offsets=training_buffer<int64_t>(buffers,"offsets",streams+1,ranges);
+            out.rows=training_buffer<int>(buffers,"rows",slots,ranges);
+            out.prefixes=training_buffer<float>(buffers,"prefixes",slots,ranges);
+            out.weights=training_buffer<float>(buffers,"weights",slots,ranges);
+            out.lengths=training_buffer<int>(buffers,"lengths",chunks,ranges);
+            out.resets=training_buffer<int>(buffers,"resets",chunks,ranges);
+            PrefillRoutingBuffers ids;
+            ids.stream_ids=training_buffer<int64_t>(buffers,"stream_ids",streams,ranges);
+            ids.chunk_ids=training_buffer<int64_t>(buffers,"chunk_ids",chunks,ranges);
+            ids.local_offsets=training_buffer<int64_t>(buffers,"local_offsets",streams,ranges);
+            ids.short_stream_ids=training_buffer<int64_t>(buffers,"short_stream_ids",p.short_base.back(),ranges);
+            ids.long_stream_ids=training_buffer<int64_t>(buffers,"long_stream_ids",longs,ranges);
+            ids.long_chunk_ids=training_buffer<int64_t>(buffers,"long_chunk_ids",p.long_chunk_base.back(),ranges);
+            ids.long_local_offsets=training_buffer<int64_t>(buffers,"long_local_offsets",longs,ranges);
+            py::gil_scoped_release release;
+            p.pack_into(out,ids);
+        });
     py::class_<PlanningWorkers,std::shared_ptr<PlanningWorkers>>(m,"TrainingPlanner")
         .def(py::init<int>(),py::arg("workers")=8)
+        .def("plan_prefill",[](std::shared_ptr<PlanningWorkers> pool,Labels labels,Taus tau,
+                                int width,int threshold) {
+            if (labels.ndim()!=4 || (labels.shape(0)!=2 && labels.shape(0)!=3)
+                || labels.shape(1)<=0 || labels.shape(2)<=0 || labels.shape(3)<=0
+                || labels.shape(1)>INT_MAX || labels.shape(2)>INT_MAX || labels.shape(3)>INT_MAX)
+                throw std::invalid_argument("labels must be contiguous int32 [2 or 3,B,H,N]");
+            int b=int(labels.shape(1)),h=int(labels.shape(2)),n=int(labels.shape(3));
+            if (int64_t(b)*h>INT_MAX || int64_t(b)*h*n>INT_MAX)
+                throw std::invalid_argument("flattened vector rows exceed int32");
+            if (!((tau.ndim()==1 && tau.shape(0)==h) || (tau.ndim()==2 && tau.shape(0)==b && tau.shape(1)==h)))
+                throw std::invalid_argument("tau must be float64 [H] or [B,H]");
+            auto data=labels.data(); auto taus=tau.data();
+            const int *reset=labels.shape(0)==3 ? data+2*int64_t(b)*h*n : nullptr;
+            int tau_rows=tau.ndim()==1 ? 1 : b;
+            py::gil_scoped_release release;
+            return std::make_shared<PrefillBatchProgram>(std::move(pool),data,b,h,n,taus,tau_rows,reset,width,threshold);
+        },py::arg("labels").noconvert(),py::arg("tau").noconvert(),py::arg("chunk_size")=16,
+          py::arg("dispatch_threshold")=64)
         .def("plan",[](std::shared_ptr<PlanningWorkers> pool,Labels labels,Taus tau,Docs docs,Hard hard,int width,bool compact) {
             if (labels.ndim()!=4 || labels.shape(0)!=2 || labels.shape(1)<=0 || labels.shape(2)<=0 || labels.shape(3)<=0
                 || labels.shape(1)>INT_MAX || labels.shape(2)>INT_MAX || labels.shape(3)>INT_MAX)

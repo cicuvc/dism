@@ -85,6 +85,25 @@ class TritonPrefillPlan:
         result._initialize(packed, n, device, chunk_size, mma_precision, dispatch_threshold)
         return result
 
+    @classmethod
+    def from_device_packed(cls, data, stats, *, mma_precision):
+        """Trusted native batch output: views of one already-uploaded blob.
+
+        No CPU array exports, routing construction or individual field copies.
+        GPU execution and its stream ordering are identical to from_packed().
+        """
+        result = cls.__new__(cls)
+        for name, tensor in data.items():
+            setattr(result,name,tensor)
+        result.device = data['offsets'].device
+        result.n = stats['batch']*stats['heads']*stats['n']
+        result.c = stats['chunk_size']
+        result.streams, result.chunks = stats['streams'], stats['chunks']
+        result.dispatch_threshold = stats['dispatch_threshold']
+        result.mma_precision = mma_precision
+        result.last_kernel = None
+        return result
+
     def _initialize(self, packed, n, device, chunk_size, mma_precision, dispatch_threshold):
         if chunk_size not in (16, 32, 64):
             raise ValueError("chunk_size must be 16, 32 or 64")

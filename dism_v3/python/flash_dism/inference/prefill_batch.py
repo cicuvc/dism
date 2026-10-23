@@ -4,8 +4,7 @@ Reusable worker pool. Does not change model dispatch or initialize decode cache.
 """
 import numpy as np
 import torch
-from .prefill_parallel import ParallelPrefillPlanner
-from .prefill_triton import TritonPrefillPlan
+from .prefill_native import NativePrefillPlanner
 
 
 def _merge_chunks(results, batch, heads, n):
@@ -82,7 +81,7 @@ class HardDismPrefill:
         self.chunk_size,self.mma_precision=chunk_size,mma_precision
         self.dispatch_threshold=dispatch_threshold
         self.workers=workers
-        self.planner=ParallelPrefillPlanner(workers)
+        self.planner=NativePrefillPlanner(workers)
 
     def prepare(self, idx_q, idx_k, tau, *, reset=None):
         for x in (idx_q,idx_k):
@@ -95,18 +94,16 @@ class HardDismPrefill:
         b,h,n=idx_q.shape
         if b*h*n>np.iinfo(np.int32).max:
             raise ValueError("flattened row count exceeds int32")
-        if reset is None:reset=torch.zeros_like(idx_q,dtype=torch.bool)
-        if reset.shape!=idx_q.shape or reset.dtype!=torch.bool or reset.device!=idx_q.device:
+        if reset is not None and (reset.shape!=idx_q.shape or reset.dtype!=torch.bool or reset.device!=idx_q.device):
             raise ValueError("reset must be bool [B,H,N] on the label device")
         # One bulk label D2H for the entire batch/head set.
-        host=torch.stack((idx_q,idx_k,reset.to(torch.int32))).cpu().numpy()
+        # No reset plane is allocated/transferred in the ordinary no-reset case.
+        planes=(idx_q,idx_k) if reset is None else (idx_q,idx_k,reset.to(torch.int32))
+        host=torch.stack(planes).cpu().numpy()
         if isinstance(tau,torch.Tensor):tau=tau.detach().double().cpu().numpy()
-        results=self.planner.plan(host[0],host[1],tau,reset=host[2].astype(bool),chunk_size=self.chunk_size)
-        merged=_merge_chunks(results,b,h,n)
-        del results  # Drop SAM programs/individual packed copies before upload.
-        core=TritonPrefillPlan.from_packed(merged,b*h*n,device=self.device,
-                                         chunk_size=self.chunk_size,mma_precision=self.mma_precision,
-                                         dispatch_threshold=self.dispatch_threshold)
+        plan=self.planner.plan(host,tau,chunk_size=self.chunk_size,
+                               dispatch_threshold=self.dispatch_threshold)
+        core=plan.upload(device=self.device,mma_precision=self.mma_precision)
         return PreparedHardPrefill(core,b,h,n)
 
     def __call__(self, idx_q, idx_k, sq, sk, value, tau, *, reset=None):

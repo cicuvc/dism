@@ -136,7 +136,7 @@ struct TrainingBatchProgram {
     TrainingBatchProgram(std::shared_ptr<PlanningWorkers> pool,const int *labels,
                          int b,int h,int tokens,const double *tau,int tau_rows,
                          const int64_t *documents,int64_t docs,const uint8_t *hard,int c,
-                         bool compact_mode=false)
+                         bool compact_mode=false, bool gradients=true, const int *query_reset=nullptr)
         : workers(std::move(pool)),compact(compact_mode),batch(b),heads(h),n(tokens),width(c),
           tau_rows(tau_rows) {
         if (width!=16 && width!=32 && width!=64) throw std::invalid_argument("chunk width must be 16,32,64");
@@ -168,7 +168,8 @@ struct TrainingBatchProgram {
             // largest document handled by this worker. Program output owns its
             // arrays independently and remains valid through pack completion.
             static thread_local Builder builder;
-            builder.build(labels+base,labels+int64_t(b)*h*n+base,nullptr,count,job.tau,false,true);
+            builder.build(labels+base,labels+int64_t(b)*h*n+base,
+                          query_reset ? query_reset+base : nullptr,count,job.tau,false,gradients);
             auto p=builder.finish();
             event_counts[i]=p.rows.size();
             // Discover chunk boundaries once; slot arrays are built by pack_into*.
@@ -258,7 +259,7 @@ struct TrainingBatchProgram {
                 // p.offsets holds event offsets; the packed layout uses chunk
                 // counts, so stream boundaries come from the running walk.
                 if (stream+1<p.offsets.size()) out.offsets[sb+stream]=local_cb;
-                out.stream_heads[sb+stream-1]=head_offset;
+                if (out.stream_heads) out.stream_heads[sb+stream-1]=head_offset;
             }
         },true);
         out.offsets[stream_base.back()]=chunk_base.back();
