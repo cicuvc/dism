@@ -1903,3 +1903,156 @@ The local evaluation `generate_until` entrypoint was also exercised with graph
 on/off for two short prompts (16 greedy tokens each); both generated strings
 matched eager SAM exactly. This validates the adapter switch, not broad task
 quality equivalence with quadratic generation.
+
+#### Concurrent rebuild + graph-driven model decode: integration design
+
+The graph session above is committed as `f9c6870`. The following is a design
+assessment of the current code, **not an implemented or benchmarked integration**.
+
+Compatibility is feasible because ordinary decode already uses a frozen SAM
+snapshot plus an exact live rolling band. Background compilation reads only
+immutable KV/label history below cutoff C; foreground replay continues appending
+above C. The existing concurrent prototype has the required cutoff event,
+private summaries, GPU-ready event, query-only catchup and deferred retirement.
+However, it cannot be substituted for `GpuPlannerCache` as-is:
+
+* `ConcurrentGpuPlannerCache.step()` performs host polling/publication/deadline
+  handling and rejects capture. Replay would not execute those Python decisions
+  or advance its host position anyway. Separate `before_replay`/launch-only
+  `step`/`after_replay` duties; mirror positions once per successfully submitted
+  replay and leave the GPU state authoritative for catchup/status checks.
+* `launch_gpu_planner(GpuPlannerArgs a, ...)` passes the complete descriptor by
+  value. Capture fixes topology/edge/summary/state/task pointers, snapshot cutoff,
+  node pitch and task capacity. Assigning a new Python `device` cannot update
+  captured kernel arguments. The current graph session correctly recaptures on
+  synchronous rebuild; an asynchronous publisher must explicitly do the same
+  or provide indirection.
+* `PreparedGpuSnapshot` allocates a new output tensor per generation. The graph's
+  downstream cast/add consumes the old tensor address. Switching planner inputs
+  alone is insufficient: planner output must have a session-stable address, or
+  the whole graph must be recaptured. GDN/conv state addresses are already stable.
+
+**First integration stage: concurrent build + coordinated recapture.** Keep
+foreground using the old graph while the worker builds a private candidate.
+At a complete-token boundary, publish GPU-ready candidates, catch up on the
+owner stream, retire the old graph and capture a new whole-model graph. Batch
+ready layer publications to avoid six separate recaptures for one rebuild round;
+individual deadlines still take precedence. Capture must occur in a controlled
+window without concurrent worker CUDA allocations or other capture-unsafe API
+calls (the current capture mode is global). A completed Future alone is not that
+condition: use GPU-ready events and a worker-submission/allocator handoff barrier.
+Do not attempt to hide this issue with a relaxed capture mode. This stage reuses
+most existing code and validates scheduling, but retains capture latency.
+
+**Recommended steady-state target: fixed device descriptor and output.** Allocate
+one stable GPU `GpuPlannerArgs` descriptor per layer, and one stable planner
+output buffer per layer. Capture a planner entrypoint that accepts the descriptor
+pointer and loads its fields at execution time. Existing grid/head count, block
+size, dtype and R/DV remain fixed; generation-dependent metadata dimensions and
+scratch/task pointers come from the descriptor. This requires a new launch entry
+and a shared planner body, retaining the existing direct launch for comparison;
+inspect generated CALL/spills and measure the extra loads rather than assuming
+the indirection is free. A candidate keeps private summaries/topology/matcher
+state/task buffers, while raw KV/history and live band retain their existing
+shared ownership. Its output pointer must refer to the stable session output.
+
+Publish between two complete model replays, all on the foreground owner stream:
+
+1. Check worker completion and query its CUDA-ready event without blocking.
+2. Enqueue an owner-stream wait on that ready event.
+3. Catch up the candidate matcher from C to current position P, reading the old
+   device position/error state. Do not rewrite the live rolling band.
+4. Copy the complete validated candidate descriptor into the stable device
+   descriptor. Keep pinned upload source storage alive until the copy completes.
+5. Record a retirement event after catchup/descriptor publication, then submit
+   the next unchanged model graph. Retain old metadata, task/output storage and
+   object owners until that event completes; record allocator cross-stream uses.
+
+No cross-stream atomic pointer exchange is needed: the preceding old replay,
+catchup, descriptor copy and following new replay are ordered on one owner
+stream. The background worker never writes the live descriptor. Catchup remains
+outside the repeated graph (it must run exactly once per publication). Per-layer
+publication is then possible without recapturing the whole model: each layer's
+candidate must represent the same current token position after catchup, even if
+its cutoff differs. Track a generation per layer rather than one global cutoff.
+
+The deadline remains **C_old + I**, and after switching becomes **C_new + I**,
+not P + I. Replaying at P == C_old + I without publication is forbidden. If the
+candidate is late, wait or use the existing safe blocking rebuild path; never
+silently overrun the interval. With I=512 and approximately2 ms/token, starting
+at age256 leaves roughly512 ms of nominal slack. This is an estimate, not a
+six-layer readiness measurement. It also means cutoff spacing of about256 tokens
+under that policy: interval512 is the maximum horizon, not necessarily the
+asynchronous rebuild period. Choose lead time from measured cutoff-to-ready tail
+latency and actual decode rate, accounting for the much shorter graph token time.
+
+The model has six DISM layers, while existing concurrent benchmarks exercised
+one operator with synthetic labels. Its worker compiles heads serially and does
+not reuse the production incremental CPU planner/pool. Budget CPU jobs and GPU
+summary launches across layers; initially serialize or bound background summary
+kernels and measure head-of-line delays rather than launching six full persistent
+kernels together. Default priority0 background streams do not reserve SMs for the
+foreground. Higher foreground priority can help pending CTA scheduling but does
+not preempt resident persistent work. Preallocation/allocator ownership is also
+part of latency control: background cudaMalloc must not recreate foreground
+spikes. Measure both overlap slowdown and deadline misses with actual layer data.
+
+Validation stages: single-layer graph switching with identical starting history
+and forced lag; changing topology/pitches/task capacities with stable output;
+full-model six-layer staggered readiness and multiple publications; cancellation,
+worker errors, capacity/horizon boundaries and closure; memcheck/synccheck and
+existing applicable race checks. Numerical comparisons should separate SAM
+prefill nondeterminism from graph/publication correctness as in `--shared-prime`.
+Report ordinary-token latency, p95/p99/max, cutoff-to-ready, catchup/publication,
+recapture cost (stage1), deadline waits, and peak memory. The earlier2 ms ordinary
+step and operator-only concurrent timings do not establish the combined result.
+
+#### Current inference/evaluation switches
+
+Defaults below refer to the local downstream adapters and layout comparison
+runner, not every low-level Python API:
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `--hard-backend quadratic\|sam` | `quadratic` | Full-forward likelihood / recomputed-prefix hard backend. SAM is opt-in. |
+| `--prefill-workers N` | `16` | CPU SAM prefill worker count, when SAM is used. |
+| `--prefill-precision tf32x3\|bf16` | `tf32x3` | SAM prefill GPU arithmetic mode; BF16 is opt-in. |
+| `--decode-backend recompute\|sam` | `recompute` | SAM enables request-owned GDN/conv/DISM state and GPU planner decode. |
+| `--decode-rebuild-interval N` | `512` | Maximum snapshot horizon for model SAM decode; does not enable decode. |
+| `--decode-cuda-graph` | off | Requires SAM decode; eager prime/warmup, ordinary-step graph replay, synchronous rebuild and recapture. |
+
+Selecting SAM decode also selects SAM prefill for that generation request,
+regardless of the likelihood `--hard-backend`. Its prefill uses the worker and
+precision options above. These flags do not modify training/checkpoint config.
+Generation is currently serial across requests (physical batch1).
+
+CPU planner implementation improvements apply automatically when that planner
+is invoked. Inference memory fixes (skip unnecessary soft work/saved state,
+reuse hard-scan storage when no backward state is requested, and avoid retaining
+new eager-eval MXFP8 workspaces) also apply automatically under their existing
+inference guards. They have no new evaluation CLI switch; they do not turn on
+SAM or change the default quadratic backend.
+
+Persistent summary-program execution, compact scratch-slot reuse and concurrent
+rebuild remain explicit probe APIs/tools (`DISM_BUILD_PROBES=1` where required),
+not evaluation switches. Neither eager nor graph model decode uses them yet.
+Concurrent rebuild + graph compatibility is the design above, not an enabled
+feature. Graph mode currently still uses the synchronous native rebuild path.
+
+Low-level API defaults differ: `HardDismPrefill` uses workers16 and BF16 unless
+precision is supplied; the evaluation adapter explicitly supplies TF32x3.
+`HardDismDecoder` defaults to CPU planning and interval128; the model session
+explicitly selects GPU planning and interval512. The concurrent probe defaults
+to interval1024. Do not infer model/evaluation defaults from those constructors.
+
+Example: retain quadratic likelihood scoring while enabling cached graph
+**generation** (with synchronous rebuild):
+
+```sh
+--hard-backend quadratic --decode-backend sam --decode-cuda-graph \
+--decode-rebuild-interval 512 --prefill-workers 16 --prefill-precision tf32x3
+```
+
+Add `--hard-backend sam` instead to switch likelihood full-forward execution too.
+The adapter and runner files are in `~/downstream-eval` outside this Git repo;
+commits here contain the implementation, regression/diagnostic tools and docs.
