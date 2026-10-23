@@ -53,7 +53,7 @@ py::object get_plan(const T& token) {
 #define DECLARE(R,D,DV) namespace dism_r##R##_d##D##_v##DV { \
 Pair summarization_cuda(T,T,T,T,T,T,T,T,T,int64_t,int64_t); \
 T hard_summary_cuda(T,T,T,std::optional<T>,int64_t,std::optional<T>); \
-T hard_chunk_cuda(T,std::optional<T>,int64_t,std::optional<T>); \
+T hard_chunk_cuda(T,std::optional<T>,int64_t,std::optional<T>,bool); \
 T hard_log_weights_cuda(T,int64_t,std::optional<T>); \
 Pair hard_readout_cuda(V,T,T,std::optional<T>,int64_t,std::optional<T>); \
 V hard_backward_cuda(V,T,T,T,int64_t,std::optional<T>,std::optional<T>); \
@@ -75,7 +75,7 @@ struct Backend {
     int r,d,dv;
     Pair (*summary)(T,T,T,T,T,T,T,T,T,int64_t,int64_t);
     T (*hard_summary)(T,T,T,std::optional<T>,int64_t,std::optional<T>);
-    T (*hard_chunk)(T,std::optional<T>,int64_t,std::optional<T>);
+    T (*hard_chunk)(T,std::optional<T>,int64_t,std::optional<T>,bool);
     T (*hard_log_weights)(T,int64_t,std::optional<T>);
     Pair (*hard_readout)(V,T,T,std::optional<T>,int64_t,std::optional<T>);
     V (*hard_backward)(V,T,T,T,int64_t,std::optional<T>,std::optional<T>);
@@ -309,10 +309,10 @@ void bind_frontend(py::module_& m) {
         py::gil_scoped_release release;
         return backends[0].hard_summary(q,k,hard,table,ctas,choice);
     },py::arg("q"),py::arg("k"),py::arg("hard"),py::arg("table"),py::arg("ctas"),py::arg("choice")=std::nullopt);
-    m.def("hard_chunk",[](T summary,std::optional<T> table,int64_t heads,std::optional<T> choice) {
+    m.def("hard_chunk",[](T summary,std::optional<T> table,int64_t heads,std::optional<T> choice,bool inplace) {
         py::gil_scoped_release release;
-        return backends[0].hard_chunk(summary,table,heads,choice);
-    },py::arg("summary"),py::arg("table"),py::arg("heads"),py::arg("choice")=std::nullopt);
+        return backends[0].hard_chunk(summary,table,heads,choice,inplace);
+    },py::arg("summary"),py::arg("table"),py::arg("heads"),py::arg("choice")=std::nullopt,py::arg("inplace")=false);
     m.def("hard_log_weights",[](T tau,int64_t n,std::optional<T> choice) {
         py::gil_scoped_release release;
         return backends[0].hard_log_weights(tau,n,choice);

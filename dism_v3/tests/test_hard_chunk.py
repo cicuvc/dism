@@ -37,7 +37,8 @@ def dense_boundary(q, k, hard):
 
 
 @pytest.mark.parametrize('n', [256,512,2048,4096])
-def test_random_summary_composition(n):
+@pytest.mark.parametrize('inplace', [False, True])
+def test_random_summary_composition(n, inplace):
     rng = np.random.default_rng(63)
     source = torch.from_numpy(rng.integers(-1,n,(2,3,(n-1)//32,n),dtype=np.int32)).cuda()
     before = source.clone()
@@ -47,9 +48,14 @@ def test_random_summary_composition(n):
     expected = compose_cpu(source)
     before.copy_(source)
     for _ in range(3):
-        actual = hard_chunk_scan(source)
+        if inplace:
+            source.copy_(before)
+        actual = hard_chunk_scan(source, inplace=inplace)
         torch.testing.assert_close(actual.cpu(), expected, rtol=0, atol=0)
-        torch.testing.assert_close(source, before, rtol=0, atol=0)
+        if inplace:
+            assert actual.data_ptr() == source.data_ptr()
+        else:
+            torch.testing.assert_close(source, before, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize('n', [256,1024,2048])
@@ -63,27 +69,29 @@ def test_complete_boundaries(n, pattern):
 
 
 @pytest.mark.parametrize('pattern', ['random','equal','boundary'])
-def test_packed_boundaries(pattern):
+@pytest.mark.parametrize('inplace', [False, True])
+def test_packed_boundaries(pattern, inplace):
     q,k = labels(2048,pattern,b=1,h=2)
     hard = torch.tensor([[True,False],[False,True]],device='cuda')
     offsets = [0,0,256,512,512,1024,2048]
     layout = VarlenLayout.from_cu_seqlens(torch.tensor(offsets,dtype=torch.int32),2048)
     summary = summarize_hard(q,k,hard,layout=layout,ctas=1)
-    actual = hard_chunk_scan(summary,layout=layout,heads=2)
+    actual = hard_chunk_scan(summary,layout=layout,heads=2,inplace=inplace)
     expected = torch.cat([dense_boundary(q[:,:,a:z],k[:,:,a:z],hard[a//1024:a//1024+1]).flatten()
                           for a,z in zip(offsets,offsets[1:]) if z>a])
     torch.testing.assert_close(actual.cpu(),expected,rtol=0,atol=0)
 
 
-def test_graph_replay_and_all_soft():
+@pytest.mark.parametrize('inplace', [False, True])
+def test_graph_replay_and_all_soft(inplace):
     q,k = labels(512,'boundary')
     hard = torch.ones((2,3),device='cuda',dtype=torch.bool)
     for _ in range(2):
-        hard_chunk_scan(summarize_hard(q,k,hard))
+        hard_chunk_scan(summarize_hard(q,k,hard),inplace=inplace)
     torch.cuda.synchronize()
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
-        output = hard_chunk_scan(summarize_hard(q,k,hard))
+        output = hard_chunk_scan(summarize_hard(q,k,hard),inplace=inplace)
     for flag in (True,False,True):
         hard.fill_(flag)
         graph.replay()

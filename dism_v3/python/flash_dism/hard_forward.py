@@ -34,7 +34,11 @@ def forward_hard(sq, sk, v, idx_q, idx_k, hard, tau, *, layout=None, ctas=0, sav
     Direction is irrelevant for hard matching. No checkpoint/RNG state changes.
     """
     summary = summarize_hard(idx_q,idx_k,hard,layout=layout,ctas=ctas,_graph_choice=_graph_choice)
-    boundary = hard_chunk_scan(summary,layout=layout,heads=sq.shape[2],_graph_choice=_graph_choice)
+    boundary = hard_chunk_scan(summary,layout=layout,heads=sq.shape[2],_graph_choice=_graph_choice,
+                               inplace=not save_state)
+    if not save_state:
+        # Boundary now owns the consumed summary; no second quadratic buffer.
+        del summary
     max_length = sq.shape[1] if layout is None else (layout.max_length or max(layout.lengths))
     lut = hard_log_weights(tau,max_length,_graph_choice=_graph_choice)
     output,normalizer = hard_readout(sq,sk,v,idx_q,idx_k,hard,boundary,lut,layout=layout,ctas=ctas,_graph_choice=_graph_choice)

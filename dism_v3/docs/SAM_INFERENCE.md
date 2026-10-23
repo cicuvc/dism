@@ -1407,3 +1407,294 @@ count change only: no work stealing, P/E affinity, job splitting or production
 logweight-table optimization is included. The legacy Python reference planner
 and training/decode defaults are unchanged. CPU planning improved in the
 comparison; full-model speedup at the new default has not yet been measured.
+
+#### Long-context crossover measurements (2026-10-24)
+
+`tools/benchmark_eval_prefill_crossover.py` measures the full model through final
+normalization, including CPU planning and transfers, excluding tokenization and
+CE. Same `model_022888.pt`, layout `gggddddddggg`, 16 planner workers, RTX 5090.
+The first sufficiently long local PG19 books are rows 10, 12, 14 and 18 (zero
+based), each at least 131,072 tokens. All lengths use prefixes of these same
+books; B1 uses row 10. These differ from the earlier first-four-books workload.
+Two warmups per backend and five synchronized wall-time samples; backend order
+is shuffled within each repetition. No padding or text repetition extends the
+requested length. K below means 1,024 tokens; times are median milliseconds.
+
+| Batch | Context | Quadratic | SAM TF32x3 | SAM BF16 |
+|---|---:|---:|---:|---:|
+| 4 | 8K | 80.49 | 164.53 | 158.01 |
+| 4 | 16K | 232.64 | 343.99 | 335.03 |
+| 4 | 18K | 274.66 | 391.14 | 388.60 |
+| 4 | 24K | OOM | 535.49 | 519.61 |
+| 1 | 8K | 27.15 | 94.20 | 94.34 |
+| 1 | 16K | 60.49 | 171.76 | 165.89 |
+| 1 | 24K | 114.03 | 266.01 | 267.21 |
+| 1 | 32K | 194.92 | 366.51 | 371.38 |
+| 1 | 48K | 375.20 | 549.71 | 539.77 |
+| 1 | 64K | OOM | 756.93 | 748.70 |
+
+There is **no measured latency crossover** in the tested mutually runnable
+range: through 18K for B4 and 48K for B1. B4 quadratic also OOMs at 20K. B1 has
+only 12 per-layer CPU jobs, so 16 workers cannot all contribute to planning;
+the batch size changes the crossover question materially. BF16 provides only
+a small or noisy improvement while host planning remains on the critical path.
+
+Boundary cases were repeated in fresh processes with
+`PYTORCH_ALLOC_CONF=expandable_segments:True`. This enables B1/48K, which fails
+under the default allocator; B4/20K, B4/24K and B1/64K quadratic still fail.
+B4/18K, B1/48K and B1/64K SAM timings above use this allocator; other successful
+rows use the default allocator. Some warmups report allocator retries but
+complete; the table uses subsequent samples. OOM is a property of this current
+implementation and allocator/device setup, not an algorithmic lower bound.
+
+At B1/48K the maximum measured allocated memory is 28.41 GiB quadratic versus
+13.38/13.39 GiB SAM TF32x3/BF16. B4/24K SAM fits at 25.42/25.38 GiB; B1/64K SAM
+fits at 17.99/17.96 GiB. Thus a capacity benefit is demonstrated before a latency
+benefit. A quadratic polynomial fit to B1 quadratic times and a linear fit to
+B1 TF32x3 times extrapolate a crossing near 80K, **not a measured threshold**;
+CPU event growth, scheduling and GPU scaling beyond measured points can change
+it. No extrapolated threshold is used for backend selection.
+
+SAM sampled hidden outputs remain nondeterministic: e.g. at B1/64K, repeat
+relative L2 is about .018–.026 over 1,024 selected positions per row. Quadratic
+samples repeat exactly. This is a throughput/capacity study, not validation of
+long-context quality or numerical equivalence. Production dispatch is unchanged.
+Raw samples, book hashes, allocator settings, memory peaks and failure logs are
+ignored files `build/eval_sam/crossover_*.json` / `.log`.
+
+Reproduce with the same offline environment as the earlier profile, using
+`tools/benchmark_eval_prefill_crossover.py --checkpoint ... --batch-size 4
+--workers 16 --lengths 8192 16384 --output dism_v3/build/eval_sam/crossover.json`.
+Use fresh processes and `--lengths 49152 --batch-size 1` with the expandable
+allocator for the 48K comparison; `--modes tf32x3 bf16` isolates SAM when the
+quadratic backend exceeds available memory. The driver records and stops on
+failure rather than silently reducing batch size or context.
+
+#### Quadratic memory attribution at B4/H12/16K
+
+`tools/profile_eval_prefill_memory.py` instruments native call boundaries in
+the same full model, synchronizing and recording allocated memory plus output
+tensor sizes. A warmup populates model workspaces. The instrumentation retains
+only metadata, not CUDA tensors. Its timing and reset peak counters are
+diagnostic-only; the crossover timings above are uninstrumented.
+
+The uninstrumented quadratic peak is 22.74 GiB. Before the first DISM native
+core in a warmed forward, allocated memory is about 15.01 GiB. The following
+buffers are simultaneously live within a single DISM layer:
+
+| Buffer | Type / conceptual per-document shape | B4/H12/16K GiB |
+|---|---|---:|
+| Soft vertical, saved for backward | FP32 `[H,(N-1)//16,N]` | 2.997 |
+| Soft horizontal boundary | FP32 `[H,(N-1)//32,N]` | 1.497 |
+| Hard strip summary | int32 `[H,(N-1)//32,N]` | 1.497 |
+| Hard scanned boundary | int32, same shape as hard summary | 1.497 |
+| Total of these four buffers | approximately `5 * B*H*N*N/8` bytes | 7.488 |
+
+Packed tensors concatenate per-document regions. These are checkpoint strips,
+not a dense `[B,H,N,N]` attention-score tensor, but they still grow quadratically.
+The soft summary stage additionally allocates two horizontal-size arrays, then
+releases them before the vertical/readout stage; do not add them to the table's
+simultaneously live total. Hard chunk scan allocates a fresh output and preserves
+its input. `forward_hard` retains both until readout returns, even when
+`save_state=False`. Layers execute serially, so the table is not multiplied by
+the number of DISM layers.
+
+There is avoidable inference work: `compiler.py::_voc_forward_impl` passes
+`save=True` to `cu.core_forward` even when `need_backward=False`. It invokes the
+soft core before adding `forward_hard`, including for all-hard evaluation.
+The GPU soft summary/readout kernels skip hard heads, but their host allocation
+and initialization have already happened. The diagnostic confirms both
+`all_hard=True` and `save_state=True` on all six calls. Soft vertical and
+horizontal buffers remain referenced in `state` while hard buffers are built.
+Removing this overhead requires a dedicated inference path and validation;
+neither production code nor benchmark results have been changed here.
+
+The larger common resident component is the per-layer MXFP8/norm workspace
+cache. Storage-deduplicated traversal after warmup accounts for 14.01 of the
+14.04 GiB still allocated after forward: parameters .355 GiB, registered buffers
+.030 GiB, and forward caches **13.626 GiB**. Across 12 layers, gate/up/hidden
+BF16 arrays alone contribute 5.0625 GiB. Other retained storage includes input
+and residual tensors, down-projection outputs, row/column FP8 buffers and
+scales. `_forward_states` / `_forward_plans` retain these across calls even
+without autograd. They also affect the SAM path and mostly scale with total
+tokens, rather than quadratically. The difference from 14.04 GiB resident to
+15.01 GiB before the native core is current-forward live activation storage.
+
+Instrumented first-layer allocated memory progresses approximately
+15.01 → 19.60 GiB after soft core → 21.10 after hard summary → 22.60 after hard
+scan → 22.70 after hard readout. Later layers peak around 22.72 GiB. Thus the
+observed OOM boundary includes both persistent shared model caches and redundant
+quadratic inference buffers; it should be reassessed after inference memory
+optimization. Detailed shapes/storage ownership are in ignored
+`build/eval_sam/quadratic_memory_b4_16k.allocations.json` and `.resident.json`.
+
+#### Inference memory fixes and repeat benchmark (2026-10-24)
+
+The preceding memory attribution and OOM boundaries describe the pre-fix code.
+The following changes are now implemented:
+
+- Vocabulary/core wrappers honor `need_backward=False`: their saved vertical
+  and horizontal outputs are empty, and soft core runs with `save=False` when
+  needed. Eager all-hard calls skip soft core completely. The mask check uses
+  a GPU-to-host scalar read; capture avoids that check and keeps device-only
+  dispatch so replay can change hard masks. Opaque operator versions and fake
+  outputs were updated together; training saved outputs keep their contract.
+- `hard_chunk_scan(..., inplace=True)` consumes summary storage explicitly.
+  `forward_hard` uses this when `save_state=False`; callers requesting saved
+  state and the public scan default still retain distinct summary/boundary.
+  Each warp owns disjoint 32-wide diagonal strips, stages each input before
+  overwriting it, and does not read another warp's output. Noncausal writes
+  have disjoint ownership too. This reuses the same device kernel and launch
+  configuration; only host buffer allocation/aliasing changes.
+- MXFP8 linear/down/SwiGLU and fused add-RMSNorm eager eval workspaces are
+  invocation-owned instead of permanently cached per layer. Returned and
+  autograd-saved tensors retain their own lifetimes. Training and graph capture
+  retain stable caches; existing training/graph caches are not cleared or reused
+  by eager eval. Quantization, auxiliary computations and kernel math stay the
+  same. This bounds resident memory without new inference-specific GEMM kernels.
+
+On the same B4/H12/16K checkpoint input, uninstrumented peak allocation falls
+from **22.74 to 3.11 GiB**. Post-forward resident allocation falls from **14.04
+to .42 GiB**, with no retained eager forward workspace cache. The native
+quadratic forward now needs one hard boundary allocation, approximately
+`B*H*N*N/8` bytes, instead of the former five boundary-sized allocations plus
+the common per-layer cache. Shared model transients can dominate at shorter
+contexts, so total peak does not equal this formula alone.
+
+Validation includes exact output comparisons against the saved-state path for
+hard/mixed/soft masks, fixed/packed shapes and changing graph-replay masks;
+MXFP8 output ownership and graph replay; existing module/compiler and MXFP8
+training/optimizer/checkpoint tests. `tools/validate_eval_memory.py` compares
+full-model hidden tensors with the vocabulary wrapper from local revision
+`52aee67` and the former cache-retaining behavior: B4/8K and B4/16K match
+**bitwise**, maximum absolute difference zero. Its timings include validation
+and are not benchmark results. The in-place scan is independently checked
+against the out-of-place result and scalar boundary recurrence, including
+poisoned noncausal entries. Device codegen checks pass; memcheck and synccheck
+each pass nine selected in-place/fixed/packed/replay cases with zero errors.
+These are focused sanitizer checks, not exhaustive whole-model/128K coverage.
+
+Repeat measurements use the same PG19 book selection, checkpoint, full-model
+scope and 16 CPU workers as above. All revised runs use
+`PYTORCH_ALLOC_CONF=expandable_segments:True`, two warmups and five interleaved
+samples, with seven samples in the crossover refinements. The detailed logs are
+`build/eval_sam/crossover_fixed_b{1,4}*.json`, `memory_checkpoint_validation.*`,
+`memory_fixed_b4_16k.*`, `memory_tests_inplace.log`, `memory_memcheck.log` and
+`memory_synccheck.log`. `memory_fix_sources.json` records source hashes. SAM's
+previously observed repeat variation and long-context quality limitations still
+apply; these fixes preserve the quadratic math and do not establish SAM
+numerical equivalence or long-context task accuracy.
+
+Final revised timings (milliseconds; K=1,024 tokens):
+
+| Batch | Context | Quadratic | SAM TF32x3 | SAM BF16 |
+|---|---:|---:|---:|---:|
+| 4 | 8K | 77.63 | 163.43 | 160.73 |
+| 4 | 16K | 213.63 | 350.62 | 339.33 |
+| 4 | 24K | 349.09 | 534.14 | 524.14 |
+| 4 | 32K | 593.79 | 733.05 | 704.19 |
+| 4 | 48K | 1119.93 | 1126.82 | 1097.82 |
+| 4 | 52K | 1245.77 | 1216.41 | 1183.88 |
+| 4 | 56K | 1466.69 | 1339.10 | 1305.85 |
+| 4 | 64K | 1924.68 | 1545.31 | 1518.33 |
+| 1 | 32K | 161.98 | 359.04 | 362.76 |
+| 1 | 48K | 288.32 | 565.48 | 558.48 |
+| 1 | 64K | 528.37 | 760.10 | 754.73 |
+| 1 | 96K | 977.74 | 1184.40 | 1166.35 |
+| 1 | 112K | 1300.83 | 1455.73 | 1408.08 |
+| 1 | 120K | 1439.63 | 1566.04 | 1526.82 |
+| 1 | 128K | 1724.46 | 1672.33 | 1636.95 |
+
+B4/48–56K and B1/112–128K use seven-sample fresh-process refinements. B1/128K
+was independently repeated: the initial five-sample sweep was
+1728.95/1652.93/1632.99 ms, and the final seven-sample confirmation is shown
+above. No backend switch is implemented from these results.
+
+For this checkpoint/text/host configuration, the default TF32x3 SAM crosses
+quadratic between **48K and 52K at B4**, and **120K and 128K at B1**. At B4/48K
+TF32x3 remains slightly slower; BF16's roughly 2% advantage overlaps sample
+variation. At 52K TF32x3 is 1.024x faster, with sample ranges
+1206–1233 ms versus 1240–1291 ms quadratic. The gains grow to 1.095x at 56K
+and **1.245x at 64K** (BF16: 1.123x and 1.268x respectively). B1/128K offers
+only **1.031x / 1.053x** TF32x3/BF16 speedups in the confirmation run. This
+batch dependence is consistent with B1 exposing only 12 planner jobs per layer
+versus B4's 48. It is a workload-specific measured bracket, not a universal
+automatic dispatch threshold.
+
+Both backends now fit the longest tested contexts. Peak allocations are
+**29.04 GiB quadratic versus 15.99 GiB TF32x3 SAM at B4/64K**, and
+**26.76 versus 9.54 GiB at B1/128K**. Earlier OOM observations and the earlier
+80K B1 extrapolation are superseded by these post-fix measurements.
+
+Final regression coverage: **195 passed** across the combined inference,
+hard scan/readout, compiler/module and MXFP8 training suites (148), planner
+graph-binding suite (45), and compiled inference with changing masks (2).
+The additional compiled checks cover both fixed and packed inputs under
+Inductor. Logs include `memory_planner_graph_tests.log` and
+`memory_compiled_inference_tests.log`; the independent 128K confirmation is
+`crossover_fixed_b1_128k_confirm.json`. Production inference math and training
+state/checkpoint schemas are unchanged; no training job was started.
+
+#### Direct 2K-to-128K CE extrapolation check (2026-10-24)
+
+`tools/diagnose_long_context_ce.py` checks the same checkpoint without fine
+tuning or changing inference math. Its training context is 2,048 tokens; the
+test is a direct 64x extension to 131,072. It uses the same four long local PG19
+books (rows 10, 12, 14, 18), batch one, and 16 planner workers. Each document
+input is `[BOS, token_0, ..., token_(N-2)]`, with next-token targets
+`[token_0, ..., token_(N-1)]`: all 524,288 targets across four books are scored.
+The loss is the downstream BF16-operand, FP32-accumulation unreduced CE with
+the checkpoint's softcap 30, rather than an MXFP8 head approximation. Full
+vocabulary logits are not materialized. Quadratic is run once; each SAM
+precision is run twice to expose its existing nondeterminism.
+
+| Full 128K scoring, equal token weighting | Mean CE, nat/token | Perplexity |
+|---|---:|---:|
+| Quadratic | 3.731214 | 41.7297 |
+| SAM TF32x3, mean of repeats | 3.731306 | 41.7336 |
+| SAM BF16, mean of repeats | 3.731347 | 41.7353 |
+
+All full hidden tensors and all per-token losses are finite: zero NaN/Inf.
+Quadratic per-book CE is 3.929902, 3.980679, 3.587384 and 3.426889 (rounded).
+There is no observed catastrophic CE collapse on these four documents.
+The aggregate SAM-minus-quadratic differences are +.000092/+ .000134 nat/token
+for TF32x3/BF16. This small signed average does not mean tokenwise equivalence:
+mean absolute per-token differences are .04994/.05126 nat. Across repeated
+SAM runs, the largest per-book difference in mean CE is .000225/.000471 nat.
+
+To distinguish context effects from passage difficulty, evaluate the **same
+last 1,024 targets** at endpoints 8K, 16K, 32K, 64K, 96K and 128K. Compare
+their losses in the full causal 128K pass against fresh quadratic forwards
+containing only the preceding 2K or 8K input window. Windows beginning inside
+the book use real preceding text, with no synthetic BOS. The scored suffix
+therefore has at least 1K/7K of preceding context in the short controls.
+Results below average four books; the long column uses quadratic so backend
+rounding is not mixed into the context comparison.
+
+| Target endpoint | Recent 2K | Recent 8K | Full prefix |
+|---|---:|---:|---:|
+| 8K | 3.92546 | 3.92247 | 3.92091 |
+| 16K | 3.88935 | 3.90013 | 3.90752 |
+| 32K | 3.74272 | 3.72180 | 3.71828 |
+| 64K | 3.81074 | 3.77362 | 3.77703 |
+| 96K | 3.93320 | 3.90630 | 3.92325 |
+| 128K | 3.61594 | 3.56699 | 3.61073 |
+
+At the 128K endpoint the full prefix is **+.04375 nat/token versus recent 8K**,
+equivalent to 4.47% higher perplexity, and -.00521 versus recent 2K. All four
+books have a positive full-minus-8K tail delta (.02205, .05796, .08928, .00571).
+Across all 24 paired windows, the mean full-minus-8K delta is +.01107 nat/token
+(1.11% higher perplexity). Thus the diagnostic finds a modest long-context
+regression relative to 8K, rather than a numerical or language-modeling collapse.
+It does not establish useful retrieval over 128K or comprehensive downstream
+quality. Absolute CE across different endpoints also reflects different text.
+Small shape-dependent numerical differences remain: at the 8K endpoint, full
+and short prefixes contain the same causal tokens, but are evaluated inside
+different physical forward shapes; their averaged CE differs by .00156 nat.
+
+Ignored artifacts are `build/eval_sam/ce_128k.json`, `ce_128k_summary.json`,
+`ce_128k.log` and compressed per-token arrays `ce_128k_book*.npz`. They include
+book hashes, full 8K-bin loss statistics, finite checks, both SAM repeats and
+the exact paired target positions. Reproduce in the same offline environment
+as the crossover benchmark with `tools/diagnose_long_context_ce.py
+--checkpoint ... --output dism_v3/build/eval_sam/ce_128k.json`.

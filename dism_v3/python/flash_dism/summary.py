@@ -17,15 +17,16 @@ def summarize_hard(idx_q, idx_k, hard, *, layout=None, ctas=0, _graph_choice=Non
     return cu.hard_summary(idx_q, idx_k, hard, None if layout is None else layout.table, ctas, _graph_choice)
 
 
-def hard_chunk_scan(summary, *, layout=None, heads=0, _graph_choice=None):
+def hard_chunk_scan(summary, *, layout=None, heads=0, _graph_choice=None, inplace=False):
     """Compose hard R summaries into document-wide inclusive R boundaries.
 
-    Returns a new int32 tensor with the same shape; input is not modified.
+    By default returns a new int32 tensor, preserving the input. inplace=True
+    explicitly consumes the input summary and returns its scanned storage.
     Packed input requires its VarlenLayout and head count. Fixed input infers
     heads from [B,H,C,N]. Noncausal and skipped soft entries remain -1.
     On causal hard entries the match length is key_coordinate - boundary.
     """
-    return cu.hard_chunk(summary, None if layout is None else layout.table, heads, _graph_choice)
+    return cu.hard_chunk(summary, None if layout is None else layout.table, heads, _graph_choice, inplace)
 
 
 def chunk_scan(summary_a,summary_b,seqlen,*,backend=None):

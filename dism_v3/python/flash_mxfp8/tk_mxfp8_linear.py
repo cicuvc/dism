@@ -248,7 +248,10 @@ class MXFP8Linear(nn.Module):
             self.forward_config,
             self.raster_group,
         )
-        state = self._forward_states.get(key)
+        # Eager eval owns temporary workspaces per invocation. Training and
+        # graph capture retain the existing stable-buffer reuse contract.
+        retain = self.training or torch.cuda.is_current_stream_capturing()
+        state = self._forward_states.get(key) if retain else None
         if state is None:
             state = _ForwardState(
                 x,
@@ -257,7 +260,8 @@ class MXFP8Linear(nn.Module):
                 self.forward_config,
                 self.raster_group,
             )
-            self._forward_states[key] = state
+            if retain:
+                self._forward_states[key] = state
         return state
 
     def _backward_state(

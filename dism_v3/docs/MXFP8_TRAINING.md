@@ -426,3 +426,22 @@ for audit but are **not** representative of the model's norm execution;
 Logs, exact commands,
 resource inspection and result JSON are under ignored `dism_v3/build/norm_ce/`.
 No checkpoint was loaded/modified and no pretraining job was started.
+
+### Eager evaluation workspace ownership (2026-10-24)
+
+`MXFP8Linear`, `MXFP8DownProjection`, `MXFP8SwiGLU` and
+`FusedAddRMSNormMXFP8` now construct invocation-owned forward workspaces during
+eager `eval()`, instead of retaining them in each layer's `_forward_states` or
+`_forward_plans`. Returned tensors and autograd saved tensors retain their own
+storage lifetime; subsequent forwards cannot overwrite an earlier eager eval
+output through a reused workspace. This releases per-layer inputs/residuals,
+gate/up/hidden buffers and quantized layouts after their consumers finish.
+It does not change quantization, GEMM configurations or checkpoint schema.
+
+Training mode and CUDA Graph capture continue using the existing stable cached
+workspaces. Existing caches created by training/capture are not cleared by this
+policy. Eager evaluation does not reuse or mutate those graph-owned buffers.
+This change bounds resident memory; it still computes the same transient
+quantized/auxiliary outputs and does not introduce new inference-only kernels.
+See [SAM_INFERENCE.md](SAM_INFERENCE.md) for full-model memory and crossover
+measurements, numerical checks and graph regression coverage.

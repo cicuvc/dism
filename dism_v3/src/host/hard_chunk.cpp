@@ -7,7 +7,7 @@
 namespace DISM_VARIANT {
 const void* hard_chunk_address();
 
-at::Tensor hard_chunk_cuda(at::Tensor summary, std::optional<at::Tensor> table, int64_t heads, std::optional<at::Tensor> choice) {
+at::Tensor hard_chunk_cuda(at::Tensor summary, std::optional<at::Tensor> table, int64_t heads, std::optional<at::Tensor> choice, bool inplace) {
     TORCH_CHECK(summary.is_cuda() && summary.scalar_type() == at::kInt && summary.is_contiguous(),
                 "hard summary must be contiguous CUDA int32");
     c10::cuda::CUDAGuard guard(summary.device());
@@ -38,7 +38,7 @@ at::Tensor hard_chunk_cuda(at::Tensor summary, std::optional<at::Tensor> table, 
         };
         auto records=build(*table);
         TORCH_CHECK(records.size() <= INT_MAX, "too many packed chunk tasks");
-        if (records.empty()) return at::empty_like(summary);
+        if (records.empty()) return inplace ? summary : at::empty_like(summary);
         task_storage = dism_graph::state(*table) ? dism_graph::records(*table,
             "hard_chunk:"+std::to_string(heads),summary.device(),
             [build](const at::Tensor& table) { return dism_graph::bytes(build(table)); })
@@ -55,7 +55,11 @@ at::Tensor hard_chunk_cuda(at::Tensor summary, std::optional<at::Tensor> table, 
         n = length;
         grid = dim3((n + (summary.size(2) - 1) * 32 + 127) / 128, batch_heads);
     }
-    auto output = at::empty_like(summary);
+    // Each warp owns disjoint 32-wide diagonal strips. An input element is
+    // staged before that same warp overwrites it; no other warp reads it.
+    // Noncausal initialization also owns disjoint elements. Aliasing therefore
+    // preserves the existing scan order without inter-warp synchronization.
+    auto output = inplace ? summary : at::empty_like(summary);
     HardChunkArgs args{summary.data_ptr<int>(), output.data_ptr<int>(),
         table ? reinterpret_cast<const HardChunkTask*>(task_storage.data_ptr()) : nullptr, n};
     launch_kernel(hard_chunk_address(), grid, 128, 0, at::cuda::getCurrentCUDAStream(), args,route);

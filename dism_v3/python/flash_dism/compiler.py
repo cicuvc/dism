@@ -91,7 +91,8 @@ def _prepare_pack_fake(boundaries, tokens, maximum):
 
 
 # Version the internal operator identity: saved interpolants changed from
-# BHND to BNHD, so old Inductor disk-cache output contracts must not be reused.
+# BHND to BNHD; inference now returns empty backward buffers. Old Inductor
+# disk-cache output contracts must not be reused across these schema versions.
 def _voc_forward_impl(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.Tensor,
                 v: torch.Tensor, eq: torch.Tensor, ek: torch.Tensor, tau: torch.Tensor,
                 beta: torch.Tensor, direction: torch.Tensor, hard: torch.Tensor,
@@ -117,19 +118,28 @@ def _voc_forward_impl(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: to
     pack = layout_from_table(table, q.shape[1])
     ticket = ((default_hard_planner(q.device) if planner is None else planner).submit(iq, ik, hard, tau, layout=pack)
               if need_backward and q.shape[1] else None)
-    output, norm, state = cu.core_forward(
-        (qv, kv, sq, sk, v, lq.transpose(1, 2), lk.transpose(1, 2),
-         iq, ik, direction, hard, tau), table,
-        0, True, False, True, direction_true)
+    # Eager inference may inspect the mask; capture must remain device-only.
+    # All-hard has zero soft contribution, so avoid its quadratic allocations.
+    if not need_backward and not torch.cuda.is_current_stream_capturing() and bool(hard.all()):
+        output = torch.zeros_like(v)
+        norm = torch.zeros_like(lq)
+        state = None
+    else:
+        output, norm, state = cu.core_forward(
+            (qv, kv, sq, sk, v, lq.transpose(1, 2), lk.transpose(1, 2),
+             iq, ik, direction, hard, tau), table,
+            0, need_backward, False, True, direction_true)
     combined = output + forward_hard(sq.contiguous(),sk.contiguous(),v.contiguous(),iq,ik,
                                      hard.contiguous(),tau.contiguous(),layout=pack)[0] if q.shape[1] else output.clone()
     # All auxiliary results own newly computed storage; no inputs alias outputs.
     # qfk/kfq are saved UNSCALED so the backward delta uses E_beta with dL/dE.
+    vertical = state['vertical'] if need_backward else q.new_empty((0,), dtype=torch.float32)
+    boundary = state['operands'][12] if need_backward else q.new_empty((0,), dtype=torch.float32)
     return [combined, qfk, kfq, lk, lq, ik, iq,
-            state['vertical'], state['operands'][12], norm, output, cu.hold_training_plan(ticket)]
+            vertical, boundary, norm, output, cu.hold_training_plan(ticket)]
 
 
-@torch.library.custom_op('flash_dism::voc_forward_hybrid_v1', mutates_args=())
+@torch.library.custom_op('flash_dism::voc_forward_hybrid_v2', mutates_args=())
 def _voc_forward(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.Tensor,
                  v: torch.Tensor, eq: torch.Tensor, ek: torch.Tensor, tau: torch.Tensor,
                  beta: torch.Tensor, direction: torch.Tensor, hard: torch.Tensor,
@@ -139,7 +149,7 @@ def _voc_forward(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.T
     return _voc_forward_impl(q,k,sq,sk,v,eq,ek,tau,beta,direction,hard,boundaries,layout,need_backward)
 
 
-@torch.library.custom_op('flash_dism::voc_forward_host_beta_v2', mutates_args=())
+@torch.library.custom_op('flash_dism::voc_forward_host_beta_v3', mutates_args=())
 def _voc_forward_host(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: torch.Tensor,
                       v: torch.Tensor, eq: torch.Tensor, ek: torch.Tensor, tau: torch.Tensor,
                       beta: float, direction: torch.Tensor, hard: torch.Tensor,
@@ -154,7 +164,10 @@ def _forward_fake(q, k, sq, sk, v, eq, ek, tau, beta, direction, hard, boundarie
     b, n, h, d = q.shape
     vector = lambda: q.new_empty((b, n, h, d))
     scalar = lambda dtype: q.new_empty((b, h, n), dtype=dtype)
-    if boundaries is None and layout is None:
+    if not need_backward:
+        vertical = q.new_empty((0,), dtype=torch.float32)
+        boundary = q.new_empty((0,), dtype=torch.float32)
+    elif boundaries is None and layout is None:
         vertical = q.new_empty((b, h, (n-1)//16, n), dtype=torch.float32)
         boundary = q.new_empty((b, h, (n-1)//32, n), dtype=torch.float32)
     else:
@@ -308,13 +321,20 @@ def _core_forward_impl(raw: list[torch.Tensor], table: Optional[torch.Tensor], c
     iq_c,ik_c=iq.to(torch.int32).contiguous(),ik.to(torch.int32).contiguous()
     ticket = ((default_hard_planner(q.device) if planner is None else planner).submit(iq_c,ik_c,hard,tau,layout=pack)
               if need_backward and q.shape[1] else None)
-    out,norm,state = cu.core_forward(raw,table,ctas,True,False,absorbed,direction_true,False)
+    if not need_backward and not torch.cuda.is_current_stream_capturing() and bool(hard.all()):
+        out = torch.zeros_like(v)
+        norm = q.new_zeros((q.shape[0], q.shape[2], q.shape[1]), dtype=torch.float32)
+        state = None
+    else:
+        out,norm,state = cu.core_forward(raw,table,ctas,need_backward,False,absorbed,direction_true,False)
     combined = out+forward_hard(sq.contiguous(),sk.contiguous(),v.contiguous(),iq_c,ik_c,
                                 hard.contiguous(),tau.contiguous(),layout=pack,ctas=ctas)[0] if q.shape[1] else out.clone()
-    return [combined,state['vertical'],state['operands'][12],out,norm,cu.hold_training_plan(ticket)]
+    vertical = state['vertical'] if need_backward else q.new_empty((0,), dtype=torch.float32)
+    boundary = state['operands'][12] if need_backward else q.new_empty((0,), dtype=torch.float32)
+    return [combined,vertical,boundary,out,norm,cu.hold_training_plan(ticket)]
 
 
-@torch.library.custom_op('flash_dism::core_forward_hybrid_v2', mutates_args=())
+@torch.library.custom_op('flash_dism::core_forward_hybrid_v3', mutates_args=())
 def _core_forward(raw: list[torch.Tensor], table: Optional[torch.Tensor], ctas: int,
                   absorbed: bool, need_backward: bool) -> list[torch.Tensor]:
     return _core_forward_impl(raw, table, ctas, absorbed, need_backward)
@@ -324,7 +344,10 @@ def _core_forward(raw: list[torch.Tensor], table: Optional[torch.Tensor], ctas: 
 def _core_fake(raw,table,ctas,absorbed,need_backward):
     q,v=raw[0],raw[4]
     b,n,h,_=q.shape
-    if table is None:
+    if not need_backward:
+        vertical=q.new_empty((0,),dtype=torch.float32)
+        boundary=q.new_empty((0,),dtype=torch.float32)
+    elif table is None:
         vertical=q.new_empty((b,h,(n-1)//16,n),dtype=torch.float32)
         boundary=q.new_empty((b,h,(n-1)//32,n),dtype=torch.float32)
     else:

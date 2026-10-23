@@ -51,7 +51,8 @@ class FusedAddRMSNormMXFP8(nn.Module):
 
     def _forward_plan(self, x, residual, factor):
         key = self._key((x, residual, factor))
-        plan = self._forward_plans.get(key)
+        retain = self.training or torch.cuda.is_current_stream_capturing()
+        plan = self._forward_plans.get(key) if retain else None
         if plan is None:
             plan = FusedAddRMSNormPlan(
                 x,
@@ -61,7 +62,8 @@ class FusedAddRMSNormMXFP8(nn.Module):
                 write_sum=False,
                 y_mode="bf16_mxfp8",
             )
-            self._forward_plans[key] = plan
+            if retain:
+                self._forward_plans[key] = plan
         else:
             plan.rebind(x, residual, factor)
         return plan
