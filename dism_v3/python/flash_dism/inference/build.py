@@ -54,14 +54,26 @@ def build_decoder(name='dism_decode_cuda', *, fp64=False, timing=False, force=Fa
                  cuda=True, flags=flags, force=force)
 
 
+@lru_cache(None)
+def load_summary_probe():
+    """Explicit research prototype; never selected by a production cache."""
+    if os.environ.get('DISM_BUILD_PROBES') != '1':
+        raise RuntimeError('summary probe requires DISM_BUILD_PROBES=1')
+    return _load('_dism_summary_program_probe',
+                 ['probe/summary_program_bind.cpp', 'probe/summary_program.cu',
+                  'rebuild_parallel.cu'], cuda=True,
+                 flags=['-DDISM_DECODE_FP64_PREFIX=0'])
+
+
 if __name__ == '__main__':
     import argparse
     import shutil
     parser = argparse.ArgumentParser()
-    parser.add_argument('--component', choices=('prefill', 'decode'), required=True)
+    parser.add_argument('--component', choices=('prefill', 'decode', 'summary-probe'), required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     module = (_load('_dism_prefill', ['prefill_bind.cpp'], force=True)
-              if args.component == 'prefill' else build_decoder(force=True))
+              if args.component == 'prefill' else
+              load_summary_probe() if args.component == 'summary-probe' else build_decoder(force=True))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(module.__file__, args.output)

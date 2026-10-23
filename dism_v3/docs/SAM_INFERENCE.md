@@ -599,3 +599,163 @@ python dism_v3/tools/check_decode_rebuild.py \
   --reference dism_v3/build/decode_rebuild/baseline.pt --workers 1 4 8
 python -m pytest -q dism_v3/tests/test_decode_rebuild.py
 ```
+
+## Opt-in summary program prototype (2026-10-23)
+
+`csrc/probe/summary_program_bind.cpp` compiles an explicit host program;
+`csrc/probe/summary_program.cu` executes it with persistent CTAs. This is an
+isolated feasibility probe, enabled only with `DISM_BUILD_PROBES=1` and the
+`summary-probe` build component. Neither `NativeDecodeCache` nor model dispatch
+selects it. The existing production summary kernels are unchanged.
+
+### Program and dependencies
+
+For a suffix-link-tree node u, the computation is a subtree sum T[u] of raw
+SK outer V matrices, followed by the affine recurrence
+`P[u] = weight[u] * T[u] + rho[u] * P[parent[u]]`. Only selected subtree and
+sampled-prefix matrices are outputs. The scalar coefficients come from the
+existing CPU planner, including tau=0 handling.
+
+The host builds four kinds of coarse instructions:
+
+1. **Local Euler prefix:** each task processes at most S Euler positions for
+   one matrix tile. Raw KV stays on the device.
+2. **Block carries:** one task per head/tile scans the ceil(nodes/S) block totals.
+3. **Local chain:** heavy paths are divided into segments of at most S nodes.
+   Each segment reads subtree sums from Euler intervals and computes its local
+   affine recurrence. Materialized subtree outputs are stored here.
+4. **Boundary completion:** each segment reads a host-compiled list of ancestor
+   segment boundary values and completes its sampled-prefix outputs.
+
+The default S is ceil(sqrt(2*token_count)), using the SAM node-count bound;
+S can be overridden in the probe. This is a two-level decomposition, not a
+recursive log-depth parallel scan. A long chain has O(S + nodes/S) sequential
+work per segment/stage. Light edges from heavy-path decomposition add branch
+boundaries. An attachment can be **inside** a parent segment, so the compiler
+saves the local affine value at the exact parent node, not necessarily at the
+segment tail. This distinction is numerically essential even when positive tau
+makes an incorrect carry appear small.
+
+When a head has no sampled prefixes, the compiler emits only batched interval
+queries for its materialized subtree outputs; it does not run an unused path
+recurrence. Heads with no summaries emit no GPU work. Without this pruning,
+8K/vocabulary-4 generated about 1.59 million tiny tasks and was much slower than
+the baseline. The final S=256 program has 10,384 tasks for the same 12-head case.
+
+All CTAs consume ready tasks from a bounded global queue. Completion counters
+are per head/tile/stage; the last producer publishes the next stage. Vector
+writes are fenced before release/acquire integer atomics publish completion.
+CTAs never reserve an unready dependency and wait for a producer that has not
+been scheduled. Shared storage carries the CTA command only; there are no FP32
+atomics. The interpreter uses compensated FP32 sums for prefixes and affine
+accumulation. It changes the reduction order and is not bitwise equivalent to
+the production kernels.
+
+An execution consists of **two kernels plus one device-to-device copy**: reset
+queue state, copy the immutable initial task list, then run the interpreter.
+Output and scratch are reused. Calls are stream-bound and serialized; retained
+outputs must be cloned. This prototype has not been tested concurrently with
+model decode.
+
+### Available parallelism and measurements
+
+RTX 5090 (170 SMs), BF16 R32/DV64, tau=.5, synthetic resident inputs. A tile is
+128 matrix elements, giving 16 tiles per head. At 8K/12 heads/repeated labels:
+
+| S | Chain segments | Independent local-chain tasks | Maximum ancestor segments | Total tasks | Estimated structural span |
+|---:|---:|---:|---:|---:|---:|
+| 64 | 1,548 | 24,768 | 128 | 74,496 | 449 |
+| 128 | 780 | 12,480 | 64 | 37,632 | 513 |
+| 256 | 396 | 6,336 | 32 | 19,200 | 833 |
+
+The span column counts node-loop iterations along the staged critical path;
+it is not GPU cycles and assigns equal cost to different instructions. Even
+S=256 exposes thousands of independent tasks. Smaller S reduces the structural
+span but increases queue traffic and work duplication; the measured optimum
+is not the minimum-span program.
+
+With 512 persistent CTAs, S=256 and three repetitions, median timings in ms:
+
+| 8K / 12 heads | Production eager | Program eager | Production graph | Program graph |
+|---|---:|---:|---:|---:|
+| Repeated labels | 29.012 | 5.838 | 23.330 | 5.795 |
+| Period-7 labels | 27.978 | 7.178 | 28.432 | 6.680 |
+| Uniform vocabulary-4 | 14.432 | 3.205 | 14.066 | 3.190 |
+
+Uniform vocabulary-512 generated no summary matrices; both paths skip GPU
+summary work. Repeated/periodic production cases use 13,824 kernel launches,
+while vocabulary-4 uses 2,304. The baseline calls the unchanged production
+`launch_parallel_rebuild` with identical topology/coefficients, but reuses its
+output and scratch allocations. It excludes production cache export and final
+concatenation. Graph capture is outside timing. Eager timing is synchronized
+host wall time; graph timing uses CUDA events. Clocks/affinity were not fixed.
+
+For repeated labels, the final S=256 program takes 16.454 / 9.439 / 5.838 /
+6.833 ms at 128 / 256 / 512 / 1024 CTAs. More workers are not monotonically
+better. At a single head it takes 1.051 / .595 / .643 / .871 ms; the unchanged
+baseline takes 2.099 ms. The default sqrt-sized S=128 program at 12 heads and
+512 CTAs takes 8.299 ms, whereas S=64 takes 21.169 ms. These sweeps indicate
+sufficient parallel work, with task granularity and scheduling cost now material.
+They do not separately attribute queue contention versus cache/memory effects.
+
+At 16K/12 heads, default S=182 and 512 CTAs, eager times are 12.648 / 13.880 /
+6.284 ms for repeat / periodic / vocabulary-4, versus production 37.748 /
+44.413 / 23.585 ms. This supports the feasibility of sqrt blocking beyond 8K;
+it is not a universal block-size or worker-count recommendation.
+
+### Costs and validation limits
+
+The current prototype deliberately expands scratch over all active heads and
+matrix tiles. At 8K/12 heads/S=256, scratch is about **775 MiB** for repeat and
+periodic labels, and **1,249 MiB** for vocabulary-4. Most is the full Euler prefix
+array. This is much larger than production's reused 32-coordinate slab. Program
+metadata is about 4.3 MiB / 4.2 MiB / 6.2 MiB respectively. Scratch budgeting,
+reuse of intermediate storage and bounded batches are needed before integration.
+
+The probe host compiler currently builds full SAMs serially and also exports
+production baseline metadata. `compile_ms` includes those diagnostics, and
+`prepare` includes baseline buffer preparation/uploads. They are not measurements
+of an incremental production compiler. The timing tables isolate prepared GPU
+execution; they do **not** establish total rebuild or model-throughput speedup.
+
+Validation for the final boundary-correct, compensated implementation:
+
+- 24 BF16-input probe tests pass: production-baseline bitwise comparison, independent CPU
+  FP64 tree evaluation, output comparisons after replacing a production decode
+  snapshot's summaries, queue reuse, workers 1/8/32/64/256 and graph replay.
+  Decode checks retain atol=2e-5/rtol=2e-3; small summary checks use
+  atol=2e-5/rtol=2e-4. No acceptance threshold was loosened after failures.
+- 8K FP64 checks include repeat, period-7 and vocabulary-4 at tau=0 and .5.
+  Program summary relative L2 errors range from 6.8e-8 to 2.11e-7. At tau=0,
+  large unnormalized prefix matrices have max absolute errors .00966 (repeat)
+  and .00706 (periodic), so these are not claims of uniform tiny absolute error.
+  The long-summary regression uses relative L2 <2e-6; it complements rather
+  than replaces the elementwise decode checks. Full-model generation and
+  arbitrary long-context numerical equivalence remain unverified.
+- CUDA resource inspection reports 40 registers/thread, zero stack/local memory,
+  and no CALL/LDL/STL instructions in the probe binary. Device sources are
+  Torch-free.
+- Compute Sanitizer memcheck, synccheck and racecheck each pass 21 selected tests
+  with zero reported errors/hazards (racecheck also reports zero warnings).
+  The three 8K aggregate-reference cases are excluded from sanitizer runs;
+  the selected cases include 1,025-token branch attachments, tau=0, repeated
+  queue use and graph replay. Host ASan/UBSan and FP32-input numerical coverage
+  were not run for this isolated prototype.
+
+Artifacts live under ignored `dism_v3/build/summary_program/`. Final performance
+and FP64 results are `verified_main.json`, `verified_sqrt.json`,
+`verified_smallblock.json` and `verified_reference.json`; earlier `initial`,
+`coarse`, `block_*`, `long` and `reference` files are developmental measurements,
+including an invalid pre-fix branch-boundary result, and are not final evidence.
+
+```bash
+export PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat"
+export TORCH_EXTENSIONS_DIR="$PWD/dism_v3/build/torch_extensions"
+export DISM_BUILD_PROBES=1 MAX_JOBS=2 OMP_NUM_THREADS=1
+python -m flash_dism.inference.build --component summary-probe \
+  --output dism_v3/build/summary_program/probe.so
+python -m pytest -q dism_v3/tests/test_summary_program_probe.py
+python dism_v3/tools/bench_summary_program.py --heads 1 12 --lengths 8192 \
+  --block 256 --tile 128 --workers 128 256 512 1024 \
+  --output dism_v3/build/summary_program/fresh.json
+```
