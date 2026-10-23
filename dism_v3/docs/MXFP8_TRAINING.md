@@ -338,3 +338,91 @@ caused by quantization, and does not establish long-run convergence equivalence.
 Logs, exact commands and result JSON are in ignored
 `dism_v3/build/ce_throughput/`. No checkpoint was loaded or modified, and no
 pretraining job was started for this measurement.
+
+### Final RMSNorm → MXFP8 CE handoff (2026-10-23)
+
+With `mxfp8_ce=True`, BF16 training activations now use `RMSNormMXFP8` for
+the final norm. It reuses `RMSNormDualQuantPlan`: one reduction kernel produces
+inverse RMS, then the fused normalization/quantization kernel writes BF16 y
+and both MXFP8 activation layouts. Row scales are written in CE chunk order,
+so each chunk receives contiguous views without a repacking kernel. At the
+current 16,384-token microbatch and 1,024-token chunk size this removes 16
+separate activation-quantization launches per microbatch (128 per optimizer
+step). The existing RMSNorm backward kernels are reused.
+
+`MXFP8FusedLinearCrossEntropy.forward(..., quantized_input=chunks)` accepts one
+`(row, row_scale, column, column_scale)` tuple per chunk. Metadata validation
+does not read GPU data or synchronize; callers must ensure the bytes represent
+the supplied BF16 y. CE still returns its STE gradient through y. Each norm
+invocation owns its output/inverse buffers, and CE rebinds both forward GEMM
+and wgrad descriptors. Multiple forwards before backward, retained backward
+and graph replay do not depend on a mutable cached norm plan. The low-level
+plan's default output/layout remains unchanged for existing callers.
+
+The module uses the existing `norm.weight`, adds no parameters or checkpoint
+buffers, and leaves the model fingerprint, optimizer groups, RNG/annealing and
+dataloader state unchanged. Evaluation, logits, no-grad calls and FP32 input
+retain the original final norm. No new configuration switch is required;
+diagnostic A/B can set `model.mxfp8_ce_norm = None` to use the previous path.
+
+Validation covers 85 distinct operator/model cases: 74 in the combined CE,
+MXFP8 training, document-loss and graph/resume suite, one new direct
+model/checkpoint-schema comparison, and ten additional autocast norm cases.
+Quantized bytes, CE losses and gradients are bitwise equal to direct
+quantization **of the same BF16 y**. RMSNorm's different FP32 reduction order
+can flip BF16 rounding boundaries; comparisons against PyTorch retain the
+existing fused-norm output budget (`rtol=.01, atol=.008`) and require gradient
+relative L2 below .001. Model comparisons retain the existing model tolerances.
+Both FP32/BF16 norm factors and autocast on/off are covered, including tail
+chunks, ignored targets, changing weights/boundaries and multiple forwards.
+
+Memcheck and synccheck each report zero errors on the targeted norm/CE probe;
+this is not a whole-training sanitizer claim. The five inspected norm kernels
+have zero spills and zero CALLs at M=16384/H=768; their register counts are
+14/80/30/72/26 (inverse, quantization, dot, backward, factor reduction).
+The standalone graph regression still emits PyTorch's AccumulateGrad stream
+warning; it is not suppressed. An exploratory eager-model fixture with
+duplicate document boundaries produced NaNs **before final norm in both
+implementations**. The model comparison therefore uses nonempty segments;
+empty-document CE semantics are tested independently. This existing upstream
+eager GDN limitation remains unresolved, with the failure and probe preserved
+in `build/norm_ce/eager_empty_document_failure.log` and `model_nan_probe.log`.
+
+The idle-GPU whole-step comparison uses the updated CPU planner, the same
+123M `gggddddddggg` config, CUDA Graph, hard probability .95, 16 planner workers,
+8 × 2048 tokens × 8 microbatches, eight warmup steps and 48 measured steps.
+Four fresh processes run separate/fused/fused/separate, all with e=2304/q=0.
+These synthetic resident-batch timings include the same work as the training
+benchmark above; GPU clocks are not locked.
+
+| Final norm path | Run times (ms/step) | Pooled ms/step | Pooled tokens/s |
+|---|---:|---:|---:|
+| Separate norm/quantization | 788.317, 796.970 | 792.643 | 165,361 |
+| Fused norm/dual quantization | 787.764, 793.678 | 790.721 | 165,763 |
+
+The observed +0.24% throughput difference is smaller than between-run
+variation, so this does not establish a stable whole-step speedup. Peak
+allocated memory increases by approximately 4–5 MiB.
+
+`tools/bench_mxfp8_norm_ce.py` additionally measures captured resident-input
+components at M=16384/H=768/V=32000, BF16 activations/head and FP32 norm factor.
+It matches the model's BF16 autocast around RMSNorm and disables autocast for
+CE. Medians from nine alternating rounds of 200 replays are:
+
+| Component | Separate (ms) | Fused (ms) |
+|---|---:|---:|
+| Norm + dual quantization, forward | 0.13334 | 0.03065 |
+| Norm + dual quantization + norm backward | 0.32831 | 0.13066 |
+| Norm + CE + backward | 11.67655 | 11.45752 |
+
+The shorter five-round CE-inclusive measurement went the opposite direction
+(11.43009 → 11.64483 ms), so the CE-inclusive difference is not a stable
+isolated speedup claim. The direct norm/quantization saving is clear, while
+the large CE workload and unlocked-clock variation obscure its small effect
+on the total. Preliminary `component*.json` runs without autocast are retained
+for audit but are **not** representative of the model's norm execution;
+`component_amp*.json` are the corrected measurements.
+
+Logs, exact commands,
+resource inspection and result JSON are under ignored `dism_v3/build/norm_ce/`.
+No checkpoint was loaded/modified and no pretraining job was started.

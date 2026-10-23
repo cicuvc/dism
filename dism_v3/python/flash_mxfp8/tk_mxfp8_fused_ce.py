@@ -32,11 +32,32 @@ from .tk_mxfp8_wgrad import Library as WgradLibrary
 from .tk_silu_bwd import SiluBwdQuantizeLibrary
 
 
+def _validate_quantized_input(x, chunks, chunk_size):
+    """Check packed chunk layouts without host reads or GPU synchronization."""
+    m, h = x.shape
+    if not isinstance(chunks, (tuple, list)) or len(chunks) != (m+chunk_size-1)//chunk_size:
+        raise ValueError("quantized_input must contain one four-tensor tuple per CE chunk")
+    for start, tensors in zip(range(0, m, chunk_size), chunks):
+        n = min(chunk_size, m-start)
+        mp, mp16 = (n+127)//128*128, (n+15)//16*16
+        shapes = ((n,h), ((h+127)//128,mp16), (mp,h), (mp//128,(h+15)//16*16))
+        dtypes = (torch.float8_e4m3fn, torch.int32, torch.float8_e4m3fn, torch.int32)
+        if not isinstance(tensors, (tuple, list)) or len(tensors) != 4:
+            raise ValueError("expected row/scales/column/scales for each CE chunk")
+        for tensor, shape, dtype in zip(tensors, shapes, dtypes):
+            if (not isinstance(tensor, torch.Tensor) or tensor.shape != shape or tensor.dtype != dtype
+                    or tensor.device != x.device or not tensor.is_contiguous() or tensor.data_ptr()%16
+                    or tensor.requires_grad):
+                raise ValueError("invalid prequantized activation shape/dtype/device/alignment")
+
+
 class _ChunkState:
-    def __init__(self, x, w, ws, module):
-        self.xq = module._quant.plan_direct(x)
+    def __init__(self, x, w, ws, module, quantized=None):
+        self.xq = module._quant.plan_direct(x) if quantized is None else None
+        row, row_scale, column, column_scale = (quantized if quantized is not None else
+            (self.xq.row_fp8, self.xq.row_scale, self.xq.column_fp8, self.xq.column_scale))
         self.gemm = module._gemm.plan(
-            self.xq.row_fp8, w, self.xq.row_scale, ws,
+            row, w, row_scale, ws,
             config=module.forward_config, raster_group=module.raster_group,
             softcap=module.softcap,
         )
@@ -50,17 +71,25 @@ class _ChunkState:
             config=module.dx_config, raster_group=module.raster_group,
         )
         self.dw = module._wgrad.plan(
-            self.ce.column_fp8, self.xq.column_fp8,
-            self.ce.column_scale, self.xq.column_scale,
+            self.ce.column_fp8, column,
+            self.ce.column_scale, column_scale,
             config=module.dw_config, raster_group=module.raster_group,
         )
 
-    def __call__(self, x, target, w, ws, ignore_index, row_weight=None):
-        self.xq.rebind(x)
-        self.gemm.rebind(self.xq.row_fp8, w, self.xq.row_scale, ws)
+    def __call__(self, x, target, w, ws, ignore_index, row_weight=None, quantized=None):
+        if quantized is None:
+            self.xq.rebind(x)
+            row, row_scale, column, column_scale = (self.xq.row_fp8, self.xq.row_scale,
+                                                   self.xq.column_fp8, self.xq.column_scale)
+        else:
+            row, row_scale, column, column_scale = quantized
+        self.gemm.rebind(row, w, row_scale, ws)
         self.dx.rebind(self.ce.row_fp8, w, self.ce.row_scale, ws)
+        if quantized is not None:
+            self.dw.rebind(self.ce.column_fp8, column, self.ce.column_scale, column_scale)
         try:
-            self.xq()
+            if self.xq is not None:
+                self.xq()
             logits, partial = self.gemm()
             merge_lse(logits, partial, target, lse=self.lse, loss=self.loss,
                       ignore_index=ignore_index, row_weight=row_weight, softcap=self.gemm.softcap)
@@ -70,14 +99,16 @@ class _ChunkState:
         finally:
             # Cached workspaces must not retain a previous activation graph or W.
             # The descriptors are rebound before their next launch.
-            self.xq.x = None
+            if self.xq is not None:
+                self.xq.x = None
             self.gemm.refs = ()
             self.dx.refs = []
+            self.dw.refs = []
 
 
 class _FusedCEFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, target, weight, wq, ws, module, cu_seqlens):
+    def forward(ctx, x, target, weight, wq, ws, module, cu_seqlens, quantized_input):
         dx = torch.empty_like(x)
         dw = torch.zeros_like(weight, dtype=torch.float32)
         losses = torch.empty(x.shape[0], device=x.device, dtype=torch.float32)
@@ -90,9 +121,10 @@ class _FusedCEFunction(torch.autograd.Function):
             for start in range(0, x.shape[0], module.chunk_size):
                 end = min(start + module.chunk_size, x.shape[0])
                 c_x = x[start:end]
-                state = module._state(c_x, wq, ws)
+                quantized = None if quantized_input is None else quantized_input[start // module.chunk_size]
+                state = module._state(c_x, wq, ws, quantized)
                 c_weight = None if row_weight is None else row_weight[start:end]
-                c_loss, c_dx, c_dw = state(c_x, target[start:end], wq, ws, module.ignore_index, c_weight)
+                c_loss, c_dx, c_dw = state(c_x, target[start:end], wq, ws, module.ignore_index, c_weight, quantized)
                 losses[start:end].copy_(c_loss)
                 dx[start:end].copy_(c_dx)
                 dw.add_(c_dw)
@@ -119,7 +151,7 @@ class _FusedCEFunction(torch.autograd.Function):
         # No host read of grad_output, and no mutation of saved tensors: CUDA
         # Graph capture and repeated backward with different scalars both work.
         scale = grad_output if inv is None else grad_output * inv
-        return dx * scale, None, dw * scale, None, None, None, None
+        return dx * scale, None, dw * scale, None, None, None, None, None
 
 
 class MXFP8FusedLinearCrossEntropy(nn.Module):
@@ -146,6 +178,12 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
     tanh.approx.f32. The chain-rule factor (1-tanh(l/s)**2) is applied before
     BF16 rounding and dual MXFP8 gradient quantization. No extra buffer is used.
 
+    quantized_input optionally supplies one (row, row_scale, column, column_scale)
+    tuple per chunk, as returned by RMSNormMXFP8. These detached buffers MUST
+    represent x and remain unmodified until forward has finished on its stream.
+    Gradients still flow through the BF16 x using the same STE as direct
+    quantization. No activation quantization kernel is launched on this path.
+
     Warm up once for each shape before CUDA Graph capture. This object owns
     mutable scratch buffers and must not be called concurrently on two streams.
     Only first-order differentiation is supported, as in the existing linear.
@@ -170,14 +208,14 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
         self._states = {}
         self._quant = self._gemm = self._dgrad = self._wgrad = None
 
-    def _state(self, x, w, ws):
+    def _state(self, x, w, ws, quantized=None):
         if self._gemm is None:
             self._quant, self._gemm = SiluBwdQuantizeLibrary(), LSELibrary()
             self._dgrad, self._wgrad = DgradLibrary(), WgradLibrary()
         key = (x.device, tuple(x.shape), tuple(w.shape), self.forward_config,
-               self.dx_config, self.dw_config, self.raster_group, self.softcap)
+               self.dx_config, self.dw_config, self.raster_group, self.softcap, quantized is not None)
         if key not in self._states:
-            self._states[key] = _ChunkState(x, w, ws, self)
+            self._states[key] = _ChunkState(x, w, ws, self, quantized)
         return self._states[key]
 
     def clear_workspace(self):
@@ -185,7 +223,8 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
         self._states.clear()
 
     @torch.compiler.disable
-    def forward(self, x, target, weight, *, quantized_weight=None, cu_seqlens=None):
+    def forward(self, x, target, weight, *, quantized_weight=None, cu_seqlens=None,
+                quantized_input=None):
         if (x.ndim != 2 or x.dtype != torch.bfloat16 or not x.is_cuda or
                 not x.is_contiguous() or min(x.shape) <= 0):
             raise ValueError("Expected nonempty contiguous CUDA BF16 X[M,H]")
@@ -200,6 +239,8 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
         _validate_target(target, x.shape[0], x.device)
         if self.balance in ("document", "document_sum") or cu_seqlens is not None:
             validate_cu_seqlens(cu_seqlens, x.device)
+        if quantized_input is not None:
+            _validate_quantized_input(x, quantized_input, self.chunk_size)
         if quantized_weight is None:
             with torch.no_grad():
                 wq, ws = quantize_weight(weight.detach().float())
@@ -210,16 +251,17 @@ class MXFP8FusedLinearCrossEntropy(nn.Module):
                     ws.dtype != torch.uint8 or wq.device != x.device or ws.device != x.device or
                     not wq.is_contiguous() or not ws.is_contiguous()):
                 raise ValueError("Invalid quantized weight cache")
-        return _FusedCEFunction.apply(x, target, weight, wq, ws, self, cu_seqlens)
+        return _FusedCEFunction.apply(x, target, weight, wq, ws, self, cu_seqlens, quantized_input)
 
 
 def fused_linear_cross_entropy_loss(x, target, weight, *, chunk_size=1024,
                                     forward_config=8, dx_config=12, dw_config=12,
                                     raster_group=13, quantized_weight=None, ignore_index=-100,
-                                    balance=None, cu_seqlens=None, softcap=None):
+                                    balance=None, cu_seqlens=None, softcap=None, quantized_input=None):
     """One-shot scalar CE with balance/softcap; use the module to reuse plans."""
     return MXFP8FusedLinearCrossEntropy(
         chunk_size=chunk_size, forward_config=forward_config, dx_config=dx_config,
         dw_config=dw_config, raster_group=raster_group, ignore_index=ignore_index, balance=balance,
         softcap=softcap,
-    )(x, target, weight, quantized_weight=quantized_weight, cu_seqlens=cu_seqlens)
+    )(x, target, weight, quantized_weight=quantized_weight, cu_seqlens=cu_seqlens,
+      quantized_input=quantized_input)

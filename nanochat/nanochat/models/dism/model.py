@@ -244,10 +244,14 @@ class DismLM(nn.Module):
             config.n_embd, config.vocab_size, bias=False, dtype=core_dtype
         )
         self.mxfp8_ce = None
+        self.mxfp8_ce_norm = None
         if config.mxfp8_ce:
-            from flash_mxfp8 import MXFP8FusedLinearCrossEntropy
+            from flash_mxfp8 import MXFP8FusedLinearCrossEntropy, RMSNormMXFP8
             self.mxfp8_ce = MXFP8FusedLinearCrossEntropy(
                 ignore_index=-1, balance="document_sum", softcap=config.softcap,
+            )
+            self.mxfp8_ce_norm = RMSNormMXFP8(
+                eps=self.norm.eps, chunk_size=self.mxfp8_ce.chunk_size,
             )
         self.register_buffer("training_step", torch.zeros((), dtype=torch.int64))
         self.register_buffer("rng_counter", torch.zeros((), dtype=torch.int64))
@@ -553,7 +557,16 @@ class DismLM(nn.Module):
                     gdn_chunk_indices=gdn_chunk_indices,
                 )
 
-            x = self.norm(x).to(torch.bfloat16)
+            quantized_input = None
+            if (self.mxfp8_ce is not None and self.mxfp8_ce_norm is not None
+                    and torch.is_grad_enabled() and targets is not None
+                    and loss_reduction in ("mean", "document_sum")
+                    and x.dtype == torch.bfloat16):
+                x, quantized_input = self.mxfp8_ce_norm(
+                    x.reshape(-1, x.shape[-1]).contiguous(), self.norm.weight,
+                    eps=self.norm.eps, chunk_size=self.mxfp8_ce.chunk_size)
+            else:
+                x = self.norm(x).to(torch.bfloat16)
             if targets is not None and loss_reduction in ("mean", "document_sum"):
                 with torch.autocast("cuda", enabled=False):
                     if self.mxfp8_ce is not None and torch.is_grad_enabled():
@@ -561,6 +574,7 @@ class DismLM(nn.Module):
                             x.reshape(-1, x.shape[-1]).contiguous(),
                             targets.reshape(-1).contiguous(), self.lm_head.weight,
                             cu_seqlens=cu_seqlens.to(device=x.device).contiguous(),
+                            quantized_input=quantized_input,
                         )
                         if loss_reduction == "document_sum":
                             return numerator, count

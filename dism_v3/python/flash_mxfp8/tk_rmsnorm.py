@@ -6,7 +6,9 @@ For ``y = x * rsqrt(mean(x^2) + eps) * factor``, this plan produces:
 * column-wise ``y[MP,K]`` E4M3 and packed 32x1 scales for wgrad;
 * FP32 ``inverse_rms[M]`` for the eventual RMSNorm backward.
 
-Normalized BF16 activations are not materialized in global memory.
+By default normalized BF16 activations are not materialized in global memory.
+The optional write_bf16 output preserves a differentiable BF16 carrier, while
+chunk_size packs row scales per CE chunk without extra repacking launches.
 """
 
 import torch
@@ -95,6 +97,7 @@ def _rmsnorm_dual_quant(
     row_scale,
     column_fp8,
     column_scale,
+    y_bf16,
     M,
     K,
     MP,
@@ -104,6 +107,8 @@ def _rmsnorm_dual_quant(
     factor_stride,
     row_stride,
     column_stride,
+    WRITE_BF16: tl.constexpr,
+    CHUNK_SIZE: tl.constexpr,
     BLOCK_K: tl.constexpr,
 ):
     row_block = tl.program_id(0)
@@ -133,6 +138,9 @@ def _rmsnorm_dual_quant(
         * scale_factor[None, :]
     ).to(tl.bfloat16)
 
+    if WRITE_BF16:
+        tl.store(y_bf16 + rows[:, None] * K + cols[None, :], normalized,
+                 mask=row_mask[:, None] & col_mask[None, :])
     row_q, row_s = _online_scale(normalized)
     tl.store(
         row_fp8 + rows[:, None] * row_stride + cols[None, :],
@@ -145,11 +153,15 @@ def _rmsnorm_dual_quant(
         << (8 * tl.arange(0, 4))[None, :],
         axis=1,
     )
-    tl.store(
-        row_scale + col_block * MP16 + rows,
-        row_word,
-        mask=rows < MP16,
-    )
+    if CHUNK_SIZE:
+        # Each CE chunk gets contiguous [ceil(K/128), round_up(m,16)]
+        # scales. Direct slices of the usual full-M layout are not contiguous.
+        chunk_start = (rows // CHUNK_SIZE) * CHUNK_SIZE
+        chunk_mp16 = tl.minimum(CHUNK_SIZE, MP16 - chunk_start)
+        scale_index = chunk_start * tl.cdiv(K, 128) + col_block * chunk_mp16 + rows - chunk_start
+    else:
+        scale_index = col_block * MP16 + rows
+    tl.store(row_scale + scale_index, row_word, mask=rows < MP16)
 
     column_q_t, column_s = _online_scale(tl.trans(normalized))
     tl.store(
@@ -168,9 +180,14 @@ def _rmsnorm_dual_quant(
 
 
 class RMSNormDualQuantPlan:
-    """Reusable fixed-shape prenorm and two-direction quantization plan."""
+    """Reusable fixed-shape norm and two-direction quantization plan.
 
-    def __init__(self, x, factor, *, eps=1e-6):
+    With chunk_size>0, row_scale storage is chunk-major (its 2D shape is only
+    the allocation shape). RMSNormMXFP8 exposes the corresponding contiguous
+    per-chunk views. Existing chunk_size=0 callers keep the original layout.
+    """
+
+    def __init__(self, x, factor, *, eps=1e-6, write_bf16=False, chunk_size=0):
         if x.ndim != 2 or x.dtype != torch.bfloat16 or not x.is_cuda:
             raise ValueError("Expected CUDA BF16 X[M,K]")
         if factor.ndim != 1 or factor.shape[0] != x.shape[1]:
@@ -179,6 +196,12 @@ class RMSNormDualQuantPlan:
             raise ValueError("Factor must be FP32 or BF16")
         if not factor.is_cuda or factor.device != x.device:
             raise ValueError("Expected factor on the input device")
+        if not x.is_contiguous() or not factor.is_contiguous() or min(x.shape) <= 0:
+            raise ValueError("Expected nonempty contiguous X and factor")
+        if type(chunk_size) is not int or chunk_size < 0 or chunk_size % 128:
+            raise ValueError("chunk_size must be zero or a positive multiple of 128")
+        self.chunk_size = chunk_size
+        self.y_bf16 = torch.empty_like(x) if write_bf16 else None
         m, k = x.shape
         if k % 32:
             raise ValueError("K must be a multiple of 32")
@@ -239,6 +262,7 @@ class RMSNormDualQuantPlan:
             self.row_scale,
             self.column_fp8,
             self.column_scale.view(torch.uint8),
+            self.y_bf16 if self.y_bf16 is not None else self.x,
             self.m,
             self.k,
             self.mp,
@@ -248,6 +272,8 @@ class RMSNormDualQuantPlan:
             self.factor.stride(0),
             self.k,
             self.k,
+            WRITE_BF16=self.y_bf16 is not None,
+            CHUNK_SIZE=self.chunk_size,
             BLOCK_K=128,
             num_warps=4,
         )

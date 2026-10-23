@@ -145,3 +145,29 @@ def test_graph_rejects_changed_invalid_boundaries(monkeypatch):
         with pytest.raises(RuntimeError):
             native.update_graph_layout(table,torch.tensor(bounds,dtype=torch.int32))
         torch.testing.assert_close(table,before)
+
+
+def test_final_norm_ce_matches_separate_norm_and_checkpoint_schema(monkeypatch):
+    monkeypatch.setenv('DISM_HARD_PLANNER', '0')
+    fused, separate = model_pair(True, True, mxfp8_ce=True)
+    separate.mxfp8_ce_norm = None
+    assert set(fused.state_dict()) == set(separate.state_dict())
+    assert [n for n,_ in fused.named_parameters()] == [n for n,_ in separate.named_parameters()]
+    assert fused.model_spec.fingerprint() == separate.model_spec.fingerprint()
+    ids = torch.randint(128,(2,512),device='cuda')
+    targets = torch.randint(128,ids.shape,device='cuda'); targets[:,::7]=-1
+    # Use nonempty segments supported by eager GDN. Empty-document CE weights
+    # and graph boundary mutation are covered independently.
+    bounds = torch.tensor([0,256,512,768,1024],device='cuda',dtype=torch.int32)
+    fused.set_training_step(5); separate.set_training_step(5)
+    a,ac = fused(ids,targets,cu_seqlens=bounds,loss_reduction='document_sum')
+    b,bc = separate(ids,targets,cu_seqlens=bounds,loss_reduction='document_sum')
+    a.backward();b.backward()
+    torch.testing.assert_close(a,b,atol=.005,rtol=.02)
+    torch.testing.assert_close(ac,bc,rtol=0,atol=0)
+    for (name,p),(_,q) in zip(fused.named_parameters(),separate.named_parameters()):
+        torch.testing.assert_close(p.grad,q.grad,atol=.001,rtol=.03,msg=name)
+    torch.testing.assert_close(fused.rng_counter,separate.rng_counter,rtol=0,atol=0)
+    with torch.no_grad():
+        # Evaluation/logits retain the ordinary final norm and full-precision head.
+        torch.testing.assert_close(fused(ids,cu_seqlens=bounds),separate(ids,cu_seqlens=bounds),rtol=0,atol=0)
