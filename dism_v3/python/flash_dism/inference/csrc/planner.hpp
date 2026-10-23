@@ -48,6 +48,10 @@ class Planner {
     std::vector<double> edge_weight, edge_decay;
     int cached_state = -1, cached_match = -1;
     std::vector<Task> cached_snapshot_tasks;
+    // The snapshot SAM is append-only. Retain transitions/node allocations and
+    // extend only new keys at rebuild; ordinary steps still see frozen nodes.
+    int sam_size = 0, sam_last = 0, last_extended_keys = 0;
+    std::vector<int> rebuild_stack, rebuild_cost, rebuild_height;
 
     Planner(int r, int b, int k, int t, double tau_)
         : interval(b), sample_interval(k), threshold(t), rank(r), tau(tau_) {
@@ -67,6 +71,16 @@ class Planner {
         keys = s;
         queries = q;
         resets = reset;
+        reset_sam();
+        restore_band();
+    }
+
+    void reset_sam() {
+        nodes.clear(); nodes.push_back(Node{}); sam_size=0; sam_last=0;
+    }
+
+    void restore_band() {
+        const auto &s=keys; const auto &q=queries; const auto &reset=resets;
         int n = int(s.size()), start = std::max(0, n - interval);
         band.assign(n - start, 0);
         for (int p = start; p < n; ++p) {
@@ -139,17 +153,20 @@ class Planner {
     void rebuild() {
         cached_state = cached_match = -1;
         cached_snapshot_tasks.clear();
-        nodes.clear();
-        nodes.push_back(Node{});
-        int last = 0;
-        for (int p = 0; p < int(keys.size()); ++p)
-            extend(keys[p], p, last);
+        if (nodes.empty()) reset_sam();
+        if (int(keys.size())<sam_size) throw std::logic_error("SAM history cannot shrink without initialize");
+        last_extended_keys=int(keys.size())-sam_size;
+        for (int p = sam_size; p < int(keys.size()); ++p)
+            extend(keys[p], p, sam_last);
+        sam_size=int(keys.size());
         snapshot_size = int(keys.size());
-        children.assign(nodes.size(), {});
+        children.resize(nodes.size());
+        for (auto &list:children) list.clear();
         for (int n = 1; n < int(nodes.size()); ++n)
             children[nodes[n].link].push_back(n);
         order.clear();
-        std::vector<int> stack{0};
+        auto &stack=rebuild_stack;
+        stack.clear(); stack.push_back(0);
         while (!stack.empty()) {
             int n = stack.back();
             stack.pop_back();
@@ -161,7 +178,8 @@ class Planner {
         samples.clear();
         mat_index.assign(nodes.size(), -1);
         sample_index.assign(nodes.size(), -1);
-        std::vector<int> cost(nodes.size(), 1), height(nodes.size(), 0);
+        auto &cost=rebuild_cost; auto &height=rebuild_height;
+        cost.assign(nodes.size(),1); height.assign(nodes.size(),0);
         for (auto it = order.rbegin(); it != order.rend(); ++it) {
             int n = *it, c = 1, h = 0;
             for (int child : children[n]) {

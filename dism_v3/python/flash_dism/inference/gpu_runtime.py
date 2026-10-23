@@ -4,8 +4,11 @@ step() launches exactly one kernel, does not synchronize/copy to host, and retur
 a REUSED FP32 output buffer. State/position live on device, so graph replay advances
 correctly. A snapshot supports at most rebuild_interval new tokens. Call rebuild()
 outside a graph before that boundary; check_status() synchronizes and checks errors.
-Neither method is automatically run by step(). Existing NativeDecodeCache unchanged.
-Rebuild changes captured pointers: discard and recapture graphs after rebuilding.
+Neither method is automatically run by step(). Rebuild imports only new labels
+and the current GPU band, extends the retained CPU SAM, and packs metadata in
+parallel. Prime still requires complete history. GPU history storage is retained,
+but topology/summaries and captured dimensions can change: discard and recapture
+graphs after rebuilding.
 """
 import torch
 from .runtime import NativeDecodeCache
@@ -38,5 +41,5 @@ class GpuPlannerCache:
 
     def rebuild(self):
         position = self.check_status()
-        self.cpu.native.refresh_gpu(self.snapshot[7], position)
+        self.cpu.native.refresh_gpu(self.snapshot[7], position, self.snapshot[6])
         self._export(position)

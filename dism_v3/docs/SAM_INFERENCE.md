@@ -321,3 +321,281 @@ all raw samples are under ignored `dism_v3/build/prefill_native/`:
 preliminary measurements.
 No checkpoint, training job, default model dispatch or decode implementation
 was changed.
+
+## Decode analysis: ordinary steps versus rebuild (2026-10-23)
+
+Prefill optimization is committed as `51c7e45`. This section records the decode
+baseline before the CPU rebuild optimization described below. `HardDismDecoder` still defaults to
+`planner_backend='cpu'`; the measurements explicitly select `'gpu'`.
+The low-level GPU ordinary step launches one fused kernel with no host copy
+or synchronization. The high-level adapter additionally creates/packs labels
+and stacks output, and manages the Python position/rebuild schedule. Only the
+low-level device-state path is suitable for direct graph replay; capture does
+not repeatedly execute the adapter's Python position updates.
+
+`tools/bench_inference_decode.py` measures BF16 R=32/DV=64, H=12, tau=.5,
+independent uniform-512 labels or all-zero repeated labels. This is a resident
+operator probe, not a model-generation benchmark. At N=8192/random/I=128,
+ordinary-step wall times are approximately 46.01 us through `append`, 16.06 us
+through raw `GpuPlannerCache.step`, and 17.15 us in a captured whole-window
+probe (CUDA-event time 17.00 us). The extra ~30 us in the adapter includes both
+CPU dispatch and additional GPU packing/copy kernels, not just CPU work.
+
+The window graph contains precomputed inputs for I distinct tokens; its device
+timing removes host submission gaps but cannot represent autoregressive model
+throughput. Graph capture time is excluded and recorded separately, and the
+graph is discarded/recreated after every rebuild. Full-model graph recapture,
+projections, GDN/FFN, vocabulary selection and output logits are not measured.
+
+### Rebuild interval sweep
+
+The main comparison uses `--fixed-context`: each of three samples starts from
+the same 8192-token prompt in a newly primed cache (prime is outside timing),
+executes I new tokens and rebuilds at N+I. Capacity is the same N+4096 across
+I=128..4096. The table reports medians of paired ordinary-window plus rebuild
+wall time divided by I, in **us per batched decode step** (B tokens), not us
+per token aggregated across the batch. Ordinary windows use the graph probe;
+capture costs are excluded. CPU/GPU clocks and affinity were not fixed.
+
+| Interval | B=1 random | B=1 repeat | B=8 random |
+|---:|---:|---:|---:|
+| 128 | 371.25 | 443.47 | 3001.15 |
+| 512 | 116.84 | 171.99 | 808.63 |
+| 1024 | 83.43 | 141.68 | 447.59 |
+| 2048 | 78.47 | 152.16 | 282.81 |
+| 4096 | 111.91 | 212.73 | 236.28 |
+
+For B=1/random, moving from 128 to 1024 changes ordinary device time from
+16.68 to 34.21 us and rebuild time from 45.36 to 50.36 ms. At 2048/4096,
+ordinary device time rises to 51.10/95.53 us; the amortization benefit eventually
+loses to the growing frontier work. For B=1/repeat, rebuild itself rises from
+51.96 ms at 128 to 86.95/131.45/235.42 ms at 1024/2048/4096, in addition to
+the ordinary-step increase. A larger interval is clearly useful, but it is not
+monotonically better. At B=8, CPU rebuild scales poorly across 96 heads, so a
+larger interval remains beneficial through 4096 in this probe. The best tested
+interval is workload-specific, not an established global optimum.
+
+### Where rebuild time goes
+
+Before the CPU rebuild optimization, `GpuPlannerCache.rebuild` performed:
+
+1. Device-state D2H/status checks.
+2. `refresh_gpu`: copy **all** label history back, clear/refill CPU histories,
+   reconstruct the recent band through `Planner.initialize`, rebuild SAM and
+   scalar topology sequentially for every head, then rebuild GPU summaries.
+3. `gpu_snapshot`: construct fresh padded CPU topology/transition arrays, sort
+   each node's transitions, zero/fill a capacity-sized history tensor, and copy
+   multiple fields to the GPU.
+4. Allocate new GPU planner workspaces and reset task marks.
+
+One same-position breakdown at ~8.5K/random/B=1/I=128 was .10 ms status,
+30.04 ms refresh, 13.33 ms snapshot export/upload and .05 ms workspace setup.
+These are separate samples, not a decomposition of the table's median. The
+random case has **zero summary matrices**. A separate profiler run observes
+only ~.53 ms of total device copy/fill activity during rebuild (two D2H and
+30 H2D operations). CPU construction/export dominates; PCIe payload time does
+not explain the ~45 ms unprofiled rebuild. Profiling changes wall time, so its
+wall duration is not substituted into the timing table.
+
+For 8K/repeat/B=1/I=128, the profiler counts **13,824 summary kernels**:
+768 each of Euler scan, scan totals, subtree init and sample save, plus 10,752
+ancestor steps. R*DV=2048 with `rebuild_chunk=32` means 64 channel tiles per
+head; each tile invokes scan/init plus 14 ancestor levels and sample save.
+Thus summary reconstruction has substantial launch and GPU work even though
+ordinary decode is already fused. The profile measures ~26.8 ms summed
+summary-kernel time; this is diagnostic under profiler overhead, not an exact
+unprofiled time attribution.
+
+The baseline CPU rebuild uses `dism_decode::Planner` with one `unordered_map` per
+SAM node and nested child vectors. It does **not** use the optimized flat
+`PrefillMatcher`/CSR workspace used by prefill/training. `initialize` also walks
+back matching diagonals for every entry in the recent band, costing O(N*I)
+on all-repeat histories. Increasing I exposes this CPU cost. Ordinary GPU
+steps update the I-entry band and iterate the new-token frontier; random
+inputs still pay the loop cost to skip zero-weight candidates.
+
+### Optimization priorities
+
+1. Use 1024 as a candidate for further correctness/model testing; test adaptive
+   or batch-dependent choices rather than changing the default solely from
+   synthetic measurements. Re-run the sweep after rebuild optimization because
+   cheaper rebuild shifts the optimal interval downward.
+2. Parallelize CPU rebuild per head with a bounded pool, reuse flat SAM/CSR
+   storage and pack snapshot fields directly into pinned storage. Separate CPU
+   jobs from owner-stream CUDA launches. Skip topology/coefficient upload when
+   a head has no summary matrices.
+3. Keep GPU history across snapshots and transfer only new labels to retained
+   CPU histories; recover the already-computed band from GPU state rather than
+   re-running long diagonal searches. Preserve exact reset and complete-history
+   semantics when implementing this.
+4. Batch/fuse summary reconstruction across heads/channel tiles to reduce the
+   13K-launch repeated-label case. Increasing channel tile width alone trades
+   launches for scratch/occupancy and needs measurement and numerical checks.
+5. Only then tune the ordinary-step frontier traversal/compaction and adapter
+   packing. Stable graph storage would also require stable pitches or dynamic
+   device parameters, not just reusing pointers: snapshot dimensions currently
+   enter captured kernel arguments by value.
+
+The 15 existing decode/graph/horizon regression cases pass. Large-interval
+performance cases additionally check finite output, exact device position and
+error flags after each window, but **do not** establish long-context numerical
+equivalence; an interval default change still needs numerical regression.
+No kernel math, launch default, cache API or planner default was changed in this
+baseline analysis.
+
+Artifacts under ignored `dism_v3/build/decode_analysis/`: `ordinary.json` for
+adapter/raw/graph comparisons; `fixed.json`, `fixed_batch.json`,
+`large_fixed_capacity.json`, `large_batch_fixed_capacity.json` for the table;
+`random_rebuild_profile.json` and `repeat_rebuild_profile.json` plus Chrome
+traces for kernel/copy counts; `tests.log` for regressions. `intervals.json`,
+`batch.json` use growing histories and `large*.json` without `fixed_capacity`
+use different reserved capacities, so they are exploratory, not table inputs.
+Every benchmark JSON records command, commit and source hashes.
+
+```bash
+python dism_v3/tools/bench_inference_decode.py --fixed-context \
+  --prompts 8192 --modes graph --intervals 128 512 1024 2048 4096 \
+  --output dism_v3/build/decode_analysis/fresh_interval_sweep.json
+```
+
+## Decode CPU rebuild parallelism and reuse (2026-10-23)
+
+The native cache now uses a persistent per-cache worker pool for per-head SAM
+rebuild, scalar metadata preparation and snapshot packing. `rebuild_workers=8`
+is the default for this new option; valid values are 1..64, capped at BH. The
+pool implementation is shared with prefill/training, but pool instances are
+owned by individual decode caches. All Torch operations and CUDA launches stay
+on the calling thread and owner stream; callers must serialize operations on a
+cache. Existing planner selection, rebuild interval (128), summary chunk size,
+kernel math and launch configurations are unchanged.
+
+The implementation removes repeated work at the explicit rebuild boundary:
+
+- Retain SAM nodes/transitions and extend only new keys. Reuse child vectors,
+  traversal scratch and per-head export workspaces. Scalar topology, query state
+  and summaries are still recomputed over the whole snapshot, so rebuild is not
+  O(new tokens) overall. The SAM still uses per-node `unordered_map`; this is not
+  a conversion to the flat prefill matcher.
+- Keep the device history allocation across snapshots. `refresh_gpu(history,
+  position, band)` imports only new labels and the live parity of the GPU band,
+  avoiding full-history D2H and the O(N*I) repeated-label diagonal reconstruction.
+  The existing two-argument call still replaces complete history and reconstructs
+  the band. Prime still requires complete history.
+- Pack summary metadata and snapshot fields directly into reusable pinned
+  arenas, with one H2D upload for each nonempty packed blob. Skip summary metadata
+  entirely for heads without summary matrices. A CUDA event protects each arena
+  from CPU overwrite until its previous upload completes.
+- Keep fresh GPU topology/state allocations for each exported snapshot. Retained
+  history does **not** make old graphs reusable: topology, summary pointers and
+  dimensions can change, so graphs must still be discarded and recaptured.
+
+Pinned arenas retain their high-water allocation until cache destruction, grow
+by at least 1.5x, and round to 16 KiB. At N=8192/I=1024, retained arena capacity
+was 10.58 MiB for B=1/random, 29.64 MiB for B=1/repeat and 84.61 MiB for B=8/random.
+These figures exclude CPU SAM/workspace memory and GPU storage. Multiple layer
+caches each retain their own pool and arenas; select worker counts with the
+whole process in mind.
+
+### Paired performance results
+
+RTX 5090, BF16 R=32/DV=64, H=12, tau=.5, fixed 8192-token prompt, capacity 12288,
+three independent freshly primed samples per case, GPU planner explicitly
+selected. The old native binary was saved from this worktree at `51c7e45` before
+rebuilding, and loaded in a separate process through `--legacy-extension`.
+Baseline and optimized jobs ran serially. CPU/GPU clocks and affinity were not
+fixed. Numbers are medians; ordinary-window timing uses the synthetic graph
+probe described above. Prime and capture are outside timing.
+
+| Case | Interval | Old rebuild ms | New rebuild ms (8 workers) | Old amortized us/step | New amortized us/step |
+|---|---:|---:|---:|---:|---:|
+| B=1 random | 128 | 45.197 | 9.623 | 370.16 | 91.67 |
+| B=1 random | 512 | 48.228 | 10.188 | 116.58 | 43.10 |
+| B=1 random | 1024 | 50.863 | 10.773 | 80.53 | 41.84 |
+| B=1 repeat | 128 | 51.591 | 37.348 | 437.16 | 325.90 |
+| B=1 repeat | 512 | 66.464 | 40.227 | 171.81 | 120.74 |
+| B=1 repeat | 1024 | 87.279 | 40.291 | 141.82 | 95.86 |
+| B=8 random | 128 | 380.324 | 64.126 | 2994.30 | 522.13 |
+| B=8 random | 512 | 398.539 | 67.204 | 805.48 | 158.40 |
+| B=8 random | 1024 | 418.990 | 73.128 | 447.87 | 108.17 |
+
+A step means one **batched decode step**, producing B tokens, not one token
+aggregated across the batch. These are operator measurements, not model token/s.
+At I=1024, random rebuild improves 4.72x for B=1 and 5.73x for B=8; the paired
+amortized step improves 1.92x and 4.14x. Ordinary device time remains comparable
+(30.84→31.29 us for B=1/random, 36.57→36.66 us for B=8/random), as expected with
+unchanged ordinary kernels.
+
+The worker sweep separates reuse benefits from parallel speedup at I=1024:
+
+| Case | Old serial rebuild ms | New 1 worker | New 8 workers | New 16 requested | New 24 requested |
+|---|---:|---:|---:|---:|---:|
+| B=1 random | 50.863 | 39.013 | 10.773 | 10.153 | 10.784 |
+| B=8 random | 418.990 | 278.684 | 73.128 | 57.745 | 56.488 |
+
+For B=1, requests for 16/24 workers both cap at 12 heads. B=8 still gains from
+8→16 workers, while 16→24 gives little improvement in this run. The default
+remains 8 rather than using all cores in every layer cache. The recorded stats
+confirm actual incremental work: at B=1/I=1024, `last_refresh_tokens=1024`,
+`last_sam_extended_keys=12288` and `last_refresh_band_reused=1`; B=8 extends 98304
+keys across 96 heads. GPU history pointers remain stable across rebuilds.
+
+For repeated labels, CPU work is much cheaper but unchanged GPU summary
+reconstruction remains substantial (the prior profile counted 13,824 kernels
+at 8K/H12/I128). Its remaining cost calls for a separate kernel optimization;
+this change does not fuse those launches. With cheaper CPU rebuild, B=1/random
+I512 and I1024 are now close (43.10 vs 41.84 us/step), whereas B=8 still benefits
+strongly through 1024. Re-evaluate intervals with real model workloads before
+changing the default; this sweep does not establish a global optimum.
+
+`rebuild_breakdown_ms` in the JSON is an additional **same-position** refresh
+and export after the timed window. In the optimized version it extends zero
+SAM keys and can reuse already-sized buffers, so it must not be treated as a
+decomposition of the real-window rebuild table. `window_cache_stats` is saved
+before that diagnostic refresh; `cache_stats` is saved after it.
+
+### Validation and reproduction
+
+- 359 existing SAM inference, native prefill and native/compact training planner
+  regression cases passed. The 10 new `tests/test_decode_rebuild.py` cases passed,
+  covering incremental band/history import, intervals 11/128/512/1024, resets,
+  repeated/periodic labels, workers 1/4, queued asynchronous upload reuse, old
+  snapshot ownership, two-argument refresh and argument validation.
+- `tools/check_decode_rebuild.py` compared 9 saved old-binary cases with 1/4/8
+  workers: all 27 combinations were bitwise equal for outputs, summaries,
+  topology, transitions, state, band, counts, tau and live history. Cases include
+  intervals up to 1024, prompt lengths up to 2049, two full rebuild windows,
+  tau 0/.35/1.5 and single-step graph replay with changing inputs. This checks
+  equivalence to the previous implementation, not a long-context FP64 oracle.
+  The small CPU-label case also retains the independent FP64 oracle check at
+  existing tolerances.
+- The standalone native test (`tests/native/test_decode_rebuild.cpp`) passed
+  ASan/UBSan with leak detection and TSan: 32 concurrent planners, 4 rebuilds each,
+  replacement histories and metadata packing, compared to the saved old header.
+- Compute Sanitizer memcheck and synccheck each passed 5 selected GPU tests with
+  zero errors, covering asynchronous CPU-label uploads, legacy refresh,
+  graph/rebuild boundaries and incremental I512 cases. This is selected-case
+  sanitizer coverage, not exhaustive coverage of every shape. CUDA device
+  translation units are unchanged; no new device CALL/spill behavior is introduced.
+
+All generated binaries, fixtures, logs and result JSON remain ignored under
+`dism_v3/build/decode_rebuild/`. Paired tables use `b1_before/after.json` and
+`b8_before/after.json`; worker sweeps use `workers_1/16/24.json`. The baseline
+binary and headers must be saved before rebuilding to reproduce an old/new
+comparison. Commands below assume this worktree's Python paths and conda blkw:
+
+```bash
+export PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat"
+export TORCH_EXTENSIONS_DIR="$PWD/dism_v3/build/torch_extensions"
+export OMP_NUM_THREADS=1 MAX_JOBS=2
+python -m flash_dism.inference.build --component decode \
+  --output dism_v3/build/decode_rebuild/dism_decode_cuda.so
+python dism_v3/tools/bench_inference_decode.py --fixed-context --prompts 8192 \
+  --modes graph --batches 1 --intervals 128 512 1024 --rebuild-workers 8 \
+  --output dism_v3/build/decode_rebuild/fresh_b1.json
+python dism_v3/tools/bench_inference_decode.py --fixed-context --prompts 8192 \
+  --modes graph --batches 8 --patterns random --intervals 128 512 1024 \
+  --rebuild-workers 8 --output dism_v3/build/decode_rebuild/fresh_b8.json
+python dism_v3/tools/check_decode_rebuild.py \
+  --reference dism_v3/build/decode_rebuild/baseline.pt --workers 1 4 8
+python -m pytest -q dism_v3/tests/test_decode_rebuild.py
+```

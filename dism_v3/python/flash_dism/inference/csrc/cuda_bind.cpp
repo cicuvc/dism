@@ -1,4 +1,7 @@
 #include "planner.hpp"
+#include "decode_rebuild.hpp"
+#include <ATen/cuda/CUDAEvent.h>
+#include <optional>
 #include "prefix_type.hpp"
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAException.h>
@@ -94,6 +97,27 @@ torch::Tensor query(torch::Tensor k, torch::Tensor v, torch::Tensor nk, torch::T
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return out;
 }
+// Reusable pinned CPU storage. Reusing an allocation directly bypasses the
+// caching allocator's reuse checks, so wait for its prior H2D before writing.
+struct PinnedArena {
+    torch::Tensor storage;
+    at::cuda::CUDAEvent copied;
+    bool pending=false;
+    torch::Tensor acquire(int64_t words) {
+        if(pending) { copied.synchronize(); pending=false; }
+        if(!storage.defined() || storage.numel()<words) {
+            int64_t grown=storage.defined()?storage.numel()+storage.numel()/2:0;
+            int64_t capacity_words=(std::max(words,grown)+4095)/4096*4096;
+            storage=torch::empty({capacity_words},torch::TensorOptions().dtype(torch::kFloat32).pinned_memory(true));
+        }
+        return storage.narrow(0,0,words);
+    }
+    torch::Tensor upload(const torch::Tensor &host,const torch::Device &device) {
+        auto result=host.to(device,true);
+        copied.record(at::cuda::getCurrentCUDAStream());pending=true;
+        return result;
+    }
+};
 // Own the control plane and metadata packing natively. Public inputs are already
 // projected features; this class does not impose a parameterization or tokenizer.
 class NativeCache {
@@ -103,6 +127,12 @@ class NativeCache {
     std::vector<dism_decode::Planner> planners;
     std::vector<int> offsets, mat_counts;
     cudaStream_t owner_stream;
+    int worker_count=1, history_uploaded=0, last_refresh_tokens=0;
+    bool last_refresh_band_reused=false;
+    std::shared_ptr<dism_prefill::PlanningWorkers> workers;
+    std::vector<dism_decode::RebuildWorkspace> workspaces;
+    PinnedArena summary_host, snapshot_host, refresh_host;
+    torch::Tensor gpu_history;
 #ifdef DISM_DECODE_TIMING
     std::vector<double> last_timing;
 #endif
@@ -110,99 +140,105 @@ class NativeCache {
   public:
     // Explicit CPU rebuild boundary for the GPU-only ordinary-step experiment.
     // The shared key/value allocations were updated in place by the device path.
-    void refresh_gpu(torch::Tensor history, int n) {
+    void refresh_gpu(torch::Tensor history, int n, std::optional<torch::Tensor> device_band=std::nullopt) {
         c10::cuda::CUDAGuard guard(keys.device());
-        TORCH_CHECK(at::cuda::getCurrentCUDAStream() == owner_stream, "cache stream mismatch");
-        check(history, torch::kInt32);
-        TORCH_CHECK(history.device() == keys.device() && history.sizes() == torch::IntArrayRef({capacity,3,heads}) && n >= 0 && n <= capacity, "history shape/length");
-        auto cpu = history.narrow(0,0,n).cpu();
-        const int *data = cpu.data_ptr<int>();
-        for (int h=0; h<heads; ++h) {
-            std::vector<int> k(n), q(n), reset(n);
-            for (int i=0; i<n; ++i) {
-                k[i]=data[i*3*heads+h]; q[i]=data[i*3*heads+heads+h];
-                reset[i]=data[i*3*heads+2*heads+h];
-            }
-            auto &p=planners[h];
-            p.keys.clear(); p.queries.clear(); p.resets.clear();
-            p.initialize(k,q,reset);
+        TORCH_CHECK(at::cuda::getCurrentCUDAStream()==owner_stream,"cache stream mismatch");
+        check(history,torch::kInt32);
+        TORCH_CHECK(history.device()==keys.device() && history.sizes()==torch::IntArrayRef({capacity,3,heads})
+                    && n>=0 && n<=capacity,"history shape/length");
+        const int interval=planners[0].interval;
+        if(device_band) {
+            check(*device_band,torch::kInt32);
+            TORCH_CHECK(device_band->device()==keys.device() &&
+                device_band->sizes()==torch::IntArrayRef({heads,2,interval}),"band shape/device");
         }
-        position=n;
+        // The optimized GPU-owned path is append-only. The old two-argument
+        // API still replaces complete history and recomputes its band.
+        bool incremental=device_band && gpu_history.defined() &&
+                         gpu_history.data_ptr()==history.data_ptr() && n>=position;
+        int start=incremental?position:0, added=n-start;
+        int64_t label_words=int64_t(added)*3*heads;
+        auto host=refresh_host.acquire(label_words+(device_band?int64_t(heads)*interval:0));
+        auto ints=host.view(torch::kInt32);
+        if(added) ints.narrow(0,0,label_words).view({added,3,heads}).copy_(history.narrow(0,start,added),true);
+        if(device_band) ints.narrow(0,label_words,int64_t(heads)*interval).view({heads,interval})
+            .copy_(device_band->select(1,n&1),true);
+        C10_CUDA_CHECK(cudaStreamSynchronize(owner_stream));
+        const int *data=ints.data_ptr<int>();
+        workers->run(heads,[&](size_t h) {
+            auto &p=planners[h];
+            if(!incremental) {p.keys.clear();p.queries.clear();p.resets.clear();p.reset_sam();}
+            if(int(p.keys.size())!=start) throw std::logic_error("CPU/GPU history positions disagree");
+            p.keys.resize(n);p.queries.resize(n);p.resets.resize(n);
+            for(int i=0;i<added;++i) {
+                int reset=data[int64_t(i)*3*heads+2*heads+h];
+                if(reset!=0 && reset!=1) throw std::invalid_argument("reset must be 0/1");
+                p.keys[start+i]=data[int64_t(i)*3*heads+h];
+                p.queries[start+i]=data[int64_t(i)*3*heads+heads+h];
+                p.resets[start+i]=reset;
+            }
+            if(device_band) {
+                int begin=std::max(0,n-interval);p.band.resize(n-begin);
+                const int *ring=data+label_words+h*interval;
+                for(int pos=begin;pos<n;++pos) {
+                    int length=ring[pos%interval];
+                    if(length<0 || length>pos+1) throw std::invalid_argument("invalid GPU band length");
+                    p.band[pos-begin]=length;
+                }
+            } else p.restore_band();
+        });
+        position=n;gpu_history=history;history_uploaded=n;
+        last_refresh_tokens=added;last_refresh_band_reused=device_band.has_value();
         rebuild_all();
     }
 
     std::vector<torch::Tensor> gpu_snapshot() {
         c10::cuda::CUDAGuard guard(keys.device());
-        TORCH_CHECK(at::cuda::getCurrentCUDAStream() == owner_stream, "cache stream mismatch");
-        int nodes=1, edges=1, b=planners[0].interval;
-        for (auto &p:planners) {
-            nodes=std::max(nodes,int(p.nodes.size()));
-            int e=0; for(auto &node:p.nodes) e+=node.next.size();
-            edges=std::max(edges,e);
-        }
-        // Even pitch keeps the final packed (task,next) descriptors 8B aligned.
-        nodes=(nodes+1)&~1;
-        auto opt=torch::TensorOptions().dtype(torch::kInt32);
-        auto topo=torch::full({heads,13,nodes},-1,opt);
-        auto transitions=torch::zeros({heads,2,edges},opt);
-        auto state=torch::zeros({heads,8},opt);
-        auto band=torch::zeros({heads,2,b},opt);
-        auto history=torch::zeros({capacity,3,heads},opt);
-        auto counts=torch::zeros({summaries.size(0)},opt.dtype(torch::kFloat32));
-        auto taus=torch::empty({heads},opt.dtype(torch::kFloat32));
+        TORCH_CHECK(at::cuda::getCurrentCUDAStream()==owner_stream,"cache stream mismatch");
+        int nodes=1,edges=1,interval=planners[0].interval;
         for(int h=0;h<heads;++h) {
-            auto &p=planners[h]; int n=p.nodes.size();
-            TORCH_CHECK(p.snapshot_size==position,"export requires rebuilt snapshot");
-            int *t=topo.data_ptr<int>()+h*13*nodes;
-            int *e=transitions.data_ptr<int>()+h*2*edges;
-            int *s=state.data_ptr<int>()+h*8;
-            s[0]=position; s[1]=p.state; s[2]=p.match; s[3]=s[4]=-1;
-            std::vector<int> inverse(n),end(n);
-            for(int i=0;i<n;++i) {inverse[p.order[i]]=i;end[p.order[i]]=i+1;}
-            for(int i=n-1;i>0;--i) {int u=p.order[i];end[p.nodes[u].link]=std::max(end[p.nodes[u].link],end[u]);}
-            int cursor=0;
-            for(int u=0;u<n;++u) {
-                auto &node=p.nodes[u];
-                t[u]=node.link; t[nodes+u]=node.length; t[2*nodes+u]=node.position;
-                t[3*nodes+u]=cursor;
-                std::vector<std::pair<int,int>> sorted(node.next.begin(),node.next.end());
-                std::sort(sorted.begin(),sorted.end());
-                for(auto pair:sorted) {e[cursor]=pair.first;e[edges+cursor]=pair.second;++cursor;}
-                t[4*nodes+u]=cursor; t[5*nodes+u]=inverse[u];t[6*nodes+u]=end[u];
-                t[7*nodes+u]=p.mat_index[u]<0?-1:offsets[h]+p.mat_index[u];
-                t[8*nodes+u]=p.nearest[u];
-                t[9*nodes+u]=p.sample_index[u]<0?-1:offsets[h]+mat_counts[h]+p.sample_index[u];
-                t[10*nodes+u]=p.order[u];
-            }
-            std::vector<int> next_valid(n+1,n);
-            for(int i=n-1;i>=0;--i) {
-                int u=p.order[i],matrix=t[7*nodes+u];
-                int id=matrix>=0?capacity+matrix:p.nodes[u].position;
-                next_valid[i]=id>=0?i:next_valid[i+1];
-                t[11*nodes+2*i]=id;
-                t[11*nodes+2*i+1]=next_valid[matrix>=0?end[u]:i+1];
-            }
-            for(int i=0;i<int(p.band.size());++i) {
-                int absolute=position-int(p.band.size())+i;
-                band.data_ptr<int>()[(h*2+(position&1))*b+absolute%b]=p.band[i];
-            }
-            for(int i=0;i<position;++i) {
-                history.data_ptr<int>()[i*3*heads+h]=p.keys[i];
-                history.data_ptr<int>()[i*3*heads+heads+h]=p.queries[i];
-                history.data_ptr<int>()[i*3*heads+2*heads+h]=p.resets[i];
-            }
-            for(int i=0;i<int(p.materialized.size());++i)
-                counts.data_ptr<float>()[offsets[h]+i]=p.subtree_count[p.materialized[i]];
-            for(int i=0;i<int(p.samples.size());++i)
-                counts.data_ptr<float>()[offsets[h]+mat_counts[h]+i]=p.prefix_weight[p.samples[i]];
-            taus.data_ptr<float>()[h]=p.tau;
+            TORCH_CHECK(planners[h].snapshot_size==position,"export requires rebuilt snapshot");
+            nodes=std::max(nodes,int(planners[h].nodes.size()));edges=std::max(edges,workspaces[h].edges);
         }
-        return {keys,values,summaries,topo.to(keys.device()),transitions.to(keys.device()),
-                state.to(keys.device()),band.to(keys.device()),history.to(keys.device()),
-                counts.to(keys.device()),taus.to(keys.device())};
+        nodes=(nodes+1)&~1; // int2 descriptors require even pitch.
+        if(!gpu_history.defined()) {
+            gpu_history=torch::zeros({capacity,3,heads},keys.options().dtype(torch::kInt32));
+            history_uploaded=0;
+        }
+        int tail=position-history_uploaded;
+        TORCH_CHECK(tail>=0,"GPU history ahead of CPU snapshot");
+        int64_t topo_words=int64_t(heads)*13*nodes,edge_words=int64_t(heads)*2*edges;
+        int64_t state_at=topo_words+edge_words,band_at=state_at+heads*8;
+        int64_t counts_at=band_at+int64_t(heads)*2*interval,taus_at=counts_at+summaries.size(0);
+        int64_t history_at=taus_at+heads,words=history_at+int64_t(tail)*3*heads;
+        auto host=snapshot_host.acquire(words);
+        auto raw=host.data_ptr<float>();auto ints=reinterpret_cast<int*>(raw);
+        workers->run(heads,[&](size_t h) {
+            const auto &p=planners[h];
+            workspaces[h].pack_snapshot(p,nodes,edges,capacity,offsets[h],mat_counts[h],
+                ints+h*13*nodes,ints+topo_words+h*2*edges,ints+state_at+h*8,
+                ints+band_at+h*2*interval,raw+counts_at,raw+taus_at+h);
+            for(int i=0;i<tail;++i) {
+                int j=history_uploaded+i;
+                ints[history_at+int64_t(i)*3*heads+h]=p.keys[j];
+                ints[history_at+int64_t(i)*3*heads+heads+h]=p.queries[j];
+                ints[history_at+int64_t(i)*3*heads+2*heads+h]=p.resets[j];
+            }
+        },true);
+        auto packed=snapshot_host.upload(host,keys.device());
+        auto packed_i=packed.view(torch::kInt32);
+        if(tail) gpu_history.narrow(0,history_uploaded,tail).copy_(
+            packed_i.narrow(0,history_at,int64_t(tail)*3*heads).view({tail,3,heads}));
+        history_uploaded=position;
+        return {keys,values,summaries,
+            packed_i.narrow(0,0,topo_words).view({heads,13,nodes}),
+            packed_i.narrow(0,topo_words,edge_words).view({heads,2,edges}),
+            packed_i.narrow(0,state_at,heads*8).view({heads,8}),
+            packed_i.narrow(0,band_at,int64_t(heads)*2*interval).view({heads,2,interval}),
+            gpu_history,packed.narrow(0,counts_at,summaries.size(0)),packed.narrow(0,taus_at,heads)};
     }
     NativeCache(int h, int r_, int d_, int cap, const std::vector<double> &tau, int b, int sample, int threshold,
-                int chunk_, torch::Tensor prototype)
+                int chunk_, torch::Tensor prototype, int rebuild_workers=8)
         : heads(h), r(r_), d(d_), capacity(cap), chunk(chunk_), offsets(h, 0), mat_counts(h, 0) {
         TORCH_CHECK(h > 0 && r > 0 && d > 0 && cap > 0 && chunk > 0 && int(tau.size()) == h, "invalid configuration");
         TORCH_CHECK((r == 16 || r == 32) && (d == 32 || d == 64), "supported R16/32 DV32/64");
@@ -210,76 +246,55 @@ class NativeCache {
                         (prototype.scalar_type() == torch::kFloat32 || prototype.scalar_type() == torch::kBFloat16),
                     "prototype must be CUDA FP32/BF16");
         c10::cuda::CUDAGuard guard(prototype.device());
+        TORCH_CHECK(rebuild_workers>=1 && rebuild_workers<=64,"rebuild_workers must be in [1,64]");
+        worker_count=std::min(h,rebuild_workers);
+        workers=std::make_shared<dism_prefill::PlanningWorkers>(worker_count);
+        workspaces.resize(h);
         owner_stream = at::cuda::getCurrentCUDAStream();
         keys = torch::empty({h, cap, r}, prototype.options());
         values = torch::empty({h, cap, d}, prototype.options());
         summaries = torch::empty({0, r * d}, prototype.options().dtype(torch::kFloat32));
         for (auto t : tau)
             planners.emplace_back(r, b, sample, threshold, t);
+        workers->run(heads,[&](size_t h){workspaces[h].prepare(planners[h]);});
     }
     void rebuild_all() {
-        std::vector<torch::Tensor> outputs;
-        int offset = 0;
-        for (int h = 0; h < heads; ++h) {
-            auto &p = planners[h];
-            p.rebuild();
-            int n = p.nodes.size();
-            int levels = 0;
-            if (!p.samples.empty())
-                while ((int64_t(1) << levels) < n)
-                    ++levels;
-            auto host = torch::empty({8 + levels, n}, torch::TensorOptions().dtype(torch::kInt32).pinned_memory(true));
-            int *data = host.data_ptr<int>();
-            for (int i = 0; i < n; ++i) {
-                data[i] = p.nodes[i].link;
-                data[n + i] = p.nodes[i].length;
-                data[2 * n + i] = p.nodes[i].position;
-                data[3 * n + i] = p.order[i];
-                data[4 * n + i] = p.mat_index[i];
-                data[5 * n + i] = p.sample_index[i] < 0 ? -1 : int(p.materialized.size()) + p.sample_index[i];
-            }
-            for (int i = 0; i < n; ++i) {
-                data[6 * n + p.order[i]] = i;
-                data[7 * n + p.order[i]] = i + 1;
-            }
-            for (int i = n - 1; i > 0; --i) {
-                int node = p.order[i], parent = p.nodes[node].link;
-                data[7 * n + parent] = std::max(data[7 * n + parent], data[7 * n + node]);
-            }
-            for (int level = 0; level < levels; ++level)
-                for (int i = 0; i < n; ++i) {
-                    int a = level ? data[(7 + level) * n + i] : p.nodes[i].link;
-                    data[(8 + level) * n + i] = level && a >= 0 ? data[(7 + level) * n + a] : a;
-                }
-            auto topo = host.to(keys.device(), true);
-            auto coefficient_host = torch::empty({levels + 1, n}, host.options().dtype(torch::kFloat32));
-            float *coefficient_data = coefficient_host.data_ptr<float>();
-            for (int i = 0; i < n; ++i)
-                coefficient_data[i] = p.edge_weight[i];
-            std::vector<double> rho = p.edge_decay, next_rho(n);
-            for (int level = 0; level < levels; ++level) {
-                for (int i = 0; i < n; ++i)
-                    coefficient_data[(level + 1) * n + i] = rho[i];
-                for (int i = 0; i < n; ++i) {
-                    int a = data[(8 + level) * n + i];
-                    next_rho[i] = a < 0 ? 0. : rho[i] * rho[a];
-                }
-                rho.swap(next_rho);
-            }
-            auto coefficients = coefficient_host.to(keys.device(), true);
-            auto out =
-                rebuild(keys[h], values[h], topo, p.materialized.size() + p.samples.size(), p.tau, chunk, coefficients);
-            offsets[h] = offset;
-            mat_counts[h] = p.materialized.size();
-            offset += out.size(0);
-            outputs.push_back(out);
-            if (out.size(0))
-                peak_scratch = std::max(peak_scratch, (int64_t(n) * (8 + int(sizeof(DismPrefix))) +
-                                                       ((n + 255) / 256) * int(sizeof(DismPrefix))) *
-                                                          std::min(chunk, r * d));
+        workers->run(heads,[&](size_t h) {planners[h].rebuild();workspaces[h].prepare(planners[h]);});
+        std::vector<int64_t> starts(heads),coefficient_starts(heads);
+        int64_t words=0;int matrices=0;
+        for(int h=0;h<heads;++h) {
+            const auto &p=planners[h];int n=p.nodes.size(),levels=workspaces[h].levels;
+            offsets[h]=matrices;mat_counts[h]=p.materialized.size();
+            int count=p.materialized.size()+p.samples.size();matrices+=count;
+            starts[h]=words;
+            if(count) words+=int64_t(8+levels)*n;
+            coefficient_starts[h]=words;
+            if(count) words+=int64_t(levels+1)*n;
         }
-        summaries = torch::cat(outputs);
-        ++rebuilds;
+        // No GPU topology/coefficients or transfer for empty-summary heads.
+        if(!matrices) {
+            summaries=torch::empty({0,r*d},keys.options().dtype(torch::kFloat32));++rebuilds;return;
+        }
+        auto host=summary_host.acquire(words);auto raw=host.data_ptr<float>();
+        workers->run(heads,[&](size_t h) {
+            const auto &p=planners[h];
+            if(p.materialized.empty() && p.samples.empty()) return;
+            workspaces[h].pack_summary(p,reinterpret_cast<int*>(raw+starts[h]),raw+coefficient_starts[h]);
+        },true);
+        auto packed=summary_host.upload(host,keys.device());
+        std::vector<torch::Tensor> outputs;
+        // Only this thread touches CUDA: preserve head order, stream and math.
+        for(int h=0;h<heads;++h) {
+            const auto &p=planners[h];int n=p.nodes.size(),levels=workspaces[h].levels;
+            int count=p.materialized.size()+p.samples.size();
+            if(!count) {outputs.push_back(torch::empty({0,r*d},summaries.options()));continue;}
+            auto topo=packed.narrow(0,starts[h],int64_t(8+levels)*n).view(torch::kInt32).view({8+levels,n});
+            auto coefficients=packed.narrow(0,coefficient_starts[h],int64_t(levels+1)*n).view({levels+1,n});
+            outputs.push_back(rebuild(keys[h],values[h],topo,count,p.tau,chunk,coefficients));
+            peak_scratch=std::max(peak_scratch,(int64_t(n)*(8+int(sizeof(DismPrefix)))+
+                ((n+255)/256)*int(sizeof(DismPrefix)))*std::min(chunk,r*d));
+        }
+        summaries=torch::cat(outputs);++rebuilds;
     }
     void prime(torch::Tensor labels, torch::Tensor sk, torch::Tensor v) {
         c10::cuda::CUDAGuard guard(keys.device());
@@ -302,7 +317,7 @@ class NativeCache {
         for (int i = 0; i < n; ++i)
             for (int h = 0; h < heads; ++h)
                 TORCH_CHECK(data[(i * 3 + 2) * heads + h] == 0 || data[(i * 3 + 2) * heads + h] == 1, "invalid reset");
-        for (int h = 0; h < heads; ++h) {
+        workers->run(heads,[&](size_t h) {
             std::vector<int> k(n), q(n), reset(n);
             for (int i = 0; i < n; ++i) {
                 k[i] = data[(i * 3) * heads + h];
@@ -310,10 +325,11 @@ class NativeCache {
                 reset[i] = data[(i * 3 + 2) * heads + h];
             }
             planners[h].initialize(k, q, reset);
-        }
+        });
         keys.narrow(1, 0, n).copy_(sk);
         values.narrow(1, 0, n).copy_(v);
         position = n;
+        if(gpu_history.defined()) {gpu_history.narrow(0,0,n).copy_(labels);history_uploaded=n;}
         rebuild_all();
     }
     torch::Tensor step(torch::Tensor labels, torch::Tensor sk, torch::Tensor sq, torch::Tensor v) {
@@ -413,15 +429,21 @@ class NativeCache {
     std::vector<double> timings() const { return last_timing; }
 #endif
     std::map<std::string, int64_t> stats() const {
-        int64_t nodes = 0;
-        for (auto &p : planners)
-            nodes += p.nodes.size();
+        int64_t nodes = 0,extended=0,pinned=0;
+        for (auto &p : planners) {nodes += p.nodes.size();extended+=p.last_extended_keys;}
+        for (const auto *arena:{&summary_host,&snapshot_host,&refresh_host})
+            if(arena->storage.defined()) pinned+=arena->storage.nbytes();
         return {{"position", position},
                 {"capacity", capacity},
                 {"raw_bytes", keys.nbytes() + values.nbytes()},
                 {"summary_bytes", summaries.nbytes()},
                 {"summary_matrices", summaries.size(0)},
                 {"rebuilds", rebuilds},
+                {"rebuild_workers", worker_count},
+                {"last_sam_extended_keys", extended},
+                {"last_refresh_tokens", last_refresh_tokens},
+                {"last_refresh_band_reused", last_refresh_band_reused},
+                {"pinned_rebuild_capacity_bytes", pinned},
                 {"last_tasks_per_head", last_tasks},
                 {"sam_nodes", nodes},
                 {"max_single_rebuild_scratch_bytes", peak_scratch}};
@@ -506,11 +528,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     });
     m.def("query", &query);
     pybind11::class_<NativeCache>(m, "NativeCache")
-        .def(pybind11::init<int, int, int, int, const std::vector<double> &, int, int, int, int, torch::Tensor>())
+        .def(pybind11::init<int, int, int, int, const std::vector<double> &, int, int, int, int, torch::Tensor, int>(),
+             pybind11::arg("heads"),pybind11::arg("r"),pybind11::arg("d"),pybind11::arg("capacity"),
+             pybind11::arg("tau"),pybind11::arg("interval"),pybind11::arg("sample"),pybind11::arg("threshold"),
+             pybind11::arg("chunk"),pybind11::arg("prototype"),pybind11::arg("rebuild_workers")=8)
         .def("step", &NativeCache::step, pybind11::call_guard<pybind11::gil_scoped_release>())
         .def("prime", &NativeCache::prime, pybind11::call_guard<pybind11::gil_scoped_release>())
-        .def("gpu_snapshot", &NativeCache::gpu_snapshot)
-        .def("refresh_gpu", &NativeCache::refresh_gpu)
+        .def("gpu_snapshot", &NativeCache::gpu_snapshot,pybind11::call_guard<pybind11::gil_scoped_release>())
+        .def("refresh_gpu", &NativeCache::refresh_gpu,pybind11::arg("history"),pybind11::arg("position"),
+             pybind11::arg("band")=pybind11::none(),pybind11::call_guard<pybind11::gil_scoped_release>())
 #ifdef DISM_DECODE_TIMING
         .def("timings", &NativeCache::timings)
 #endif
