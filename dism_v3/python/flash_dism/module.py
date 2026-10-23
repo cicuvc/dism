@@ -187,6 +187,14 @@ class DismAttention(nn.Module):
         cached = bool(use_cache) or last_state is not None
         if self.training and cached:
             raise ValueError("cached DISM inference requires eval()")
+        sam_prefill = getattr(self, '_sam_prefill_engine', None)
+        if sam_prefill is not None:
+            if self.training or torch.is_grad_enabled() or cached:
+                raise ValueError('SAM prefill requires uncached eval with disabled gradients')
+            if (torch.compiler.is_compiling() or torch.cuda.is_current_stream_capturing()
+                    or not kwargs.get('direction_true', False) or x.device.type != 'cuda'
+                    or x.shape[1] % 256):
+                raise ValueError('SAM model prefill requires eager aligned CUDA fixed-true execution')
         torch_path = cached or (not self.training and (x.device.type != 'cuda' or x.shape[1] % 256 != 0))
         if attention_mask is not None:
             if (attention_mask.ndim != 2 or attention_mask.shape[0] != x.shape[0]
@@ -370,7 +378,14 @@ class DismAttention(nn.Module):
             tau = tau * self.tau_scale
         dism_v = v
         beta = self.vocab_temperature if vocab_temperature is None else vocab_temperature
-        if graph_binding is not None:
+        sam_prefill = getattr(self, '_sam_prefill_engine', None)
+        if sam_prefill is not None:
+            if graph_binding is not None:
+                raise ValueError('SAM prefill cannot use a training graph binding')
+            from .inference.model_prefill import vocabulary_prefill
+            output = vocabulary_prefill(sam_prefill, q, k, sq, sk, dism_v, eq, ek,
+                                        tau, beta, hard, layout=layout)
+        elif graph_binding is not None:
             if compiling or not self.training or not direction_true or graph_layout is None:
                 raise ValueError('planner graph binding requires eager packed fixed-true training')
             output = graph_binding.vocabulary(q, k, sq, sk, dism_v, eq, ek, tau,

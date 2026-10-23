@@ -26,7 +26,7 @@ It does not change these inference APIs or production training dispatch.
 ## Integration boundary
 
 `HardDismPrefill` consumes int32 BHN labels and contiguous BNHD SQ/SK/V, and
-returns FP32 BNHD. Its persistent native worker pool defaults to eight threads
+returns FP32 BNHD. Its persistent native worker pool defaults to 16 threads
 (1–64 supported); planning and direct packing release the GIL. It shares the
 training pool/Builder implementation, disables derivative computation, and
 uploads one pinned metadata blob including dispatch indices. The GPU grid
@@ -1101,3 +1101,309 @@ Use the `blkw` conda environment. Generated results stay under ignored
 and test/sanitizer logs. The older `latency.json` used different requested
 rebuild cadences and is exploratory only; `fair_latency.json` precedes the final
 allocation-order change. Neither supplies the comparison table above.
+
+### Optional SAM prefill in downstream evaluation
+
+`flash_dism.inference.model_prefill.use_sam_prefill(model, engine)` explicitly
+selects SAM for the DISM core of an existing model forward. The scope restores
+previous dispatch even when a final-norm hook exits by exception. It requires
+`eval()`, disabled gradients, eager aligned CUDA inputs, fixed true direction,
+all-hard flags and equal query/key head counts. Cached execution and capture are
+rejected. The caller owns the reusable `HardDismPrefill` engine; do not use one
+model concurrently while changing its backend context.
+
+This integration retains the existing model's convolution/projections,
+`prepare_embedding` + `emb_fwd_true` vocabulary routing, readout activation,
+value residual, tau scaling, GDN branch, gating, postnorm and FFN. Only the
+quadratic hard core is replaced; SAM FP32 results are cast back to the existing
+BF16 core-output contract. It does not use the separate experimental
+`HardInferenceEngine`, whose complete-model implementation has a different scope.
+Equal-length packed rows become independent batched SAM streams. Ragged packed
+documents are grouped by exact length, skipping empty documents, so neither
+cross-document matches nor synthetic padding enter the SAM state.
+
+```python
+from flash_dism.inference import HardDismPrefill
+from flash_dism.inference.model_prefill import use_sam_prefill
+
+with HardDismPrefill(workers=8, mma_precision="tf32x3") as prefill:
+    with torch.inference_mode(), use_sam_prefill(model.eval(), prefill):
+        result = model(tokens, cu_seqlens=boundaries)
+```
+
+The local `/home/cicuvc/downstream-eval/adapter_layout.py` and
+`adapter_layout_bounded.py` support `--hard-backend quadratic|sam`,
+`--prefill-precision tf32x3|bf16`, and `--prefill-workers`. **Quadratic remains the
+default, as requested after the paired measurements below.** SAM defaults to
+TF32x3 and 16 CPU workers when explicitly selected. The legacy `adapter.py` is unchanged.
+`run_layout_comparison.py` forwards these arguments and records backend,
+precision, worker count and inference source hashes in provenance. New results
+default to `results/layout_20261023_quadratic` or
+`results/layout_20261023_sam_<precision>`; the original `layout_20261023` result
+root is protected. Model checkpoints, task definitions and saved results are
+unchanged. These suite scripts are local files outside this Git repository.
+
+PG19/GovReport still use independent rolling likelihood windows, and generation
+still recomputes each bounded prefix. Neither path initializes a SAM decode
+cache or uses concurrent rebuild. CE, truncation, fixed physical batch size,
+256-token padding, dummy rows and greedy output selection are unchanged. The
+backend and precision must be held fixed when comparing model layouts.
+
+#### Paired checkpoint checks
+
+RTX 5090, physical B4, six DISM layers, local PG19 text from four books, full
+model forward through final norm (CE excluded from timing). Three warmed timed
+calls per backend, median shown; the retained JSON includes first-use/outlier
+samples. These are diagnostic samples, not full downstream task scores.
+
+| Layout | Context | Quadratic ms | SAM TF32x3 ms | SAM BF16 ms |
+|---|---:|---:|---:|---:|
+| gggddddddggg | 256 | 23.03 | 31.39 | — |
+| gggddddddggg | 2048 | 22.97 | 65.40 | 65.92 |
+| gggddddddggg | 8192 | 80.98 | 220.21 | 216.68 |
+| ggggggdddddd | 2048 | 22.70 | 66.74 | — |
+| ggggggdddddd | 8192 | 81.46 | 239.38 | — |
+
+The BF16 SAM columns come from a separate paired run, whose quadratic medians
+are 23.86/80.31 ms. BF16 gives little end-to-end improvement here; this experiment
+does not isolate planner, transfer and GPU execution costs. The current SAM
+integration is slower on these B4 workloads, despite its different asymptotic
+algorithm. Do not infer a model speedup from standalone prepared-core timings.
+
+Mathematical hard semantics are shared, but floating-point evaluation order and
+rounding differ. The first DISM layer's vocabulary IDs are identical between
+backends on every paired case. Small core-output differences then affect later
+vocabulary argmax choices. At 8K with TF32x3, final DISM-layer key/query mismatch
+rates are 1.83%/1.75% for gggddddddggg and 2.05%/2.64% for ggggggdddddd.
+Final-norm hidden relative L2 differences are 3.25%/3.50%; sampled greedy-logit
+agreement is 95.31%/93.75% (128 sampled positions per case).
+
+Mean token NLL on those 8K diagnostic inputs changes from 3.844632 to 3.844846
+for gggddddddggg, and 3.807029 to 3.807461 for ggggggdddddd. Mean absolute
+per-token NLL changes are about .050/.048, so cancellation in mean NLL must not
+be mistaken for identical predictions. Four short eight-token greedy continuations
+match between quadratic and TF32x3 SAM for each layout; with BF16 SAM, two of
+four change on gggddddddggg. Short-request summed likelihood also changes. Thus
+SAM is an explicit alternative evaluation backend, **not a bitwise replacement**
+for historical quadratic results. No tolerance was relaxed to hide these changes.
+
+All 151 selected regressions pass (new integration tests, existing module tests
+and SAM inference tests). Eight new integration tests cover direct batches, equal/ragged/empty packed
+documents, bitwise document isolation within SAM, existing quadratic hard-output
+criteria, dispatch restoration on exception, unchanged module state and
+training/gradient guards. Real checkpoint adapter smoke checks pass for both
+layouts with TF32x3 and for gggddddddggg with BF16. Core arithmetic kernels are
+unchanged; this change adds Python dispatch rather than new CUDA kernels. Full
+task reruns and new sanitizer runs are not part of this integration validation.
+
+Reproduce the paired checks with `tools/validate_eval_prefill.py` (requires the
+local suite/harness and existing PG19 parquet, never downloads):
+
+```bash
+PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat:/home/cicuvc/lm-evaluation-harness" \
+HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 OMP_NUM_THREADS=1 \
+python dism_v3/tools/validate_eval_prefill.py --checkpoint /path/to/model_022888.pt \
+  --precision tf32x3 --lengths 256 2048 8192 \
+  --output dism_v3/build/eval_sam/paired.json
+# Explicitly select SAM for a future layout suite run:
+python /home/cicuvc/downstream-eval/run_layout_comparison.py \
+  --hard-backend sam --prefill-precision tf32x3 --prefill-workers 8
+```
+
+Ignored artifacts are under `dism_v3/build/eval_sam/`: paired JSON/logs named
+by layout and precision, regression logs and backups of the edited local suite
+scripts. The validator reports numerical drift explicitly; it does not label
+model-level agreement as bitwise or infer task accuracy from four books/prompts.
+
+#### Real-model SAM cost attribution
+
+`tools/profile_eval_prefill.py` profiles the same local PG19 inputs and
+`gggddddddggg` checkpoint, B4/H12, six DISM layers, TF32x3, eight CPU workers.
+Three repetitions, median of the six-layer sum. It first fences pending model
+work before copying labels, then separately fences upload and vector execution.
+These extra fences alter overlap; ordinary unfenced timings are reported in the
+same JSON. They are close here: at 8K ordinary SAM is 222.71 ms, profiled SAM
+221.75 ms, and ordinary quadratic 80.11 ms.
+
+| Six-layer sum | 2K ms | 8K ms |
+|---|---:|---:|
+| CPU native planning, including event/chunk construction | 31.76 | 138.44 |
+| Pinned metadata allocation / views | .66 | 1.01 |
+| CPU metadata packing and native-program release | 4.67 | 12.15 |
+| Label/tau D2H path, including stack/cast/host wrappers | .85 | 1.95 |
+| Metadata H2D and upload setup, wall time | 1.41 | 4.16 |
+| GPU vector execution, CUDA events | 3.36 | 12.32 |
+| Wait for preceding model GPU work at prefill entry | .37 | 2.30 |
+| Complete profiled model forward | 67.89 | 221.75 |
+
+The CPU planner wrapper totals 37.12/151.65 ms; the three CPU detail rows are its
+components, not additional time. At 8K it consumes about 68% of the full forward.
+Measured label/upload paths total only 6.11 ms (about 2.8%); adding the explicit
+preceding-GPU wait gives 8.41 ms. GPU execution wall time is 12.52 ms versus the
+12.32 ms CUDA-event measurement. Stage medians need not add exactly; all rows
+exclude CE and preserve the rest of the model pipeline.
+
+D2H moves approximately 18 MiB of labels/tau across the six layers; H2D uploads
+about 128.5 MiB of metadata. In a representative 8K repetition, the six native
+plan times are 10.8, 12.8, 17.0, 28.5, 35.3 and 34.1 ms. The corresponding event
+counts are approximately .062, .416, .729, 1.530, 1.943 and 2.095 million.
+The last three DISM layers account for most planning work. This timer includes
+SAM/query matching, event generation and chunk-boundary discovery in the CPU
+pool; it does not isolate those native subphases. Thus the dominant current
+bottleneck is CPU planning rather than PCIe transfer. The synchronous dependency
+chain places that planning on the model's critical path: a later layer's labels
+are unavailable before the current layer's output. It cannot be hidden in the
+same way as an independent decode snapshot rebuild without further design work.
+
+Numerical limitation exposed by this diagnostic: the initial assumption that
+adding fences would preserve final hidden tensors bitwise was **false**. At 2K,
+the first check differed in 381,752/6,291,456 elements, maximum absolute 1.890625.
+The diagnostic now records drift explicitly instead of treating fences as a
+numerical equivalence test. Normal **uninstrumented SAM repeats also differ**:
+relative hidden L2 .0044–.0061 at 2K and .0148–.0149 at 8K in this run; quadratic
+repeats are bitwise identical. Fenced versus unfenced SAM hidden L2 differences
+are .0064–.0090 / .0139–.0170. SAM GPU output uses FP32 atomic accumulation
+(`prefill_triton.py` and the parallel path), whose order is a plausible source;
+this attribution has not yet been isolated experimentally. Small core variation
+can additionally change later hard vocabulary routes. Earlier cross-backend
+model differences therefore also include SAM repeat variation, and must not be
+interpreted as a pure deterministic backend bias. Existing regression tolerances
+were not changed, and this profile does not establish deterministic SAM eval.
+
+The measured stage data and numerical drift are in ignored
+`build/eval_sam/profile_gggddddddggg.json` and its log. Reproduce with the same
+local environment as `validate_eval_prefill.py`, substituting
+`tools/profile_eval_prefill.py --checkpoint ... --lengths 2048 8192 --workers 8
+--output dism_v3/build/eval_sam/profile.json`. No model defaults, production
+kernels, evaluation results or checkpoint state were changed for profiling.
+
+#### Prefill versus training planner and CPU scaling (2026-10-23)
+
+To separate workload differences from implementation differences, capture the
+six layers' actual labels and tau once, then reuse those exact inputs in every
+CPU control. Inputs are from the preceding B4/H12 `gggddddddggg` checkpoint,
+first four local PG19 books, at 2K and 8K. Each row is one document and all heads
+are hard: 48 `(row, head)` jobs per layer. The 8K inputs produce 6,775,044 events
+across six layers. This is a full-hard comparison, not a replay of training's
+sampled hard mask or packed-document distribution.
+
+The isolated C++ executable uses copies of the current production headers,
+the same persistent worker pool and thread-local builder, with two clock reads
+per planning job. It submits the six layers serially, matching prefill's layer
+dependency. Outputs use ordinary `new[]`, not pinned memory; there is no Python,
+CUDA, transfer or GPU execution in these measurements. Two warmups and five
+measured repetitions per configuration; configuration order is shuffled. Tables
+report medians of six-layer sums. The host has 8 P cores and 16 E cores, no SMT.
+
+| Planner control, 8K | Plan, 8 workers ms | Plan, 16 workers ms | Plan, 24 workers ms |
+|---|---:|---:|---:|
+| Current prefill, C16 classic, no gradients | 121.97 | 83.95 | 70.48 |
+| Same builder, C16 classic, no inference routing | 122.11 | 85.47 | 69.87 |
+| Training builder, C16 classic, gradients enabled | 123.94 | 81.95 | 71.45 |
+| Training configuration, C64 compact, gradients enabled | 125.71 | 85.95 | 72.19 |
+| Prefill, C16, diagnostic logweight table | 116.66 | 73.45 | 63.22 |
+
+Inference does not perform substantially more planning work than training on
+the same inputs and worker count. Inference-only short/long stream routing adds
+about 2 ms of **packing**, not tens of milliseconds of planning: at eight workers,
+packing is 15.36 ms versus 13.20 ms without routing. Their ordinary allocations
+are 134,788,208 versus 123,916,376 bytes. Training C16 additionally materializes
+derivatives and allocates 162,553,944 bytes. Stage differences across independent
+runs include noise; they are not exact instruction-level attribution.
+
+There is one missed optimization: training precomputes logweights, while
+`gradients=false` repeatedly calls `logweight(length)` during event emission.
+An isolated ablation precomputes the original scalar function for lengths 1..N
+on each job, without derivatives, cross-call caching or approximate math. It
+saves 5.31/10.50/7.26 ms of planning at 8/16/24 workers here. At one worker,
+planning falls from 731.65 to 682.41 ms, a 6.7% reduction. This is useful but not
+the majority of the CPU cost. Neither ablation nor worker defaults were applied
+to production. All 38 sweep controls have identical canonical forward-program
+hashes for each sequence length. An additional literal `cmp` verifies the entire
+156,505,024-byte 8K canonical dump (offsets, rows, decay, weights, log denominators)
+between baseline prefill, table prefill and training C16. It excludes training
+derivatives and layout-specific packed arrays, and does not establish GPU
+determinism or end-to-end numerical equivalence.
+
+| Current prefill workers, 8K | Plan ms | Pack ms | Total CPU wall ms | Mean busy cores during plan |
+|---|---:|---:|---:|---:|
+| 1 | 731.65 | 60.36 | 795.32 | 1.00 |
+| 4 | 195.97 | 20.67 | 219.40 | 3.76 |
+| 8 | 121.97 | 15.36 | 139.78 | 6.49 |
+| 12 | 104.68 | 15.60 | 122.98 | 8.71 |
+| 16 | 83.95 | 15.20 | 101.91 | 10.30 |
+| 24 | 70.48 | 16.07 | 88.93 | 12.55 |
+
+Mean busy cores is process CPU time divided by planning wall time, including
+the caller. Total includes ordinary allocation, packing and release; it is not
+model forward time. At 2K, current prefill totals are 37.35/25.59/22.83 ms for
+8/16/24 workers. Binding eight workers to P cores gives 120.91 ms planning at 8K,
+close to the unbound 121.97 ms; placement alone does not explain the bottleneck.
+
+Eight workers are a meaningful limitation: moving to 16/24 reduces 8K planning
+by 31%/42%. However, 24 cores are not uniformly saturated. Each layer has only
+48 indivisible builder jobs, and expensive heads create a long tail. Even with
+one worker (removing inter-worker contention), the fifth DISM layer's job
+medians range from .83 to 12.36 ms. With 24 workers that layer takes 19.34 ms,
+its longest job is 15.57 ms, and summed worker elapsed time divided by 24 is
+only 9.30 ms. The longest job thus consumes about 81% of the layer deadline.
+Other late layers show the same effect. Per-job elapsed time includes OS
+descheduling, but the single-worker control confirms substantial intrinsic
+workload skew. The existing pool already dynamically claims jobs; it is not a
+static equal-count assignment. Queue-lock time was not independently measured,
+so these data do not claim zero scheduler overhead or identify cache/frontend
+stalls. Packing also stops scaling above eight workers; this measurement alone
+does not distinguish bandwidth, allocation/page faults and packing imbalance.
+
+The training runtime defaults to 16 workers, C64 compact, and overlaps backward
+planning with subsequent GPU forward work. Prefill used eight workers for this comparison,
+C16 classic, and needs the current plan to produce the current layer output
+before the next layer's labels exist. It therefore exposes planner time directly
+on the forward critical path. Actual training may also plan fewer hard heads.
+These differences are more significant than extra inference-only operations.
+Changing prefill to C64 alone gives almost unchanged planning and worse packing
+(20.88 ms at eight workers); the CPU-only compact control likewise does not
+remove the planning bottleneck. GPU consumers were not changed or benchmarked
+for these layout controls.
+
+Practical next steps are to validate 16/24 workers end to end, integrate the
+small exact logweight table optimization, then examine cost-aware job ordering
+or parallel work within expensive heads. Ordering can reduce when a heavy job
+starts but cannot shorten its own serial critical path. More workers alone
+cannot eliminate that bound. No end-to-end speedup is asserted for these CPU
+controls.
+
+Reproduction tools are `tools/capture_prefill_planner_inputs.py`,
+`tools/build_prefill_planner_compare.py`, `tools/compare_prefill_planner.cpp` and
+`tools/run_prefill_planner_compare.py`. With the same local environment as the
+model profile:
+
+```bash
+python dism_v3/tools/capture_prefill_planner_inputs.py \
+  --checkpoint /path/to/model_022888.pt \
+  --output dism_v3/build/prefill_planner_compare/inputs
+python dism_v3/tools/build_prefill_planner_compare.py \
+  --output dism_v3/build/prefill_planner_compare/bin
+python dism_v3/tools/run_prefill_planner_compare.py \
+  --root dism_v3/build/prefill_planner_compare \
+  --output dism_v3/build/prefill_planner_compare/sweep.json
+```
+
+Ignored artifacts include input SHA256 manifests, copied headers, build source
+hashes, all raw samples in `build/prefill_planner_compare/sweep.json`, and
+`byte_comparison.json`. Setting `DISM_PLANNER_PROGRAM_DUMP` on the C++ executable
+emits the first warmup's canonical bytes for direct comparison. Existing model
+SAM nondeterminism described above remains unresolved; freezing inputs avoids
+letting that variation contaminate these CPU comparisons.
+
+#### Prefill worker default update (2026-10-24)
+
+`HardDismPrefill` and `NativePrefillPlanner` now default to 16 workers, based on
+the frozen-input CPU comparison above. The local downstream evaluation adapters
+and runner also default `--prefill-workers` to 16. Explicit worker counts remain
+supported; quadratic remains the evaluation default. Historical measurements
+and their eight-worker reproduction commands are unchanged. This is a worker
+count change only: no work stealing, P/E affinity, job splitting or production
+logweight-table optimization is included. The legacy Python reference planner
+and training/decode defaults are unchanged. CPU planning improved in the
+comparison; full-model speedup at the new default has not yet been measured.

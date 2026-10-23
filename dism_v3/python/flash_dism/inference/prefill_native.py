@@ -61,7 +61,7 @@ class NativePrefillPlanner:
     remains available as a reference, but production uses no per-head Python
     tasks, lists, exported event arrays or merge pass.
     """
-    def __init__(self, workers=8):
+    def __init__(self, workers=16):
         self.native = load_prefill().TrainingPlanner(workers)
 
     def plan(self, labels, tau, *, chunk_size=16, dispatch_threshold=64):

@@ -66,12 +66,12 @@ class PreparedHardPrefill:
 class HardDismPrefill:
     """Reuse this context-managed engine across layers/calls.
 
-    Default 8 CPU workers, BF16 GEMMs, C16, FP32 output. Labels int32 [B,H,N],
+    Default 16 CPU workers, BF16 GEMMs, C16, FP32 output. Labels int32 [B,H,N],
     vectors contiguous BNHD. Single shared CUDA device/stream per prepared plan.
     Full-hard inference only; no finite soft delta, autograd or graph capture
     of preparation. No cache prime is implicit. workers=1 is a serial fallback.
     """
-    def __init__(self, *, workers=8, chunk_size=16, mma_precision="bf16", device="cuda",
+    def __init__(self, *, workers=16, chunk_size=16, mma_precision="bf16", device="cuda",
                  dispatch_threshold=64):
         if chunk_size not in (16,32,64):raise ValueError("invalid chunk_size")
         if mma_precision not in ("bf16","tf32x3"):raise ValueError("invalid mma_precision")
