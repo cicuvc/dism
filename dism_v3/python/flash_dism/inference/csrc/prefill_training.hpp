@@ -40,6 +40,29 @@ struct CompactBucketBuffers {
     float *prefixes = nullptr, *weights = nullptr, *dlog = nullptr;
 };
 
+// All non-reset key decays in this chunk are exactly one: every prefix is
+// exactly +0, including query and padding lanes. Keep conversions and signed
+// row mapping identical to the general loop; separate the independent dlog
+// copy so the common loop does not branch on gradient availability per event.
+inline void pack_zero_prefix(const Program &p,int64_t start,int length,int width,
+                             int64_t token_base,int heads,int head,int *rows,
+                             float *prefixes,float *weights,float *dlog) {
+    std::fill(prefixes,prefixes+width,0.f);
+    for (int k=0;k<length;++k) {
+        int row=p.rows[start+k];
+        int64_t local=row>=0 ? row : -int64_t(row)-1;
+        int absolute=int((token_base+local)*heads+head);
+        rows[k]=row>=0 ? absolute : -absolute-1;
+        weights[k]=float(p.weight[start+k]);
+    }
+    std::fill(rows+length,rows+width,int(token_base*heads+head));
+    std::fill(weights+length,weights+width,0.f);
+    if (dlog) {
+        for (int k=0;k<length;++k) dlog[k]=float(p.dlogweight[start+k]);
+        std::fill(dlog+length,dlog+width,0.f);
+    }
+}
+
 struct TrainingBatchProgram {
     std::shared_ptr<PlanningWorkers> workers;
     std::vector<TrainingJob> jobs;
@@ -50,6 +73,8 @@ struct TrainingBatchProgram {
     // Boundary discovery is shared by sizing and packing; never rescan events.
     struct Boundaries {
         std::vector<int64_t> ends, stream_chunks{0};
+        // One flag per chunk, discovered alongside reset boundaries.
+        std::vector<uint8_t> zero_prefix;
     };
     std::vector<Boundaries> boundaries;
     std::vector<int64_t> stream_base{0}, chunk_base{0};
@@ -106,13 +131,21 @@ struct TrainingBatchProgram {
             auto &bounds=boundaries[i];
             bounds.stream_chunks.reserve(p.offsets.size());
             bounds.ends.reserve(p.rows.size()/width+p.offsets.size());
+            bounds.zero_prefix.reserve(p.rows.size()/width+p.offsets.size());
             for (size_t s=1;s<p.offsets.size();++s) {
                 int64_t start=p.offsets[s-1], end=p.offsets[s], chunks=0;
                 while (start<end) {
                     int64_t stop=std::min(start+int64_t(width),end);
-                    for (int64_t e=start+1;e<stop;++e)
-                        if (p.rows[e]>=0 && p.decay[e]==0.) { stop=e; break; }
+                    // A reset at the first key is excluded from prefix sums;
+                    // an interior reset starts the next chunk. Queries do not
+                    // contribute a decay. Require exact equality, no tolerance.
+                    bool zero_prefix=p.rows[start]<0 || p.decay[start]==0. || p.decay[start]==1.;
+                    for (int64_t e=start+1;e<stop;++e) if (p.rows[e]>=0) {
+                        if (p.decay[e]==0.) { stop=e; break; }
+                        if (p.decay[e]!=1.) zero_prefix=false;
+                    }
                     bounds.ends.push_back(stop);
+                    bounds.zero_prefix.push_back(zero_prefix);
                     start=stop; ++chunks;
                 }
                 bounds.stream_chunks.push_back(bounds.ends.size());
@@ -160,27 +193,33 @@ struct TrainingBatchProgram {
             for (size_t stream=1;stream<p.offsets.size();++stream) {
                 int64_t start=p.offsets[stream-1], end=p.offsets[stream];
                 while (start<end) {
+                    bool zero_prefix=bounds.zero_prefix[boundary];
                     int64_t stop=bounds.ends[boundary++];
                     int length=int(stop-start);
                     int reset=int(p.rows[start]>=0 && p.decay[start]==0.);
                     int *rows=out.rows+cb*width;
                     float *prefixes=out.prefixes+cb*width, *weights=out.weights+cb*width;
                     float *dlog=has_dlog ? out.dlog+cb*width : nullptr;
-                    double prefix=0.;
-                    for (int k=0;k<length;++k) {
-                        int64_t e=start+k;
-                        if (p.rows[e]>=0 && !(reset && k==0)) prefix+=std::log(p.decay[e]);
-                        int row=p.rows[e];
-                        int64_t local=row>=0 ? row : -int64_t(row)-1;
-                        int absolute=int((token_base+local)*heads+job.head);
-                        rows[k]=row>=0 ? absolute : -absolute-1;
-                        prefixes[k]=float(prefix);
-                        weights[k]=float(p.weight[e]);
-                        if (dlog) dlog[k]=float(p.dlogweight[e]);
-                    }
-                    for (int k=length;k<width;++k) {
-                        rows[k]=pad_row; prefixes[k]=0.f; weights[k]=0.f;
-                        if (dlog) dlog[k]=0.f;
+                    if (zero_prefix) {
+                        pack_zero_prefix(p,start,length,width,token_base,heads,job.head,
+                                         rows,prefixes,weights,dlog);
+                    } else {
+                        double prefix=0.;
+                        for (int k=0;k<length;++k) {
+                            int64_t e=start+k;
+                            if (p.rows[e]>=0 && !(reset && k==0)) prefix+=std::log(p.decay[e]);
+                            int row=p.rows[e];
+                            int64_t local=row>=0 ? row : -int64_t(row)-1;
+                            int absolute=int((token_base+local)*heads+job.head);
+                            rows[k]=row>=0 ? absolute : -absolute-1;
+                            prefixes[k]=float(prefix);
+                            weights[k]=float(p.weight[e]);
+                            if (dlog) dlog[k]=float(p.dlogweight[e]);
+                        }
+                        for (int k=length;k<width;++k) {
+                            rows[k]=pad_row; prefixes[k]=0.f; weights[k]=0.f;
+                            if (dlog) dlog[k]=0.f;
+                        }
                     }
                     out.lengths[cb]=length;
                     out.resets[cb]=reset;
@@ -217,7 +256,7 @@ struct TrainingBatchProgram {
                 const int64_t stream_start=p.offsets[s-1], stream_end=p.offsets[s];
                 const int64_t chunks=bounds.stream_chunks[s]-bounds.stream_chunks[s-1];
                 if (chunks==1) {
-                    ++boundary;
+                    bool zero_prefix=bounds.zero_prefix[boundary++];
                     const int length=int(stream_end-stream_start);
                     const int b=compact_bucket(length), w=compact_widths[b];
                     const int64_t block=blk[b]++;
@@ -225,20 +264,25 @@ struct TrainingBatchProgram {
                     float *prefixes=bk[b].prefixes+block*w, *weights=bk[b].weights+block*w;
                     float *dlog=has_dlog ? bk[b].dlog+block*w : nullptr;
                     const int reset=int(p.rows[stream_start]>=0 && p.decay[stream_start]==0.);
-                    double prefix=0.;
-                    for (int k=0;k<length;++k) {
-                        const int64_t e=stream_start+k;
-                        if (p.rows[e]>=0 && !(reset && k==0)) prefix+=std::log(p.decay[e]);
-                        const int row=p.rows[e];
-                        const int64_t local=row>=0 ? row : -int64_t(row)-1;
-                        const int absolute=int((token_base+local)*heads+job.head);
-                        rows[k]=row>=0 ? absolute : -absolute-1;
-                        prefixes[k]=float(prefix); weights[k]=float(p.weight[e]);
-                        if (dlog) dlog[k]=float(p.dlogweight[e]);
-                    }
-                    for (int k=length;k<w;++k) {
-                        rows[k]=pad_row; prefixes[k]=0.f; weights[k]=0.f;
-                        if (dlog) dlog[k]=0.f;
+                    if (zero_prefix) {
+                        pack_zero_prefix(p,stream_start,length,w,token_base,heads,job.head,
+                                         rows,prefixes,weights,dlog);
+                    } else {
+                        double prefix=0.;
+                        for (int k=0;k<length;++k) {
+                            const int64_t e=stream_start+k;
+                            if (p.rows[e]>=0 && !(reset && k==0)) prefix+=std::log(p.decay[e]);
+                            const int row=p.rows[e];
+                            const int64_t local=row>=0 ? row : -int64_t(row)-1;
+                            const int absolute=int((token_base+local)*heads+job.head);
+                            rows[k]=row>=0 ? absolute : -absolute-1;
+                            prefixes[k]=float(prefix); weights[k]=float(p.weight[e]);
+                            if (dlog) dlog[k]=float(p.dlogweight[e]);
+                        }
+                        for (int k=length;k<w;++k) {
+                            rows[k]=pad_row; prefixes[k]=0.f; weights[k]=0.f;
+                            if (dlog) dlog[k]=0.f;
+                        }
                     }
                     bk[b].lengths[block]=length; bk[b].heads[block]=head_offset;
                     continue;
@@ -246,26 +290,32 @@ struct TrainingBatchProgram {
                 multi.offsets[sb+msl]=mc;
                 int64_t cursor2=stream_start;
                 while (cursor2<stream_end) {
+                    bool zero_prefix=bounds.zero_prefix[boundary];
                     int64_t stop=bounds.ends[boundary++];
                     const int length=int(stop-cursor2);
                     const int reset=int(p.rows[cursor2]>=0 && p.decay[cursor2]==0.);
                     int *rows=multi.rows+mc*width;
                     float *prefixes=multi.prefixes+mc*width, *weights=multi.weights+mc*width;
                     float *dlog=has_dlog ? multi.dlog+mc*width : nullptr;
-                    double prefix=0.;
-                    for (int k=0;k<length;++k) {
-                        const int64_t e=cursor2+k;
-                        if (p.rows[e]>=0 && !(reset && k==0)) prefix+=std::log(p.decay[e]);
-                        const int row=p.rows[e];
-                        const int64_t local=row>=0 ? row : -int64_t(row)-1;
-                        const int absolute=int((token_base+local)*heads+job.head);
-                        rows[k]=row>=0 ? absolute : -absolute-1;
-                        prefixes[k]=float(prefix); weights[k]=float(p.weight[e]);
-                        if (dlog) dlog[k]=float(p.dlogweight[e]);
-                    }
-                    for (int k=length;k<width;++k) {
-                        rows[k]=pad_row; prefixes[k]=0.f; weights[k]=0.f;
-                        if (dlog) dlog[k]=0.f;
+                    if (zero_prefix) {
+                        pack_zero_prefix(p,cursor2,length,width,token_base,heads,job.head,
+                                         rows,prefixes,weights,dlog);
+                    } else {
+                        double prefix=0.;
+                        for (int k=0;k<length;++k) {
+                            const int64_t e=cursor2+k;
+                            if (p.rows[e]>=0 && !(reset && k==0)) prefix+=std::log(p.decay[e]);
+                            const int row=p.rows[e];
+                            const int64_t local=row>=0 ? row : -int64_t(row)-1;
+                            const int absolute=int((token_base+local)*heads+job.head);
+                            rows[k]=row>=0 ? absolute : -absolute-1;
+                            prefixes[k]=float(prefix); weights[k]=float(p.weight[e]);
+                            if (dlog) dlog[k]=float(p.dlogweight[e]);
+                        }
+                        for (int k=length;k<width;++k) {
+                            rows[k]=pad_row; prefixes[k]=0.f; weights[k]=0.f;
+                            if (dlog) dlog[k]=0.f;
+                        }
                     }
                     multi.lengths[mc]=length; multi.resets[mc]=reset;
                     cursor2=stop; ++mc;

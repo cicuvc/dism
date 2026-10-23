@@ -185,6 +185,9 @@ class Builder {
     // Tail append never moves an existing range's contents, so callers may keep
     // older ranges live while new merged lists are added after them.
     static void merge_into(Ids &arena, Range a, Range b, Range &out) {
+        // Arena ranges are immutable: an empty merge can reuse the other range.
+        if (a.b==a.e) { out=b; return; }
+        if (b.b==b.e) { out=a; return; }
         out.b = int(arena.size());
         arena.resize(arena.size()+(a.e-a.b)+(b.e-b.b));
         int i=a.b, j=b.b, k=out.b;
@@ -234,21 +237,32 @@ class Builder {
 
     // `aq` are the queries of the first component and `bk` the keys of the
     // second; cross() never recurses, so the partition scratch stays in S.
-    void cross(const Ids &aq, Range aqr, const Ids &bk, Range bkr, int c, int pg, Scratch &S) {
+    // At most one live merge group contains the original parent component.
+    // Only that side needs partitioning; the other side is entirely downward.
+    void cross(const Ids &aq, Range aqr, const Ids &bk, Range bkr, int c, int pg,
+               bool parent_a, bool parent_b, Scratch &S) {
         if (aqr.b==aqr.e || bkr.b==bkr.e || bk[bkr.b]>aq[aqr.e-1]) return;
-        if (pg<0) { emit(aq,aqr,bk,bkr,c,0); return; }
-        auto &qp=S.qp, &qd=S.qd, &kp=S.kp, &kd=S.kd;
-        qp.clear(); qd.clear(); kp.clear(); kd.clear();
-        for (int t=aqr.b;t<aqr.e;++t) { int i=aq[t]; (owner[qnode[i]]==pg ? qp:qd).push_back(i); }
-        for (int t=bkr.b;t<bkr.e;++t) { int j=bk[t]; (owner[endpoint[j]]==pg ? kp:kd).push_back(j); }
-        if (!qp.empty() && !kp.empty()) throw std::logic_error("split parent component");
-        emit(qd,{0,int(qd.size())},kd,{0,int(kd.size())},c,0);
-        emit(qp,{0,int(qp.size())},kd,{0,int(kd.size())},c,1);
-        emit(qd,{0,int(qd.size())},kp,{0,int(kp.size())},c,2);
+        if (!parent_a && !parent_b) { emit(aq,aqr,bk,bkr,c,0); return; }
+        if (parent_a && parent_b) throw std::logic_error("split parent component");
+        if (parent_a) {
+            auto &qp=S.qp, &qd=S.qd; qp.clear(); qd.clear();
+            for (int t=aqr.b;t<aqr.e;++t) {
+                int i=aq[t]; (owner[qnode[i]]==pg ? qp:qd).push_back(i);
+            }
+            emit(qd,{0,int(qd.size())},bk,bkr,c,0);
+            emit(qp,{0,int(qp.size())},bk,bkr,c,1);
+        } else {
+            auto &kp=S.kp, &kd=S.kd; kp.clear(); kd.clear();
+            for (int t=bkr.b;t<bkr.e;++t) {
+                int j=bk[t]; (owner[endpoint[j]]==pg ? kp:kd).push_back(j);
+            }
+            emit(aq,aqr,kd,{0,int(kd.size())},c,0);
+            emit(aq,aqr,kp,{0,int(kp.size())},c,2);
+        }
     }
 
     void decompose(int root, const Ids &qs, Range qr, const Ids &ks, Range kr, int depth) {
-        if (qr.b==qr.e || kr.b==kr.e) return;
+        if (qr.b==qr.e || kr.b==kr.e || ks[kr.b]>qs[qr.e-1]) return;
         Scratch &S=scratch_at(depth);
         Ids &order=S.order;
         order.clear(); order.push_back(root); parent[root]=-1;
@@ -311,6 +325,9 @@ class Builder {
         if (sam.nodes[c].length>0) {
             S.wq.assign(S.gq.begin(),S.gq.end());
             S.wk.assign(S.gk.begin(),S.gk.end());
+            // Track the parent component through unions without scanning the
+            // event lists to rediscover whether a group contains it.
+            int parent_group=pg;
             auto &heap=S.heap; heap.clear(); heap.reserve(nc);
             for (int g=0;g<nc;++g) heap.push_back({int(S.comps[g].e-S.comps[g].b),g});
             std::make_heap(heap.begin(),heap.end(),std::greater<std::pair<int,int>>());
@@ -319,14 +336,18 @@ class Builder {
                 auto [wa,a]=heap.back(); heap.pop_back();
                 std::pop_heap(heap.begin(),heap.end(),std::greater<std::pair<int,int>>());
                 auto [wb,b]=heap.back(); heap.pop_back();
-                cross(S.qs,S.wq[a],S.ks,S.wk[b],c,pg,S);
-                cross(S.qs,S.wq[b],S.ks,S.wk[a],c,pg,S);
+                bool parent_a=a==parent_group, parent_b=b==parent_group;
+                cross(S.qs,S.wq[a],S.ks,S.wk[b],c,pg,parent_a,parent_b,S);
+                cross(S.qs,S.wq[b],S.ks,S.wk[a],c,pg,parent_b,parent_a,S);
+                // The final merged lists have no consumer; recursion uses gq/gk.
+                if (heap.empty()) break;
                 Range qj,kj;
                 merge_into(S.qs,S.wq[a],S.wq[b],qj);
                 merge_into(S.ks,S.wk[a],S.wk[b],kj);
                 S.wq[a]=Range{0,0}; S.wk[a]=Range{0,0};
                 S.wq[b]=Range{0,0}; S.wk[b]=Range{0,0};
                 int joined=int(S.wq.size());
+                if (parent_a || parent_b) parent_group=joined;
                 S.wq.push_back(qj); S.wk.push_back(kj);
                 heap.push_back({wa+wb,joined});
                 std::push_heap(heap.begin(),heap.end(),std::greater<std::pair<int,int>>());
