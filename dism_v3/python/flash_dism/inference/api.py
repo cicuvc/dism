@@ -10,7 +10,8 @@ from .runtime import NativeDecodeCache
 
 class HardDismDecoder:
     def __init__(self, batch, heads, readout_dim, value_dim, capacity, tau, *,
-                 device='cuda', cache_dtype=torch.bfloat16, planner_backend='cpu', **tuning):
+                 device='cuda', cache_dtype=torch.bfloat16, planner_backend='cpu',
+                 summary_backend='native', summary_workspace=None, **tuning):
         self.batch,self.heads,self.r,self.dv=batch,heads,readout_dim,value_dim
         self.capacity,self.position=capacity,0
         self.dtype=cache_dtype
@@ -23,6 +24,11 @@ class HardDismDecoder:
         if len(tau)!=heads:raise ValueError('one fixed tau per head')
         if planner_backend not in ('cpu','gpu'):
             raise ValueError('planner_backend must be cpu or gpu')
+        if summary_backend not in ('native','persistent') or (summary_backend=='persistent' and planner_backend!='gpu'):
+            raise ValueError('persistent summary requires GPU planner')
+        if summary_workspace is not None and summary_backend!='persistent':
+            raise ValueError('summary workspace requires persistent backend')
+        self.summary_backend=summary_backend
         self.planner_backend=planner_backend
         self.rebuild_interval=tuning.get('rebuild_interval',128)
         self.snapshot_position=0
@@ -30,6 +36,10 @@ class HardDismDecoder:
         if planner_backend=='gpu':
             from .gpu_runtime import GpuPlannerCache
             core_type=GpuPlannerCache
+            if summary_backend=='persistent':
+                from .summary_runtime import PersistentGpuPlannerCache
+                core_type=PersistentGpuPlannerCache
+                tuning['workspace']=summary_workspace
         self.core=core_type(batch*heads,readout_dim,value_dim,capacity,
             list(tau)*batch,device=self.device,cache_dtype=cache_dtype,**tuning)
 
@@ -85,6 +95,8 @@ class HardDismDecoder:
         self.snapshot_position=n
 
     def memory_stats(self):
+        if self.summary_backend=='persistent':
+            return self.core.memory_stats()
         if self.planner_backend=='gpu':
             result=self.core.cpu.memory_stats()
             result.pop('last_tasks_per_head',None) # CPU planner is idle between rebuilds.

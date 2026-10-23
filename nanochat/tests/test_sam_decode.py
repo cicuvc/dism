@@ -66,8 +66,9 @@ def test_session_state_and_rebuild(length):
         torch.testing.assert_close(value, before[name], atol=0, rtol=0)
 
 
+@pytest.mark.parametrize('summary_backend', ['native','persistent'])
 @pytest.mark.parametrize('length', [1, 17, 256])
-def test_graph_session_replay_rebuild(length):
+def test_graph_session_replay_rebuild(length,summary_backend):
     from nanochat.models import build_model, ModelSpec
     from flash_dism.inference import HardDismPrefill
     from nanochat.models.dism.inference import SamGraphDecodeSession
@@ -79,8 +80,8 @@ def test_graph_session_replay_rebuild(length):
     model.init_weights(); model.eval()
     tokens = torch.randint(128, (1,length+7), device='cuda')
     with torch.inference_mode(), HardDismPrefill(workers=2) as prefill:
-        eager = SamDecodeSession(model,prefill,length+7,rebuild_interval=3)
-        graph = SamGraphDecodeSession(model,prefill,length+7,rebuild_interval=3)
+        eager = SamDecodeSession(model,prefill,length+7,rebuild_interval=3,summary_backend=summary_backend)
+        graph = SamGraphDecodeSession(model,prefill,length+7,rebuild_interval=3,summary_backend=summary_backend)
         expected=[eager.features(tokens[:,:length])]
         actual=[graph.features(tokens[:,:length])]
         for i in range(length,length+7):

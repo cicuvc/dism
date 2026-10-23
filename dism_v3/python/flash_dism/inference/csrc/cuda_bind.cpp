@@ -1,3 +1,4 @@
+#include "probe/summary_program_host.hpp"
 #include "planner.hpp"
 #include "decode_rebuild.hpp"
 #include <ATen/cuda/CUDAEvent.h>
@@ -124,11 +125,13 @@ class NativeCache {
     int heads, r, d, capacity, chunk, position = 0, rebuilds = 0, last_tasks = 0;
     int64_t peak_scratch = 0;
     torch::Tensor keys, values, summaries;
-    std::vector<dism_decode::Planner> planners;
+    std::shared_ptr<std::vector<dism_decode::Planner>> planner_store=std::make_shared<std::vector<dism_decode::Planner>>();
+    std::vector<dism_decode::Planner> &planners=*planner_store;
     std::vector<int> offsets, mat_counts;
     cudaStream_t owner_stream;
     int worker_count=1, history_uploaded=0, last_refresh_tokens=0;
-    bool last_refresh_band_reused=false;
+    bool last_refresh_band_reused=false,summary_pending=false;
+    int pending_matrices=0;
     std::shared_ptr<dism_prefill::PlanningWorkers> workers;
     std::vector<dism_decode::RebuildWorkspace> workspaces;
     PinnedArena summary_host, snapshot_host, refresh_host;
@@ -140,7 +143,7 @@ class NativeCache {
   public:
     // Explicit CPU rebuild boundary for the GPU-only ordinary-step experiment.
     // The shared key/value allocations were updated in place by the device path.
-    void refresh_gpu(torch::Tensor history, int n, std::optional<torch::Tensor> device_band=std::nullopt) {
+    void refresh_gpu(torch::Tensor history, int n, std::optional<torch::Tensor> device_band=std::nullopt,bool build_vectors=true) {
         c10::cuda::CUDAGuard guard(keys.device());
         TORCH_CHECK(at::cuda::getCurrentCUDAStream()==owner_stream,"cache stream mismatch");
         check(history,torch::kInt32);
@@ -189,10 +192,24 @@ class NativeCache {
         });
         position=n;gpu_history=history;history_uploaded=n;
         last_refresh_tokens=added;last_refresh_band_reused=device_band.has_value();
-        rebuild_all();
+        rebuild_all(build_vectors);
+    }
+
+    std::shared_ptr<SummaryProgram> summary_program(int block,int tile,int slots) {
+        TORCH_CHECK(at::cuda::getCurrentCUDAStream()==owner_stream,"cache stream mismatch");
+        TORCH_CHECK(position>0,"nonempty planner snapshot required");
+        std::vector<double> tau;for(const auto &p:planners)tau.push_back(p.tau);
+        return std::make_shared<SummaryProgram>(torch::Tensor(),tau,r,d,std::min(block,2*position),tile,slots,true,true,false,planner_store,&workspaces);
+    }
+    void install_summary(torch::Tensor output) {
+        TORCH_CHECK(at::cuda::getCurrentCUDAStream()==owner_stream,"cache stream mismatch");
+        check(output,torch::kFloat32);
+        TORCH_CHECK(output.device()==keys.device() && output.sizes()==torch::IntArrayRef({summary_pending?pending_matrices:summaries.size(0),r*d}),"summary output shape/device");
+        summaries=output;summary_pending=false;
     }
 
     std::vector<torch::Tensor> gpu_snapshot() {
+        TORCH_CHECK(!summary_pending,"persistent summary output must be installed before export");
         c10::cuda::CUDAGuard guard(keys.device());
         TORCH_CHECK(at::cuda::getCurrentCUDAStream()==owner_stream,"cache stream mismatch");
         int nodes=1,edges=1,interval=planners[0].interval;
@@ -258,7 +275,7 @@ class NativeCache {
             planners.emplace_back(r, b, sample, threshold, t);
         workers->run(heads,[&](size_t h){workspaces[h].prepare(planners[h]);});
     }
-    void rebuild_all() {
+    void rebuild_all(bool build_vectors=true) {
         workers->run(heads,[&](size_t h) {planners[h].rebuild();workspaces[h].prepare(planners[h]);});
         std::vector<int64_t> starts(heads),coefficient_starts(heads);
         int64_t words=0;int matrices=0;
@@ -271,9 +288,14 @@ class NativeCache {
             coefficient_starts[h]=words;
             if(count) words+=int64_t(levels+1)*n;
         }
+        if(!build_vectors) {
+            // Caller installs a persistent-program output before exporting metadata.
+            pending_matrices=matrices;
+            summary_pending=true;++rebuilds;return;
+        }
         // No GPU topology/coefficients or transfer for empty-summary heads.
         if(!matrices) {
-            summaries=torch::empty({0,r*d},keys.options().dtype(torch::kFloat32));++rebuilds;return;
+            summaries=torch::empty({0,r*d},keys.options().dtype(torch::kFloat32));summary_pending=false;++rebuilds;return;
         }
         auto host=summary_host.acquire(words);auto raw=host.data_ptr<float>();
         workers->run(heads,[&](size_t h) {
@@ -294,7 +316,7 @@ class NativeCache {
             peak_scratch=std::max(peak_scratch,(int64_t(n)*(8+int(sizeof(DismPrefix)))+
                 ((n+255)/256)*int(sizeof(DismPrefix)))*std::min(chunk,r*d));
         }
-        summaries=torch::cat(outputs);++rebuilds;
+        summaries=torch::cat(outputs);summary_pending=false;++rebuilds;
     }
     void prime(torch::Tensor labels, torch::Tensor sk, torch::Tensor v) {
         c10::cuda::CUDAGuard guard(keys.device());
@@ -333,6 +355,7 @@ class NativeCache {
         rebuild_all();
     }
     torch::Tensor step(torch::Tensor labels, torch::Tensor sk, torch::Tensor sq, torch::Tensor v) {
+        TORCH_CHECK(!summary_pending,"persistent summary output must be installed before decode");
 #ifdef DISM_DECODE_TIMING
         using Clock = std::chrono::steady_clock;
         auto previous = Clock::now();
@@ -522,6 +545,7 @@ class LinearCache {
 };
 void bind_gpu_planner(pybind11::module_ &m);
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    bind_summary_program(m);
     bind_gpu_planner(m);
     m.def("rebuild", [](torch::Tensor k, torch::Tensor v, torch::Tensor topology, int matrices, float tau, int chunk) {
         return rebuild(k, v, topology, matrices, tau, chunk);
@@ -534,9 +558,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
              pybind11::arg("chunk"),pybind11::arg("prototype"),pybind11::arg("rebuild_workers")=8)
         .def("step", &NativeCache::step, pybind11::call_guard<pybind11::gil_scoped_release>())
         .def("prime", &NativeCache::prime, pybind11::call_guard<pybind11::gil_scoped_release>())
+        .def("summary_program", &NativeCache::summary_program,pybind11::call_guard<pybind11::gil_scoped_release>())
+        .def("install_summary", &NativeCache::install_summary,pybind11::call_guard<pybind11::gil_scoped_release>())
         .def("gpu_snapshot", &NativeCache::gpu_snapshot,pybind11::call_guard<pybind11::gil_scoped_release>())
         .def("refresh_gpu", &NativeCache::refresh_gpu,pybind11::arg("history"),pybind11::arg("position"),
-             pybind11::arg("band")=pybind11::none(),pybind11::call_guard<pybind11::gil_scoped_release>())
+             pybind11::arg("band")=pybind11::none(),pybind11::arg("build_vectors")=true,pybind11::call_guard<pybind11::gil_scoped_release>())
 #ifdef DISM_DECODE_TIMING
         .def("timings", &NativeCache::timings)
 #endif

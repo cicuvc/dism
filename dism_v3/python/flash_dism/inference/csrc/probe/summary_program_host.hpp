@@ -1,0 +1,338 @@
+#pragma once
+// Shared summary compiler/runtime and optional diagnostic bindings.
+#include "summary_program.h"
+#include "../decode_rebuild.hpp"
+#include "../prefix_type.hpp"
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAException.h>
+#include <torch/extension.h>
+#include <cmath>
+#include <map>
+#include <numeric>
+
+extern "C" void launch_parallel_rebuild(const void*,const void*,const int*,const float*,DismPrefix*,DismPrefix*,float*,float*,float*,int,int,int,int,int,int,float,bool,cudaStream_t);
+
+template<class T> torch::Tensor tensor(const std::vector<T>& x) {
+    auto t=torch::empty({int64_t(x.size())},torch::TensorOptions().dtype(std::is_same_v<T,int>?torch::kInt32:torch::kFloat32));
+    if(!x.empty())std::memcpy(t.data_ptr(),x.data(),x.size()*sizeof(T));return t;
+}
+class SummaryProgram {
+    int h,n,r,d,block,tile,tiles,nn=0,nb=0,nc=0,nf=0,nm=0,jobs=0,qcap=0,maxnodes=0;
+    int slots=0,prefix_pitch=0,carry_pitch=0;
+    bool compact=false,prune=false,diagnostics_available=true;
+    std::vector<dism_decode::Planner> planners;
+    std::shared_ptr<std::vector<dism_decode::Planner>> shared_planners;
+    std::vector<torch::Tensor> cpu,device,old_topo,old_coef;
+    std::vector<int> levels,counts,offsets;
+    torch::Tensor prefix,carry,tail,out,queue,ready,control,initial,job_slots;
+    torch::Tensor bp,bt,bping,bpong;
+    std::map<std::string,torch::Tensor> scratch_pool;
+    torch::Device owner=torch::Device(torch::kCPU);
+    cudaStream_t stream=nullptr;
+    std::map<std::string,int64_t> metrics;
+  public:
+    SummaryProgram(torch::Tensor labels,std::vector<double> tau,int r_,int d_,int block_,int tile_,int slots_=0,bool compact_=false,bool prune_=false,bool diagnostic_=true,
+                   std::shared_ptr<std::vector<dism_decode::Planner>> shared={},
+                   std::vector<dism_decode::RebuildWorkspace> *existing_workspaces=nullptr)
+        : h(shared?shared->size():(labels.dim()==2?labels.size(0):0)),n(shared&&!shared->empty()?shared->front().keys.size():(labels.dim()==2?labels.size(1):0)),r(r_),d(d_),block(block_),tile(tile_),slots(slots_),compact(compact_),prune(prune_),diagnostics_available(diagnostic_),shared_planners(std::move(shared)) {
+        TORCH_CHECK(h>0 && n>0 && (shared_planners || (labels.device().is_cpu() && labels.scalar_type()==torch::kInt32 && labels.is_contiguous())),"CPU int32 [H,N] keys required");
+        TORCH_CHECK((r==16||r==32)&&(d==32||d==64)&&int(tau.size())==h,"R16/32 DV32/64 and H taus required");
+        TORCH_CHECK(tile==32||tile==64||tile==128||tile==256,"tile must be 32/64/128/256");
+        TORCH_CHECK(n<=(1<<20) && h<=128,"probe bounds: N<=2^20, H<=128");
+        TORCH_CHECK(slots>=0 && slots<=8192 && (!compact || slots>0),"slots must be in [0,8192]; compaction requires slots>0");
+        if(!block)block=int(std::ceil(std::sqrt(2.*n))); // same block width across all heads
+        TORCH_CHECK(block>0&&block<=n*2,"block size bounds");tiles=(r*d+tile-1)/tile;
+        std::vector<int> hd,node,co{0},cn,ao{0},anc,init,prefix_map,job_ids;
+        std::vector<float> w,rho,sc,asc;
+        int64_t work=0,span=0,active=0,max_chain=0,max_anc=0,max_blocks=0,baseline_launches=0;
+        for(int hi=0;hi<h;++hi) {
+            if(!shared_planners) {
+                planners.emplace_back(r,128,4*r,5*r,tau[hi]);
+                const int *k=labels.data_ptr<int>()+int64_t(hi)*n;
+                planners.back().keys.assign(k,k+n);planners.back().rebuild();
+            }
+            auto &p=shared_planners?shared_planners->at(hi):planners.back();
+            TORCH_CHECK(p.snapshot_size==n && int(p.keys.size())==n && p.rank==r && p.tau==tau[hi],"inconsistent incremental planner snapshot");
+            dism_decode::RebuildWorkspace local_ws;
+            auto &ws=existing_workspaces?existing_workspaces->at(hi):local_ws;
+            if(!existing_workspaces)ws.prepare(p);
+            int count=p.materialized.size()+p.samples.size(),nodes=p.nodes.size();
+            offsets.push_back(nm);counts.push_back(count);levels.push_back(ws.levels);
+            maxnodes=std::max(maxnodes,nodes);
+            // Exact production baseline metadata and CPU coefficient generation.
+            if(diagnostics_available) {
+                std::vector<int> ot((8+ws.levels)*nodes);std::vector<float> oc((1+ws.levels)*nodes);
+                ws.pack_summary(p,ot.data(),oc.data());old_topo.push_back(tensor(ot));old_coef.push_back(tensor(oc));
+            }
+            if(!count) {hd.insert(hd.end(),{nn,0,nb,0,nc,0,nm,0,0,0});continue;}
+            ++active;jobs+=tiles;
+            for(int t=0;t<tiles;++t)job_ids.push_back(hi*tiles+t);
+            baseline_launches+=((r*d+31)/32)*(3+ws.levels+(ws.levels>0));
+            int blocks=(nodes+block-1)/block,chain_base=nc;
+            std::vector<int> size(nodes,1),heavy(nodes,-1),which(nodes,-1),parent,parent_node;
+            std::vector<double> node_scale(nodes,0.);
+            // Preserve the original heavy-child choices and chain arithmetic,
+            // but omit branches that cannot contribute to any stored output.
+            // A live descendant implies all its suffix-link ancestors are live.
+            std::vector<bool> live(nodes,!prune);
+            if(prune) {
+                for(int u:p.materialized)live[u]=true;
+                for(int u:p.samples)live[u]=true;
+                for(auto it=p.order.rbegin();it!=p.order.rend();++it)
+                    if(live[*it] && p.nodes[*it].link>=0)live[p.nodes[*it].link]=true;
+            }
+            for(auto it=p.order.rbegin();it!=p.order.rend();++it) {
+                int u=*it;for(int v:p.children[u]) {size[u]+=size[v];if(heavy[u]<0||size[v]>size[heavy[u]])heavy[u]=v;}
+            }
+            node.resize((nn+nodes)*7);w.resize(nn+nodes);rho.resize(nn+nodes);sc.resize(nn+nodes);
+            for(int u=0;u<nodes;++u) {
+                int at=7*(nn+u);node[at]=p.nodes[u].position;node[at+1]=nn+p.order[u];
+                node[at+2]=ws.inverse[u];node[at+3]=ws.end[u];
+                node[at+4]=p.mat_index[u]<0?-1:nm+p.mat_index[u];
+                node[at+5]=p.sample_index[u]<0?-1:nm+int(p.materialized.size())+p.sample_index[u];
+                node[at+6]=-1;
+                w[nn+u]=p.edge_weight[u];rho[nn+u]=p.edge_decay[u];
+            }
+            // Heavy paths keep the number of light edges logarithmic. Cut every
+            // path into <=sqrt(N) segments; no recursive parallel scan hierarchy.
+            int local_nodes=0,local_max=0;
+            if(p.samples.empty()) {
+                // With no sampled prefixes, only materialized subtree outputs
+                // are live. Compile batched independent range queries instead
+                // of dispatching millions of one-node chain instructions.
+                for(size_t i=0;i<p.materialized.size();) {
+                    ++nc;parent.push_back(-1);parent_node.push_back(-1);int length=0;
+                    while(i<p.materialized.size() && length<block) {
+                        int u=p.materialized[i++];cn.push_back(nn+u);sc[nn+u]=0.;++length;
+                    }
+                    co.push_back(cn.size());local_nodes+=length;local_max=std::max(local_max,length);
+                }
+            } else {
+            std::vector<int> roots{0};
+            while(!roots.empty()) {
+                int u=roots.back();roots.pop_back();
+                while(u>=0 && live[u]) {
+                    int id=nc++,par=p.nodes[u].link;parent.push_back(par<0?-1:which[par]);parent_node.push_back(par);
+                    double decay=1.;int length=0;
+                    while(u>=0 && live[u] && length<block) {
+                        which[u]=id;cn.push_back(nn+u);decay*=p.edge_decay[u];sc[nn+u]=decay;node_scale[u]=decay;++length;
+                        for(int v:p.children[u])if(v!=heavy[u] && live[v])roots.push_back(v);
+                        u=heavy[u];
+                    }
+                    co.push_back(cn.size());max_chain=std::max(max_chain,int64_t(length));
+                }
+            }
+                local_nodes=co[nc]-co[chain_base];local_max=std::min(block,local_nodes);
+            }
+            max_chain=std::max(max_chain,int64_t(local_max));
+            // A light child may attach inside its parent's segment. Keep the
+            // local affine value at that exact node, not just the segment tail.
+            for(int u:parent_node)if(u>=0 && node[7*(nn+u)+6]<0)node[7*(nn+u)+6]=nf++;
+            int longest=0;
+            for(int id=chain_base;id<nc;++id) {
+                double scale=1.;int current=id,a=parent[id-chain_base],length=0;
+                if(!p.samples.empty())while(a>=0) {
+                    int u=parent_node[current-chain_base];
+                    anc.push_back(node[7*(nn+u)+6]);asc.push_back(scale);scale*=node_scale[u];
+                    current=a;a=parent[a-chain_base];++length;
+                }
+                ao.push_back(anc.size());longest=std::max(longest,length);
+            }
+            int chains=nc-chain_base;
+            prefix_map.resize(nn+nodes,-1);
+            std::vector<bool> read(nodes,!compact);
+            if(compact)for(int j=co[chain_base];j<co[nc];++j) {
+                int u=cn[j]-nn;
+                read[ws.end[u]-1]=true;if(ws.inverse[u])read[ws.inverse[u]-1]=true;
+            }
+            int points=0;
+            for(int i=0;i<nodes;++i)if(read[i])prefix_map[nn+i]=points++;
+            prefix_pitch=std::max(prefix_pitch,points);carry_pitch=std::max(carry_pitch,blocks);
+            hd.insert(hd.end(),{nn,nodes,nb,blocks,chain_base,chains,nm,count,int(!p.samples.empty()),0});
+            for(int t=0;t<tiles;++t)for(int b=0;b<blocks;++b)init.insert(init.end(),{0,hi,t,b});
+            int64_t extra=int64_t(tiles)*(blocks+1+int64_t(chains)*(p.samples.empty()?1:2));
+            TORCH_CHECK(extra+qcap<=INT_MAX/4,"program task address exceeds int32");
+            qcap+=int(extra);
+            int64_t ancs=ao.back()-ao[chain_base];
+            work+=nodes+blocks+local_nodes+(p.samples.empty()?0:local_nodes+ancs);
+            span=std::max(span,int64_t(std::min(block,nodes)+blocks+local_max+(p.samples.empty()?0:longest+local_max)));
+            max_anc=std::max(max_anc,int64_t(longest));max_blocks=std::max(max_blocks,int64_t(blocks));
+            nn+=nodes;nb+=blocks;nm+=count;
+        }
+        if(slots) {
+            slots=std::min(slots,jobs);init.clear();
+            for(int ordinal=0;ordinal<slots;++ordinal) {
+                int job=job_ids[ordinal],hi=job/tiles,t=job%tiles;
+                for(int b=0;b<hd[10*hi+3];++b)init.insert(init.end(),{0,hi,t,b});
+            }
+        }
+        cpu={tensor(hd),tensor(node),tensor(co),tensor(cn),tensor(ao),tensor(anc),tensor(w),tensor(rho),tensor(sc),tensor(asc),tensor(init),tensor(prefix_map),tensor(job_ids)};
+        metrics={{"heads",h},{"active_heads",active},{"tokens",n},{"nodes",nn},{"matrices",nm},{"block_size",block},{"tile",tile},{"tiles_per_head",tiles},
+                 {"euler_blocks",nb},{"chain_blocks",nc},{"boundary_nodes",nf},{"max_chain_nodes",max_chain},{"max_ancestor_blocks",max_anc},
+                 {"euler_tasks",int64_t(nb)*tiles},{"local_chain_tasks",int64_t(nc)*tiles},{"total_tasks",qcap},
+                 {"baseline_launches",baseline_launches},{"program_launches",jobs?2:0},
+                 {"node_work_per_coordinate",work},{"estimated_span_node_iterations",span},{"max_euler_blocks_per_head",max_blocks},
+                 {"scratch_bytes",int64_t(nn+nb+nf)*r*d*4+int64_t(qcap)*20+(3+3*h*tiles)*4}};
+        int64_t prefix_bytes=(slots?int64_t(slots)*prefix_pitch*tile:int64_t(nn)*r*d)*4;
+        int64_t carry_bytes=(slots?int64_t(slots)*carry_pitch*tile:int64_t(nb)*r*d)*4;
+        int64_t boundary_bytes=int64_t(nf)*r*d*4;
+        metrics["scratch_bytes"]=prefix_bytes+carry_bytes+boundary_bytes+int64_t(qcap)*20+(4+4*h*tiles)*4;
+        metrics["prefix_bytes"]=prefix_bytes;metrics["carry_bytes"]=carry_bytes;metrics["boundary_bytes"]=boundary_bytes;
+        metrics["workspace_slots"]=slots;metrics["compact_prefix"]=compact;metrics["pruned_chains"]=prune;
+        metrics["prefix_rows_per_slot"]=prefix_pitch;metrics["initial_tasks"]=init.size()/4;
+        int64_t bytes=0;for(auto &x:cpu)bytes+=x.nbytes();metrics["program_bytes"]=bytes;
+    }
+    std::map<std::string,int64_t> stats() const{return metrics;}
+    // Release the large host SAM with the GIL released, before Python destroys
+    // this object. Otherwise its destructor can stall foreground submission.
+    void release_compiler() {shared_planners.reset();planners.clear();cpu.clear();old_topo.clear();old_coef.clear();}
+    std::map<std::string,torch::Tensor> workspace() const {return scratch_pool;}
+    torch::Tensor prepare(torch::Tensor prototype, bool diagnostic=true,
+                          std::map<std::string,torch::Tensor> reusable={}) {
+        TORCH_CHECK((shared_planners && int(shared_planners->size())==h) || int(planners.size())==h,"compiler already released");
+        TORCH_CHECK(!diagnostic || diagnostics_available,"diagnostic metadata not compiled");
+        TORCH_CHECK(prototype.is_cuda(),"CUDA prototype required");owner=prototype.device();c10::cuda::CUDAGuard guard(owner);stream=at::cuda::getCurrentCUDAStream();
+        device.clear();for(auto &x:cpu)device.push_back(x.pin_memory().to(owner, true));
+        if(diagnostic) {for(auto &x:old_topo)x=x.to(owner);for(auto &x:old_coef)x=x.to(owner);}
+        auto f=prototype.options().dtype(torch::kFloat32),i=prototype.options().dtype(torch::kInt32);
+        scratch_pool=std::move(reusable);
+        int reused=0,allocated_buffers=0;
+        auto scratch=[&](const std::string &name,std::vector<int64_t> shape,bool integer=false) {
+            int64_t need=1;for(auto dim:shape)need*=dim;
+            auto options=integer?i:f;
+            auto it=scratch_pool.find(name);
+            if(it!=scratch_pool.end()) {
+                const auto &t=it->second;
+                TORCH_CHECK(t.device()==owner && t.scalar_type()==(integer?torch::kInt32:torch::kFloat32)
+                    && t.dim()==1 && t.is_contiguous(),"invalid reusable summary workspace");
+            }
+            if(it!=scratch_pool.end() && it->second.numel()>=need) ++reused;
+            else {
+                // Geometric growth amortizes allocation across increasing prefixes.
+                // First allocation remains exact, preserving probe accounting.
+                int64_t capacity=it==scratch_pool.end()?need:std::max(need,it->second.numel()*2);
+                scratch_pool[name]=torch::empty({capacity},options);++allocated_buffers;
+            }
+            return scratch_pool.at(name).narrow(0,0,need).view(shape);
+        };
+        prefix=scratch("prefix",{slots?int64_t(slots)*prefix_pitch:int64_t(nn),slots?tile:r*d});
+        carry=scratch("carry",{slots?int64_t(slots)*carry_pitch:int64_t(nb),slots?tile:r*d});
+        tail=scratch("tail",{int64_t(nf),r*d});
+        out=torch::empty({nm,r*d},f);
+        queue=scratch("queue",{qcap,4},true);ready=scratch("ready",{qcap},true);
+        control=scratch("control",{4+3*h*tiles},true);initial=device[10];job_slots=scratch("job_slots",{h*tiles},true);
+        int64_t reserved=0;for(const auto &entry:scratch_pool)reserved+=entry.second.nbytes();
+        metrics["reserved_scratch_bytes"]=reserved;
+        metrics["reused_scratch_buffers"]=reused;metrics["allocated_scratch_buffers"]=allocated_buffers;
+        if(diagnostic) {bp=torch::empty({maxnodes*32},f);bt=torch::empty({((maxnodes+255)/256)*32},f);bping=torch::empty_like(bp);bpong=torch::empty_like(bp);}
+        int64_t allocated=0;
+        for(const auto &x:{prefix,carry,tail,queue,ready,control,job_slots})allocated+=x.nbytes();
+        metrics["allocated_scratch_bytes"]=allocated;
+        metrics["output_bytes"]=out.nbytes();
+        metrics["diagnostic_baseline_scratch_bytes"]=diagnostic?bp.nbytes()+bt.nbytes()+bping.nbytes()+bpong.nbytes():0;
+        TORCH_CHECK(allocated==metrics["scratch_bytes"],"scratch accounting mismatch");
+        return out;
+    }
+    // Build a private frozen matcher at the same cutoff as this summary program.
+    // The live GPU rolling band is deliberately not read or overwritten here.
+    std::vector<torch::Tensor> decode_metadata(torch::Tensor history,int capacity) {
+        TORCH_CHECK(owner.is_cuda() && int(planners.size())==h,"live compiler and prepare required before metadata upload");
+        c10::cuda::CUDAGuard guard(owner);
+        TORCH_CHECK(at::cuda::getCurrentCUDAStream()==stream,"probe stream mismatch");
+        TORCH_CHECK(history.device().is_cpu() && history.scalar_type()==torch::kInt32 && history.is_contiguous() &&
+                    history.sizes()==torch::IntArrayRef({n,3,h}) && capacity>=n,"CPU history [N,3,H] and capacity required");
+        std::vector<dism_decode::RebuildWorkspace> ws(h);
+        int pitch=(maxnodes+1)&~1,edge_pitch=1;
+        const int *data=history.data_ptr<int>();
+        for(int hi=0;hi<h;++hi) {
+            auto &p=planners[hi];p.state=p.match=0;
+            for(int i=0;i<n;++i) {
+                TORCH_CHECK(data[(int64_t(i)*3)*h+hi]==p.keys[i],"history key mismatch");
+                int reset=data[(int64_t(i)*3+2)*h+hi];TORCH_CHECK(reset==0||reset==1,"reset must be binary");
+                p.advance(data[(int64_t(i)*3+1)*h+hi],reset);
+            }
+            ws[hi].prepare(p);edge_pitch=std::max(edge_pitch,ws[hi].edges);
+        }
+        int64_t nt=int64_t(h)*13*pitch,ne=int64_t(h)*2*edge_pitch,ns=int64_t(h)*8;
+        auto host=torch::empty({nt+ne+ns+nm+h},torch::TensorOptions().dtype(torch::kFloat32).pinned_memory(true));
+        float *f=host.data_ptr<float>();int *ints=reinterpret_cast<int*>(f);
+        std::vector<int> unused_band(256);
+        for(int hi=0;hi<h;++hi) {
+            auto &p=planners[hi];
+            ws[hi].pack_snapshot(p,pitch,edge_pitch,capacity,offsets[hi],p.materialized.size(),
+                ints+int64_t(hi)*13*pitch,ints+nt+int64_t(hi)*2*edge_pitch,ints+nt+ne+8*hi,
+                unused_band.data(),f+nt+ne+ns,f+nt+ne+ns+nm+hi);
+        }
+        auto gpu=host.to(owner,true);auto ii=gpu.view(torch::kInt32);
+        return {ii.narrow(0,0,nt).view({h,13,pitch}),ii.narrow(0,nt,ne).view({h,2,edge_pitch}),
+                ii.narrow(0,nt+ne,ns).view({h,8}),gpu.narrow(0,nt+ne+ns,nm),gpu.narrow(0,nt+ne+ns+nm,h)};
+    }
+    void validate(torch::Tensor k,torch::Tensor v) {
+        TORCH_CHECK(k.is_cuda()&&k.device()==owner&&v.device()==owner&&k.is_contiguous()&&v.is_contiguous(),"prepared device/contiguous payload required");
+        TORCH_CHECK(k.dim()==3&&v.dim()==3&&k.size(0)==h&&v.size(0)==h&&k.size(1)>=n&&k.size(1)==v.size(1)&&k.size(2)==r&&v.size(2)==d,"payload [H,capacity,R/DV]");
+        TORCH_CHECK(k.scalar_type()==v.scalar_type()&&(k.scalar_type()==torch::kBFloat16||k.scalar_type()==torch::kFloat32),"FP32/BF16 payload");
+        TORCH_CHECK(at::cuda::getCurrentCUDAStream()==stream,"probe stream mismatch");
+    }
+    torch::Tensor run(torch::Tensor k,torch::Tensor v,int workers) {
+        c10::cuda::CUDAGuard guard(k.device());validate(k,v);TORCH_CHECK(workers>0&&workers<=1024,"workers in [1,1024]");
+        SummaryProgramArgs a{k.data_ptr(),v.data_ptr(),device[0].data_ptr<int>(),device[1].data_ptr<int>(),device[2].data_ptr<int>(),device[3].data_ptr<int>(),
+            device[4].data_ptr<int>(),device[5].data_ptr<int>(),device[11].data_ptr<int>(),device[12].data_ptr<int>(),job_slots.data_ptr<int>(),device[6].data_ptr<float>(),device[7].data_ptr<float>(),device[8].data_ptr<float>(),device[9].data_ptr<float>(),
+            prefix.data_ptr<float>(),carry.data_ptr<float>(),tail.data_ptr<float>(),out.data_ptr<float>(),queue.data_ptr<int>(),ready.data_ptr<int>(),control.data_ptr<int>(),
+            h,int(k.size(1)),r,d,tile,tiles,block,qcap,int(initial.numel()/4),jobs,slots,prefix_pitch,carry_pitch};
+        launch_summary_program(a,initial.data_ptr<int>(),k.scalar_type()==torch::kBFloat16,workers,stream);C10_CUDA_KERNEL_LAUNCH_CHECK();return out;
+    }
+    torch::Tensor baseline(torch::Tensor k,torch::Tensor v) {
+        TORCH_CHECK(bp.defined() && int(planners.size())==h,"live compiler and diagnostic=true required for baseline");
+        c10::cuda::CUDAGuard guard(k.device());validate(k,v);
+        for(int hi=0;hi<h;++hi)if(counts[hi]) {
+            int nodes=planners[hi].nodes.size();
+            const char *kp=(const char*)k.data_ptr()+int64_t(hi)*k.size(1)*r*k.element_size();
+            const char *vp=(const char*)v.data_ptr()+int64_t(hi)*v.size(1)*d*v.element_size();
+            for(int start=0;start<r*d;start+=32)launch_parallel_rebuild(kp,vp,old_topo[hi].data_ptr<int>(),old_coef[hi].data_ptr<float>(),
+                (DismPrefix*)bp.data_ptr<float>(),(DismPrefix*)bt.data_ptr<float>(),bping.data_ptr<float>(),bpong.data_ptr<float>(),out.data_ptr<float>()+int64_t(offsets[hi])*r*d,
+                nodes,r,d,start,std::min(32,r*d-start),levels[hi],planners[hi].tau,k.scalar_type()==torch::kBFloat16,stream);
+        }
+        C10_CUDA_KERNEL_LAUNCH_CHECK();return out;
+    }
+    torch::Tensor reference(torch::Tensor k,torch::Tensor v) {
+        TORCH_CHECK(int(planners.size())==h,"compiler already released");
+        TORCH_CHECK(k.device().is_cpu()&&v.device().is_cpu()&&k.scalar_type()==torch::kFloat32&&v.scalar_type()==torch::kFloat32&&k.is_contiguous()&&v.is_contiguous(),"CPU FP32 contiguous vectors required");
+        TORCH_CHECK(k.sizes()==torch::IntArrayRef({h,n,r})&&v.sizes()==torch::IntArrayRef({h,n,d}),"reference shape");
+        auto result=torch::empty({nm,r*d},torch::TensorOptions().dtype(torch::kFloat64));auto dest=result.data_ptr<double>();
+        const float *key=k.data_ptr<float>(),*val=v.data_ptr<float>();std::vector<double> scratch;
+        for(int hi=0;hi<h;++hi)if(counts[hi]) {
+            const auto &p=planners[hi];int nodes=p.nodes.size(),width=r*d;scratch.assign(int64_t(nodes)*width,0.);
+            for(int u=0;u<nodes;++u)if(p.nodes[u].position>=0) {
+                int pos=p.nodes[u].position;
+                for(int c=0;c<width;++c)scratch[int64_t(u)*width+c]=double(key[(int64_t(hi)*n+pos)*r+c/d])*double(val[(int64_t(hi)*n+pos)*d+c%d]);
+            }
+            for(auto it=p.order.rbegin();it!=p.order.rend();++it)if(*it) {
+                int u=*it,par=p.nodes[u].link;
+                for(int c=0;c<width;++c)scratch[int64_t(par)*width+c]+=scratch[int64_t(u)*width+c];
+            }
+            for(int u:p.order)for(int c=0;c<width;++c) {
+                double sub=scratch[int64_t(u)*width+c];
+                if(p.mat_index[u]>=0)dest[int64_t(offsets[hi]+p.mat_index[u])*width+c]=sub;
+                double value=u?p.edge_weight[u]*sub+p.edge_decay[u]*scratch[int64_t(p.nodes[u].link)*width+c]:0.;
+                scratch[int64_t(u)*width+c]=value;
+                if(p.sample_index[u]>=0)dest[int64_t(offsets[hi]+p.materialized.size()+p.sample_index[u])*width+c]=value;
+            }
+        }
+        return result;
+    }
+};
+inline void bind_summary_program(pybind11::module_ &m) {
+    pybind11::class_<SummaryProgram,std::shared_ptr<SummaryProgram>>(m,"SummaryProgram",pybind11::module_local())
+         .def(pybind11::init<torch::Tensor,std::vector<double>,int,int,int,int,int,bool,bool,bool>(),
+             pybind11::arg("labels"),pybind11::arg("tau"),pybind11::arg("r"),pybind11::arg("dv"),
+             pybind11::arg("block"),pybind11::arg("tile"),pybind11::arg("slots")=0,pybind11::arg("compact")=false,pybind11::arg("prune")=false,pybind11::arg("diagnostic")=true,pybind11::call_guard<pybind11::gil_scoped_release>())
+        .def("stats",&SummaryProgram::stats)
+        .def("release_compiler",&SummaryProgram::release_compiler,pybind11::call_guard<pybind11::gil_scoped_release>())
+        .def("workspace",&SummaryProgram::workspace)
+        .def("prepare",&SummaryProgram::prepare,pybind11::arg("prototype"),pybind11::arg("diagnostic")=true,pybind11::arg("reusable")=std::map<std::string,torch::Tensor>{},pybind11::call_guard<pybind11::gil_scoped_release>())
+        .def("decode_metadata",&SummaryProgram::decode_metadata,pybind11::call_guard<pybind11::gil_scoped_release>())
+        .def("run",&SummaryProgram::run,pybind11::call_guard<pybind11::gil_scoped_release>())
+        .def("baseline",&SummaryProgram::baseline,pybind11::call_guard<pybind11::gil_scoped_release>())
+        .def("reference",&SummaryProgram::reference,pybind11::call_guard<pybind11::gil_scoped_release>());
+}

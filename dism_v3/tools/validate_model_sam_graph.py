@@ -13,6 +13,8 @@ def main():
     p.add_argument('--length',type=int,default=511)
     p.add_argument('--steps',type=int,default=20)
     p.add_argument('--interval',type=int,default=8)
+    p.add_argument('--reference-summary-backend',choices=('native','persistent'))
+    p.add_argument('--summary-backend',choices=('native','persistent'),default='native')
     p.add_argument('--generation',action='store_true')
     p.add_argument('--shared-prime',action='store_true')
     p.add_argument('--output',type=Path,required=True)
@@ -31,8 +33,8 @@ def main():
     tokens=torch.tensor([ids],device='cuda')
     rows=[]
     with torch.inference_mode(),HardDismPrefill(workers=16) as prefill:
-        eager=SamDecodeSession(lm.model,prefill,context,rebuild_interval=a.interval)
-        graph=SamGraphDecodeSession(lm.model,prefill,context,rebuild_interval=a.interval)
+        eager=SamDecodeSession(lm.model,prefill,context,rebuild_interval=a.interval,summary_backend=a.reference_summary_backend or a.summary_backend)
+        graph=SamGraphDecodeSession(lm.model,prefill,context,rebuild_interval=a.interval,summary_backend=a.summary_backend)
         for i in range(a.steps+1):
             current=tokens[:,:a.length] if i==0 else tokens[:,a.length+i-1:a.length+i]
             outputs=[]; times=[]
@@ -51,7 +53,8 @@ def main():
                             if d is None: continue
                             snap=d.core.snapshot; n=eager.position
                             clone=HardDismDecoder(d.batch,d.heads,d.r,d.dv,d.capacity,
-                                snap[9][:d.heads].clone(),device=d.device,planner_backend='gpu',rebuild_interval=a.interval)
+                                snap[9][:d.heads].clone(),device=d.device,planner_backend='gpu',rebuild_interval=a.interval,summary_backend=a.summary_backend,
+                                summary_workspace=graph.session.summary_workspace)
                             labels=snap[7][:n].reshape(n,3,d.batch,d.heads)
                             iq=labels[:,1].permute(1,2,0).contiguous()
                             ik=labels[:,0].permute(1,2,0).contiguous()
@@ -80,11 +83,14 @@ def main():
         with torch.cuda.stream(graph.stream):
             for state in graph.session.states:
                 if state['dism'] is not None: assert state['dism'].core.check_status()==graph.position
+        summary_stats=[state['dism'].memory_stats() for state in eager.states if state['dism'] is not None]
+        with torch.cuda.stream(graph.stream):
+            graph_stats=[state['dism'].memory_stats() for state in graph.session.states if state['dism'] is not None]
         eager.close();graph.close()
         if a.generation:
             from types import SimpleNamespace
             requests=[SimpleNamespace(args=(prompt,dict(max_gen_toks=16,until=['\n']))) for prompt in ('The capital of France is','Once upon a time there was')]
-            lm.prefill=prefill;lm.decode_backend='sam'
+            lm.prefill=prefill;lm.decode_backend='sam';lm.decode_summary_backend=a.summary_backend;lm.decode_rebuild_interval=a.interval
             lm.decode_cuda_graph=False
             expected=lm.generate_until(requests)
             lm.decode_cuda_graph=True
@@ -92,10 +98,10 @@ def main():
             print(json.dumps(dict(generation_eager=expected,generation_graph=actual,equal=expected==actual)),flush=True)
 
     ordinary=[r for j,r in enumerate(rows) if j>2 and r['captures']==rows[j-1]['captures']]
-    result=dict(shared_prime=a.shared_prime,checkpoint=checkpoint,prompt=a.length,steps=a.steps,interval=a.interval,rows=rows,
+    result=dict(reference_summary_backend=a.reference_summary_backend,graph_stats=graph_stats,summary_backend=a.summary_backend,summary_stats=summary_stats,shared_prime=a.shared_prime,checkpoint=checkpoint,prompt=a.length,steps=a.steps,interval=a.interval,rows=rows,
         ordinary_eager_ms=statistics.median(r['eager_ms'] for r in ordinary),
         ordinary_graph_ms=statistics.median(r['graph_ms'] for r in ordinary))
     a.output.write_text(json.dumps(result,indent=2)+'\n')
-    print(json.dumps({k:v for k,v in result.items() if k not in ('rows','checkpoint')}),flush=True)
+    print(json.dumps({k:v for k,v in result.items() if k not in ('rows','checkpoint','summary_stats','graph_stats')}),flush=True)
 
 if __name__=='__main__': main()

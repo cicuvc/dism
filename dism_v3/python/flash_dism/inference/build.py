@@ -50,8 +50,23 @@ def build_decoder(name='dism_decode_cuda', *, fp64=False, timing=False, force=Fa
     if timing:
         flags.append('-DDISM_DECODE_TIMING=1')
     return _load(name, ['cuda_bind.cpp', 'cuda_kernels.cu', 'rebuild_parallel.cu',
-                       'linear.cu', 'gpu_planner_bind.cpp', 'gpu_planner.cu'],
+                       'linear.cu', 'gpu_planner_bind.cpp', 'gpu_planner.cu',
+                       'probe/summary_program.cu'],
                  cuda=True, flags=flags, force=force)
+
+
+@lru_cache(None)
+def load_summary_runtime():
+    """Explicit persistent decode rebuild backend; shares audited probe sources."""
+    return build_summary_runtime()
+
+
+def build_summary_runtime(*, force=False):
+    return _load('_dism_summary_runtime',
+                 ['probe/summary_program_bind.cpp', 'probe/summary_program.cu',
+                  'rebuild_parallel.cu', 'probe/concurrent_bind.cpp',
+                  'probe/concurrent_catchup.cu', 'gpu_planner.cu'], cuda=True,
+                 flags=['-DDISM_DECODE_FP64_PREFIX=0'],force=force)
 
 
 @lru_cache(None)
@@ -70,11 +85,12 @@ if __name__ == '__main__':
     import argparse
     import shutil
     parser = argparse.ArgumentParser()
-    parser.add_argument('--component', choices=('prefill', 'decode', 'summary-probe'), required=True)
+    parser.add_argument('--component', choices=('prefill', 'decode', 'summary-probe', 'summary-runtime'), required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     module = (_load('_dism_prefill', ['prefill_bind.cpp'], force=True)
               if args.component == 'prefill' else
-              load_summary_probe() if args.component == 'summary-probe' else build_decoder(force=True))
+              load_summary_probe() if args.component == 'summary-probe' else
+              build_summary_runtime(force=True) if args.component == 'summary-runtime' else build_decoder(force=True))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(module.__file__, args.output)

@@ -34,7 +34,7 @@ include = ["flash_dism", "flash_dism.*", "flash_mxfp8", "flash_mxfp8.*"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"flash_dism.inference" = ["csrc/*.cpp", "csrc/*.cu", "csrc/*.h", "csrc/*.hpp", "csrc/*.cuh"]
+"flash_dism.inference" = ["csrc/*.cpp", "csrc/*.cu", "csrc/*.h", "csrc/*.hpp", "csrc/*.cuh", "csrc/probe/*.cpp", "csrc/probe/*.cu", "csrc/probe/*.h", "csrc/probe/*.hpp"]
 "flash_mxfp8" = [
     "FUSED_CE_SOURCE.json",
     "_libs/**/*.so",

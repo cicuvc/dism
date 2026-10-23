@@ -12,7 +12,7 @@ from flash_dism.module import value_residual_mix
 
 
 class SamDecodeSession:
-    def __init__(self, model, prefill, capacity, *, rebuild_interval=512, profile_scope=None):
+    def __init__(self, model, prefill, capacity, *, rebuild_interval=512, profile_scope=None, summary_backend='native'):
         if model.training or not model.eval_hard:
             raise ValueError('SAM decoding requires eval and all-hard routing')
         if not 0 < capacity <= model.config.sequence_len:
@@ -29,6 +29,13 @@ class SamDecodeSession:
             raise ValueError('rebuild interval must be positive')
         if model.get_device().type != 'cuda':
             raise ValueError('SAM session requires a CUDA model')
+        if summary_backend not in ('native','persistent'):
+            raise ValueError('invalid summary backend')
+        self.summary_backend = summary_backend
+        self.summary_workspace = None
+        if summary_backend == 'persistent':
+            from flash_dism.inference.summary_runtime import SummaryWorkspace
+            self.summary_workspace = SummaryWorkspace(model.get_device())
         self.model, self.prefill, self.capacity = model, prefill, capacity
         self.rebuild_interval = rebuild_interval
         self._scope = profile_scope or (lambda name: nullcontext())
@@ -40,6 +47,7 @@ class SamDecodeSession:
 
     def close(self):
         self.states.clear()
+        self.summary_workspace = None
         self.failed = True
 
     @staticmethod
@@ -106,7 +114,8 @@ class SamDecodeSession:
                     hard = self.prefill(iq, ik, sq, sk, v, tau).to(v.dtype)
                     decoder = HardDismDecoder(x.shape[0], attn.heads, attn.readout_dim,
                         attn.value_dim, self.capacity, tau, device=x.device,
-                        planner_backend='gpu', rebuild_interval=self.rebuild_interval)
+                        planner_backend='gpu', rebuild_interval=self.rebuild_interval,
+                        summary_backend=self.summary_backend, summary_workspace=self.summary_workspace)
                     decoder.prime(iq, ik, sk, v)
                     state['dism'] = decoder
                 else:
@@ -173,11 +182,11 @@ class SamGraphDecodeSession:
     tokens; only replay advances device state and the mirrored host positions.
     Calls are serialized with the caller stream. Returned hidden is owned.
     """
-    def __init__(self, model, prefill, capacity, *, rebuild_interval=512):
+    def __init__(self, model, prefill, capacity, *, rebuild_interval=512, summary_backend='native'):
         self.stream = torch.cuda.Stream(device=model.get_device())
         self.stream.wait_stream(torch.cuda.current_stream(model.get_device()))
         with torch.cuda.stream(self.stream):
-            self.session = SamDecodeSession(model, prefill, capacity, rebuild_interval=rebuild_interval)
+            self.session = SamDecodeSession(model, prefill, capacity, rebuild_interval=rebuild_interval, summary_backend=summary_backend)
         self.graph = None
         self.warmed = False
         self.captures = 0
@@ -277,7 +286,8 @@ def generate_until_sam(adapter, requests):
         stops = [until] if isinstance(until, str) else until
         session_type = SamGraphDecodeSession if getattr(adapter, 'decode_cuda_graph', False) else SamDecodeSession
         session = session_type(adapter.model, adapter.prefill, adapter.max_length,
-            rebuild_interval=getattr(adapter, 'decode_rebuild_interval', 512))
+            rebuild_interval=getattr(adapter, 'decode_rebuild_interval', 512),
+            summary_backend=getattr(adapter, 'decode_summary_backend', 'native'))
         output = []
         try:
             tokens = torch.tensor([ids], device=adapter.model.get_device(), dtype=torch.long)

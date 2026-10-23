@@ -2056,3 +2056,193 @@ Example: retain quadratic likelihood scoring while enabling cached graph
 Add `--hard-backend sam` instead to switch likelihood full-forward execution too.
 The adapter and runner files are in `~/downstream-eval` outside this Git repo;
 commits here contain the implementation, regression/diagnostic tools and docs.
+
+#### Persistent summary backend integrated with model decode
+
+This subsection records the initial full-prefix control plane. The incremental
+planner subsection below supersedes its CPU implementation and latency results.
+
+The model/evaluation session now accepts `--decode-summary-backend persistent`
+(default remains **native**). It requires `--decode-backend sam` and works with
+or without `--decode-cuda-graph`. It replaces synchronous rebuild only; it does
+not enable concurrent rebuild. The evaluation runner records the backend and
+uses a separate `_summary_persistent` results suffix. Example:
+
+```sh
+--decode-backend sam --decode-cuda-graph \
+--decode-rebuild-interval 512 --decode-summary-backend persistent
+```
+
+`HardDismDecoder(..., planner_backend='gpu', summary_backend='persistent')`
+selects `PersistentGpuPlannerCache`. Native prime still initializes the complete
+history and rolling band. At rebuild, the new backend copies only label history
+not previously copied to its pinned buffer, compiles the complete frozen prefix,
+constructs private matcher metadata and summary output, runs the persistent
+interpreter, and replaces the snapshot on the owner stream. KV/value/history/band
+allocations remain stable. The redundant bootstrap native planner/scratch is
+released after the first successful replacement. The CPU compiler is still a
+full-prefix implementation, not the production incremental planner.
+
+The graph wrapper drops its old graph before rebuild and recaptures against the
+new snapshot afterward. Ordinary GPU planner math and kernels are unchanged.
+Errors poison the cache rather than permit a partial-state retry. The backend
+currently requires default sample spacing4R/materialization threshold5R; custom
+thresholds are rejected explicitly.
+
+A session owns one `SummaryWorkspace` for all six DISM layers. Its prefix, carry,
+boundary, queue, readiness and control buffers are shared serially on that stream;
+`prepare` returns views into sufficient existing storage and grows insufficient
+buffers geometrically. Active summary outputs and topology are separately owned
+and are never reused as scratch. Another stream is rejected. This pool is not
+safe for future concurrent jobs on different streams without separate ownership.
+Statistics distinguish logical scratch use, retained capacity, allocations and
+reused buffers. Native diagnostic GPU workspace is not allocated for the program.
+
+A new `_dism_summary_runtime` extension is included in the wheel build and has a
+checkout JIT fallback. It shares the audited summary implementation with the
+probe, but **does not require `DISM_BUILD_PROBES=1`**. Probe loading and concurrent
+prototype selection remain gated/separate. Runtime build entrypoint:
+
+```sh
+MAX_JOBS=2 python dism_v3/python/flash_dism/inference/build.py \
+  --component summary-runtime --output dism_v3/build/summary_runtime/runtime.so
+```
+
+**Real-model compiler pruning.** Merely wiring the old program into decode was
+slow: the first actual8K rebuild measured about874 ms in graph mode. Real layer
+suffix trees contain roughly140K–150K nodes but only hundreds of stored summary
+outputs; the original compiler emitted hundreds of thousands of tasks for chains
+with no contribution to an output. The runtime now marks materialized/sample
+nodes and their suffix-link ancestors live, omits dead light branches and trims
+dead heavy-chain tails. It preserves the original heavy-child choices, surviving
+chain boundaries/arithmetic and complete Euler scan. It also skips diagnostic-only
+baseline metadata. No CUDA math or scheduling kernel was changed. Legacy probe
+constructor defaults remain unchanged; pruning is explicit in the runtime call.
+
+On frozen real PG19 book10 model states at8191 tokens, the six layers' GPU summary
+medians with512 persistent CTAs sum to **17.25 ms** (3.64,2.68,2.47,2.92,2.84,2.70).
+For example, layer7 falls from533952 tasks to11008, and its logical scratch from
+222.89 MiB to6.03 MiB. A64/256/512 CTA sweep selected512 for this **synchronous**
+backend; this is not a recommendation for a concurrent foreground/background
+configuration. R32/DV64 uses tile128, block256 and16 workspace slots.
+
+**End-to-end limitation remains significant.** Step-22888 checkpoint, B=1,
+8191-token PG19 prime, interval512, shared initial state, 516 decode steps:
+
+* Eager native ordinary median24.68 ms; graph persistent ordinary median2.02 ms.
+* At step513, native eager rebuild step167.85 ms versus persistent graph rebuild
+  + recapture **484.83 ms**. These paths differ in graph use; ordinary graph speed
+  is not a persistent-summary speedup. Persistent remains opt-in because the full
+  rebuild is still slower despite fewer GPU launches.
+* The shared retained scratch pool is **64.68 MiB**, shared across six layers;
+  current summaries/topology/history/task buffers are additional memory. Most
+  later layer builds reuse all seven scratch allocations. The unpruned integration
+  retained about297 MiB on the same rebuilt sequence.
+* Per-layer CPU compilation is about29–51 ms and preparation about13–15 ms, plus
+  host destruction/release. This serial full-prefix control plane now dominates.
+  Reusing the incremental planner/metadata compiler, and eventually controlled
+  concurrent rebuilding, is required before making this a performance default.
+* With identical complete prime state, **all516 decoded hidden tensors are
+  bitwise equal between native eager and persistent graph in this run**, including
+  the rebuild boundary. This is a measured case, not a general bitwise guarantee
+  for alternative summary accumulation orders or independent SAM prefills.
+
+Validation:24 tests pass across new persistent integration, native/persistent
+model sessions and compiler pruning;51 existing summary/concurrent probe tests
+pass. Pruned versus unpruned program outputs are bitwise checked at tau0/.35/1.5;
+dense FP64 decode comparisons retain `atol=2e-5, rtol=2e-3`. Tests cover empty
+summaries, repeated/periodic/random labels, resets, BF16/FP32, short prime,
+multiple rebuilds, graph recapture, unchanged old outputs and scratch addresses.
+Memcheck and synccheck each run15 selected persistent/replay cases with zero errors. No full-model
+MXFP8 sanitizer coverage or full downstream-quality evaluation is claimed.
+Diagnostics are in `tools/profile_persistent_model_summary.py` and the extended
+`tools/validate_model_sam_graph.py`; artifacts remain under ignored
+`build/eval_sam/{summary_*sweep*,graph_pruned_native_8k*,persistent_*}`.
+
+A second real-checkpoint run forces interval4 over12 appended tokens to exercise
+multiple persistent rebuilds: all hidden outputs remain bitwise equal to native
+eager. First persistent rebuild+recapture is458.70 ms, the next344.15 ms, versus
+147.39/147.41 ms native. The later rebuild copies only4 new labels/head and mostly
+reuses all7 scratch buffers. Per-layer compiler destruction alone costs11–12 ms;
+the bootstrap-release cost is gone after the first switch. Thus the remaining
+regression is not solely one-time setup.
+
+The external adapter's generation entrypoint was checked with the persistent
+backend and interval3, graph on/off, for two16-token greedy requests. Both strings
+matched; this exercised repeated rebuilds through the evaluation switch as well
+as the direct session API.
+
+#### Persistent rebuild now reuses the incremental native CPU planner
+
+The persistent backend retains its original `NativeCache` after prime. At rebuild
+it calls `refresh_gpu(history, position, live_band, build_vectors=False)`:
+
+* The native pinned arena imports only newly appended labels and the live band;
+  the persistent wrapper no longer maintains/copies a second complete host history.
+* The existing per-head worker pool extends each retained SAM by the new keys,
+  updates scalar/tree data, and prepares its retained metadata workspace.
+* Vector-summary generation is skipped; no placeholder output allocation or old
+  multi-launch rebuild occurs. Export/decode is guarded while summary is pending.
+* `summary_program` compiles the persistent instruction list directly from these
+  planners and workspaces, without copying/rebuilding/destructing another SAM.
+* The new summary output is installed, and native `gpu_snapshot()` packs matcher
+  metadata in parallel using the existing pinned arena. There is no separate
+  persistent `decode_metadata` query replay. The live GPU band address is retained.
+* The program runs on the owner stream, then releases only its compiler buffers
+  and shared ownership reference. Planner storage and its worker pool stay alive
+  for the next generation. The shared scratch pool and graph recapture protocol
+  are unchanged.
+
+This is **incremental SAM extension**, not an O(delta) claim for every stage:
+scalar/tree refresh still visits the snapshot and reconstructs matcher state,
+and the instruction program/topology are regenerated for the frozen prefix.
+The redundant full-prefix SAM construction, second query replay, and planner
+teardown are removed.
+
+`SummaryProgram` host code/bindings are shared through
+`csrc/probe/summary_program_host.hpp`; the native decoder extension now links
+the existing persistent CUDA kernel too. Standalone summary/probe bindings remain
+available and module-local, avoiding duplicate Python type registration. Native
+programs share ownership of planner storage: dropping the cache cannot leave a
+dangling compiler pointer. CUDA translation units and kernel math are unchanged.
+The common host header is included in wheel/JIT source packaging.
+
+Real-checkpoint validation (PG19 book10,8191-token prime, B=1, interval512,
+516 appended tokens, identical initial state):
+
+| Graph decode configuration | Ordinary median | Rebuild + recapture at step513 |
+| --- | ---: | ---: |
+| Native summary control, newly rerun | 2.013 ms | 173.67 ms |
+| Persistent, previous full-prefix compiler | ~2.02 ms | 484.83 ms |
+| Persistent, incremental planner | 2.010 ms | **149.96 ms** |
+
+Thus this sampled rebuild step is about69% faster than the preceding persistent
+implementation and14% faster than the native graph control. These are diagnostic
+runs/single boundary measurements, not a broad throughput guarantee. All516
+hidden outputs in the incremental run are bitwise equal to native eager,
+including the rebuild and subsequent replay. Ordinary-step math is unchanged.
+Each layer reports `delta_labels=512`, `sam_extended_keys=6144` (=12 heads*512),
+which verifies that the complete8703-token prefix was not reinserted.
+
+Per-layer elapsed host measurements: incremental refresh4.17–8.68 ms,
+instruction compilation3.76–6.46 ms, preparation/export3.44–10.94 ms;
+compiler release **.007–.011 ms**, versus11–12 ms previously. Refresh includes
+stream synchronization and can wait for the preceding layer's queued GPU work;
+these are not isolated CPU hardware-counter timings. The retained CPU planner
+uses memory until session close instead of being torn down at each boundary.
+
+No switches/defaults changed: explicitly select `--decode-summary-backend
+persistent`; native remains the default. Native prime and synchronous rebuild
+remain in use, and no concurrent publication is enabled.
+
+35 tests pass across persistent dense-oracle/pruning/ownership cases, native
+incremental rebuild regressions and model graph sessions. Another51 existing
+summary/concurrent probe tests pass. New checks cover pending-output export
+rejection, native planner identity retention, per-rebuild delta extension counts,
+and a program outliving its native cache. Artifacts are under ignored
+`build/eval_sam/{incremental_*,graph_incremental_8k*,graph_native_control_8k*}`.
+
+Compute Sanitizer memcheck and synccheck each pass16 selected persistent/graph
+cases with zero errors, including incremental rebuilds and planner ownership.
+The strengthened lifetime test prepares/runs a program after dropping its native
+cache owner. No full-model MXFP8 sanitizer coverage is claimed.

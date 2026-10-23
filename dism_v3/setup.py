@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parent
 class BuildCUDA(build_ext):
     def build_extension(self, ext):
         if ext.name != 'cu_flash_dism':
-            component = 'prefill' if ext.name == '_dism_prefill' else 'decode'
+            component = ('prefill' if ext.name == '_dism_prefill' else
+                         'summary-runtime' if ext.name == '_dism_summary_runtime' else 'decode')
             subprocess.run([
                 sys.executable, str(ROOT / 'python/flash_dism/inference/build.py'),
                 '--component', component,
@@ -45,6 +46,6 @@ class BuildPython(build_py):
 
 setup(
     ext_modules=[Extension(name, sources=[]) for name in
-                 ('cu_flash_dism', '_dism_prefill', 'dism_decode_cuda')],
+                 ('cu_flash_dism', '_dism_prefill', 'dism_decode_cuda', '_dism_summary_runtime')],
     cmdclass={'build_ext': BuildCUDA, 'build_py': BuildPython},
 )
