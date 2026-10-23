@@ -64,3 +64,35 @@ def test_session_state_and_rebuild(length):
         full.close()
     for name, value in model.state_dict().items():
         torch.testing.assert_close(value, before[name], atol=0, rtol=0)
+
+
+@pytest.mark.parametrize('length', [1, 17, 256])
+def test_graph_session_replay_rebuild(length):
+    from nanochat.models import build_model, ModelSpec
+    from flash_dism.inference import HardDismPrefill
+    from nanochat.models.dism.inference import SamGraphDecodeSession
+    torch.manual_seed(11)
+    model = build_model(ModelSpec('dism_gdn_hybrid', 1, dict(
+        sequence_len=512, vocab_size=128, n_layer=2, n_head=2, n_embd=64,
+        intermediate_size=128, head_dim=32, value_dim=32, readout_dim=16,
+        qk_vocab_size=32, mxfp8=False, mxfp8_projections=False))).cuda()
+    model.init_weights(); model.eval()
+    tokens = torch.randint(128, (1,length+7), device='cuda')
+    with torch.inference_mode(), HardDismPrefill(workers=2) as prefill:
+        eager = SamDecodeSession(model,prefill,length+7,rebuild_interval=3)
+        graph = SamGraphDecodeSession(model,prefill,length+7,rebuild_interval=3)
+        expected=[eager.features(tokens[:,:length])]
+        actual=[graph.features(tokens[:,:length])]
+        for i in range(length,length+7):
+            expected.append(eager.features(tokens[:,i:i+1]))
+            actual.append(graph.features(tokens[:,i:i+1]))
+        torch.testing.assert_close(torch.cat(actual,1),torch.cat(expected,1),atol=.005,rtol=.02)
+        assert graph.position==length+7 and graph.captures==3
+        graph.stream.synchronize()
+        with torch.cuda.stream(graph.stream):
+            for state in graph.session.states:
+                if state['dism'] is not None:
+                    assert state['dism'].core.check_status()==graph.position
+        with pytest.raises(ValueError,match='capacity'):
+            graph.features(tokens[:,:1])
+        eager.close(); graph.close()

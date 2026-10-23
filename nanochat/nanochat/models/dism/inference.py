@@ -49,7 +49,13 @@ class SamDecodeSession:
         joined = projected if previous is None else torch.cat((previous, projected), 1)
         output = conv.depthwise_silu(joined)[:, -x.shape[1]:].contiguous()
         keep = conv.kernel_size - 1
-        states[name] = joined[:, -keep:].clone() if keep else joined[:, :0].clone()
+        tail = joined[:, -keep:] if keep else joined[:, :0]
+        if tail.shape[1] < keep:
+            tail = F.pad(tail, (0, 0, keep-tail.shape[1], 0))
+        if previous is None:
+            states[name] = tail.clone()
+        else:
+            previous.copy_(tail)
         return output
 
     def _mixer(self, attn, x, state, v_first, prime):
@@ -68,8 +74,12 @@ class SamDecodeSession:
             g = -attn.gdn_A_log.float().exp() * F.softplus(attn.gdn_a_proj(x).float() + attn.gdn_dt_bias.float())
         fn = chunk_gated_delta_rule if prime else fused_recurrent_gated_delta_rule
         with self._scope('decode/gdn_recurrent'):
-            output, state['gdn'] = fn(q=q, k=k, v=v, g=g, beta=beta,
+            output, next_gdn = fn(q=q, k=k, v=v, g=g, beta=beta,
                 initial_state=state['gdn'], output_final_state=True, use_qk_l2norm_in_kernel=True)
+            if state['gdn'] is None:
+                state['gdn'] = next_gdn
+            else:
+                state['gdn'].copy_(next_gdn)
         if not getattr(attn, 'is_pure_gdn', False):
             from flash_dism.kernels.voc_glue import prepare_embedding
             from flash_dism.kernels.interp_true import emb_fwd_true
@@ -108,13 +118,15 @@ class SamDecodeSession:
 
     @torch.inference_mode()
     def features(self, tokens):
-        if torch.cuda.is_current_stream_capturing():
+        if torch.cuda.is_current_stream_capturing() and not getattr(self, '_capturing', False):
             raise ValueError('model SAM session requires eager execution')
         if self.failed or self.model.training or not self.model.eval_hard:
             raise ValueError('session is closed, failed, or model is not in all-hard eval mode')
         if torch.cuda.current_stream(self.model.get_device()) != self.stream:
             raise ValueError('session CUDA stream changed')
-        if tokens.ndim != 2 or tokens.shape[1] <= 0 or tokens.device != self.model.get_device():
+        if (tokens.ndim != 2 or min(tokens.shape) <= 0
+                or tokens.dtype not in (torch.int32, torch.int64)
+                or tokens.device != self.model.get_device()):
             raise ValueError('tokens must be nonempty CUDA [B,N] on model device')
         b, n = tokens.shape
         if self.batch is not None and b != self.batch:
@@ -154,6 +166,94 @@ class SamDecodeSession:
             raise
 
 
+class SamGraphDecodeSession:
+    """Own a non-default stream and recapture after each SAM rebuild.
+
+    Prefill and the first append execute eagerly. Capture itself consumes no
+    tokens; only replay advances device state and the mirrored host positions.
+    Calls are serialized with the caller stream. Returned hidden is owned.
+    """
+    def __init__(self, model, prefill, capacity, *, rebuild_interval=512):
+        self.stream = torch.cuda.Stream(device=model.get_device())
+        self.stream.wait_stream(torch.cuda.current_stream(model.get_device()))
+        with torch.cuda.stream(self.stream):
+            self.session = SamDecodeSession(model, prefill, capacity, rebuild_interval=rebuild_interval)
+        self.graph = None
+        self.warmed = False
+        self.captures = 0
+        self.static_tokens = None
+        self.static_output = None
+
+    @property
+    def position(self):
+        return self.session.position
+
+    def close(self):
+        self.stream.synchronize()
+        self.graph = self.static_tokens = self.static_output = None
+        self.session.close()
+
+    @torch.inference_mode()
+    def features(self, tokens):
+        if torch.cuda.is_current_stream_capturing():
+            raise ValueError('graph session manages its own capture and replay')
+        inner = self.session
+        if inner.failed or inner.model.training or not inner.model.eval_hard:
+            raise ValueError('session is closed, failed, or model is not in all-hard eval mode')
+        if (tokens.device != inner.model.get_device() or tokens.ndim != 2
+                or min(tokens.shape) <= 0 or tokens.dtype not in (torch.int32, torch.int64)):
+            raise ValueError('tokens must be nonempty CUDA [B,N] on model device')
+        if self.position and tokens.shape != (inner.batch, 1):
+            raise ValueError('graph session requires a fixed batch and one new token')
+        if self.position + tokens.shape[1] > inner.capacity:
+            raise ValueError('session capacity exceeded')
+        caller = torch.cuda.current_stream(tokens.device)
+        self.stream.wait_stream(caller)
+        try:
+            with torch.cuda.stream(self.stream):
+                tokens.record_stream(self.stream)
+                if not self.position or not self.warmed:
+                    was_primed = bool(self.position)
+                    result = inner.features(tokens)
+                    self.warmed = was_primed
+                else:
+                    decoders = [s['dism'] for s in inner.states if s['dism'] is not None]
+                    if any(d.position-d.snapshot_position >= d.rebuild_interval for d in decoders):
+                        self.graph = self.static_output = None
+                        for d in decoders:
+                            d.core.rebuild()
+                            d.snapshot_position = d.position
+                    if self.graph is None:
+                        self.static_tokens = tokens.clone()
+                        self.stream.synchronize()
+                        graph = torch.cuda.CUDAGraph()
+                        position = inner.position
+                        inner._capturing = True
+                        try:
+                            with torch.cuda.graph(graph, stream=self.stream):
+                                self.static_output = inner.features(self.static_tokens)
+                        finally:
+                            inner._capturing = False
+                            inner.position = position
+                            for d in decoders:
+                                d.position = position
+                        self.graph = graph
+                        self.captures += 1
+                    self.static_tokens.copy_(tokens)
+                    self.graph.replay()
+                    inner.position += 1
+                    for d in decoders:
+                        d.position += 1
+                    result = self.static_output.clone()
+                result.record_stream(caller)
+            caller.wait_stream(self.stream)
+            return result
+        except Exception:
+            inner.failed = True
+            caller.wait_stream(self.stream)
+            raise
+
+
 @torch.inference_mode()
 def generate_until_sam(adapter, requests):
     """Evaluation adapter entrypoint: greedy, independent unpadded requests.
@@ -175,7 +275,8 @@ def generate_until_sam(adapter, requests):
         ids = ids[-budget:]
         until = options.get('until', [])
         stops = [until] if isinstance(until, str) else until
-        session = SamDecodeSession(adapter.model, adapter.prefill, adapter.max_length,
+        session_type = SamGraphDecodeSession if getattr(adapter, 'decode_cuda_graph', False) else SamDecodeSession
+        session = session_type(adapter.model, adapter.prefill, adapter.max_length,
             rebuild_interval=getattr(adapter, 'decode_rebuild_interval', 512))
         output = []
         try:

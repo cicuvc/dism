@@ -1843,3 +1843,63 @@ finite hidden output. All six session regression tests pass after the interval
 and optional profiling-scope changes. The earlier existing BF16 packed-prefill
 bitwise failure reproduced unchanged on standalone rerun; it was not suppressed.
 Raw traces/results stay under ignored `build/eval_sam/decode_components*`.
+
+#### CUDA Graph model decode session
+
+The eager model session, rebuild-512 default and component diagnostics above
+were committed as `2190f27`. The next implementation adds
+`SamGraphDecodeSession`, opt-in through
+`--decode-backend sam --decode-cuda-graph` in both local evaluation adapters and
+the layout runner. The runner separates `_graph` output directories and records
+the flag. Default evaluation/decode behavior remains unchanged.
+
+The wrapper owns a non-default CUDA stream. Prefill and the first append are
+eager; the first append warms the exact decode operators. Subsequent calls
+capture/replay the entire hidden forward: embedding, all GDN/DISM frontends,
+vocabulary selection, GPU SAM planner, recurrent updates, postnorm/MXFP8 FFN,
+and final norm. LM head, greedy selection and stop handling remain outside the
+graph. Convolution K-1 histories (including short-prompt left zeros) and GDN
+states update in place so captured input addresses stay valid. Returned hidden
+is cloned out of graph storage so later replays cannot overwrite earlier outputs.
+
+Capture executes Python but does not consume a token on the GPU. The wrapper
+restores Python positions after capture, then advances every layer's host mirror
+exactly once per replay. Before the rebuild horizon it destroys the old graph,
+rebuilds each layer outside capture, updates snapshot positions and recaptures
+against the new topology/storage. Capacity and batch checks remain outside replay;
+a partial failure poisons the session. Request operations and model usage must
+remain serial; changing model weights or overlapping sessions is unsupported.
+
+`tools/validate_model_sam_graph.py` compares against **eager SAM cached decode**,
+not quadratic recomputation. Real step-22888 checkpoint, PG19 book 10, B=1:
+
+| Prompt | Interval | Decode steps | Eager ordinary median | Graph ordinary median |
+| --- | ---: | ---: | ---: | ---: |
+| 511 | 8 | 20 | 24.81 ms | 1.84 ms |
+| 8191 | 512 | 516 | 24.82 ms | 2.01 ms |
+
+The 511-token run produced bitwise-equal hidden throughout, crossing two forced
+rebuilds. At 8191 tokens, independent SAM prefills already differ before any
+capture (initial hidden relative L2 .01655; 502/517 scored positions agreed on
+greedy tokens in that run). To isolate graph correctness, `--shared-prime` clones
+identical complete convolution/GDN/SAM history into an independently owned cache,
+including native planner construction from the complete history. **All 516 decode
+steps were then bitwise equal**, including rebuild at step513 and recapture.
+That boundary took 180.41 ms eager versus 184.97 ms graph; the first capture was
+also excluded from ordinary-step medians. Graph acceleration does not remove
+rebuild latency or change the existing prefill numerical limitation.
+
+Nine session tests pass, covering prompt lengths1/17/256, input changes, multiple
+replays/rebuilds, position/capacity and output ownership. Kernels/math and numerical
+tolerances are unchanged. Real-checkpoint logs/results are ignored under
+`build/eval_sam/graph_real*.{log,json}`.
+
+Compute Sanitizer memcheck and synccheck each ran the three small-model graph
+session cases (short/aligned prompt, replay and rebuild), with **zero errors**.
+This does not claim sanitizer coverage of the full MXFP8 checkpoint. The earlier
+unchanged BF16 packed-prefill bitwise-comparison failure remains documented above.
+
+The local evaluation `generate_until` entrypoint was also exercised with graph
+on/off for two short prompts (16 greedy tokens each); both generated strings
+matched eager SAM exactly. This validates the adapter switch, not broad task
+quality equivalence with quadratic generation.
