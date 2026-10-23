@@ -18,10 +18,23 @@ __device__ void push(SummaryProgramArgs a,int op,int h,int tile,int index) {
 __global__ void reset_program(SummaryProgramArgs a) {
     int i=blockIdx.x*blockDim.x+threadIdx.x;
     if(i<a.queue_capacity)a.ready[i]=i<a.initial_tasks;
-    if(i<3+3*a.head_count*a.tiles)a.control[i]=i==0?a.initial_tasks:0;
+    int next_job=3+3*a.head_count*a.tiles;
+    if(i<=next_job)a.control[i]=i==0?a.initial_tasks:(i==next_job?a.slots:0);
+    if(i<a.slots)a.job_slots[a.job_ids[i]]=i;
 }
 
-template<class T> __global__ void interpret(SummaryProgramArgs a) {
+template<bool Bounded> __device__ __forceinline__ int64_t prefix_address(
+        SummaryProgramArgs a,int workspace,int base,int pos,int channels,int coord,int lane) {
+    if constexpr(Bounded)return (int64_t(workspace)*a.prefix_pitch+a.prefix_map[base+pos])*a.tile+lane;
+    else return int64_t(base+pos)*channels+coord;
+}
+template<bool Bounded> __device__ __forceinline__ int64_t carry_address(
+        SummaryProgramArgs a,int workspace,int base,int block,int channels,int coord,int lane) {
+    if constexpr(Bounded)return (int64_t(workspace)*a.carry_pitch+block)*a.tile+lane;
+    else return int64_t(base+block)*channels+coord;
+}
+
+template<class T,bool Bounded> __global__ void interpret(SummaryProgramArgs a) {
     // Necessary inter-warp dispatch communication; vector arithmetic stays in registers.
     __shared__ int command[4];
     int lane=threadIdx.x,channels=a.r*a.d;
@@ -45,6 +58,9 @@ template<class T> __global__ void interpret(SummaryProgramArgs a) {
         const int *hd=a.heads+10*h;
         int base=hd[0],n=hd[1],ebase=hd[2],blocks=hd[3],cbase=hd[4],chains=hd[5];
         int coord=tile*a.tile+lane,job=h*a.tiles+tile;
+        // Job identity is immutable even after its workspace is assigned to a
+        // newer job. Boundary-completion instructions never access that space.
+        int workspace=Bounded?a.job_slots[job]:0;
         if(coord<channels) {
             if(op==0) { // local Euler prefix, sqrt(N) nodes per instruction
                 int begin=index*a.block_size,end=min(n,begin+a.block_size);float sum=0.f,correction=0.f;
@@ -53,21 +69,22 @@ template<class T> __global__ void interpret(SummaryProgramArgs a) {
                     int p=a.nodes[7*node];
                     if(p>=0)compensated_add(read_value(((const T*)a.keys)[(int64_t(h)*a.capacity+p)*a.r+coord/a.d])*
                                      read_value(((const T*)a.values)[(int64_t(h)*a.capacity+p)*a.d+coord%a.d]),sum,correction);
-                    a.prefix[int64_t(base+i)*channels+coord]=sum;
+                    if(!Bounded || a.prefix_map[base+i]>=0)
+                        a.prefix[prefix_address<Bounded>(a,workspace,base,i,channels,coord,lane)]=sum;
                 }
-                a.block_carry[int64_t(ebase+index)*channels+coord]=sum;
+                a.block_carry[carry_address<Bounded>(a,workspace,ebase,index,channels,coord,lane)]=sum;
             } else if(op==1) { // one sequential scan of sqrt(N) block totals
                 float sum=0.f,correction=0.f;
                 for(int b=0;b<blocks;++b) {
-                    int64_t at=int64_t(ebase+b)*channels+coord;
+                    int64_t at=carry_address<Bounded>(a,workspace,ebase,b,channels,coord,lane);
                     float value=a.block_carry[at];a.block_carry[at]=sum;compensated_add(value,sum,correction);
                 }
             } else if(op==2) { // independent bounded chain program
                 float acc=0.f,correction=0.f;
                 for(int j=a.chain_offsets[index];j<a.chain_offsets[index+1];++j) {
                     int u=a.chain_nodes[j],tin=a.nodes[7*u+2],tout=a.nodes[7*u+3]-1;
-                    float right=a.prefix[int64_t(base+tout)*channels+coord]+a.block_carry[int64_t(ebase+tout/a.block_size)*channels+coord];
-                    float left=tin? a.prefix[int64_t(base+tin-1)*channels+coord]+a.block_carry[int64_t(ebase+(tin-1)/a.block_size)*channels+coord]:0.f;
+                    float right=a.prefix[prefix_address<Bounded>(a,workspace,base,tout,channels,coord,lane)]+a.block_carry[carry_address<Bounded>(a,workspace,ebase,tout/a.block_size,channels,coord,lane)];
+                    float left=tin? a.prefix[prefix_address<Bounded>(a,workspace,base,tin-1,channels,coord,lane)]+a.block_carry[carry_address<Bounded>(a,workspace,ebase,(tin-1)/a.block_size,channels,coord,lane)]:0.f;
                     float subtree=right-left;
                     int mid=a.nodes[7*u+4],sid=a.nodes[7*u+5];
                     if(mid>=0)a.output[int64_t(mid)*channels+coord]=subtree;
@@ -103,6 +120,18 @@ template<class T> __global__ void interpret(SummaryProgramArgs a) {
                 if(last+1==chains) {
                     if(hd[8])for(int b=0;b<chains;++b)push(a,3,h,tile,cbase+b);
                     else Atomic(a.control[2]).fetch_add(1,cuda::memory_order_release);
+                    if constexpr(Bounded) {
+                        // Every reader of this prefix/carry slot has completed.
+                        // op3 reads only global boundary values and output; it
+                        // may overlap the next job overwriting the released slot.
+                        int ordinal=Atomic(a.control[3+3*a.head_count*a.tiles]).fetch_add(1,cuda::memory_order_relaxed);
+                        if(ordinal<a.jobs) {
+                            int next=a.job_ids[ordinal],nh=next/a.tiles,nt=next%a.tiles;
+                            a.job_slots[next]=workspace;
+                            __threadfence();
+                            for(int b=0;b<a.heads[10*nh+3];++b)push(a,0,nh,nt,b);
+                        }
+                    }
                 }
             } else {
                 int last=Atomic(a.control[3+2*a.head_count*a.tiles+job]).fetch_add(1,cuda::memory_order_acq_rel);
@@ -114,9 +143,14 @@ template<class T> __global__ void interpret(SummaryProgramArgs a) {
 }
 extern "C" void launch_summary_program(SummaryProgramArgs a,const int *initial,bool bf16,int workers,cudaStream_t stream) {
     if(!a.jobs)return;
-    int count=max(a.queue_capacity,3+3*a.head_count*a.tiles);
+    int count=max(a.queue_capacity,4+3*a.head_count*a.tiles);
     reset_program<<<(count+255)/256,256,0,stream>>>(a);
     cudaMemcpyAsync(a.queue,initial,int64_t(a.initial_tasks)*4*sizeof(int),cudaMemcpyDeviceToDevice,stream);
-    if(bf16)interpret<__nv_bfloat16><<<workers,a.tile,0,stream>>>(a);
-    else interpret<float><<<workers,a.tile,0,stream>>>(a);
+    if(a.slots) {
+        if(bf16)interpret<__nv_bfloat16,true><<<workers,a.tile,0,stream>>>(a);
+        else interpret<float,true><<<workers,a.tile,0,stream>>>(a);
+    } else {
+        if(bf16)interpret<__nv_bfloat16,false><<<workers,a.tile,0,stream>>>(a);
+        else interpret<float,false><<<workers,a.tile,0,stream>>>(a);
+    }
 }

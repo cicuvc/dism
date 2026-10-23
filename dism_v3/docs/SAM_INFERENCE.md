@@ -759,3 +759,180 @@ python dism_v3/tools/bench_summary_program.py --heads 1 12 --lengths 8192 \
   --block 256 --tile 128 --workers 128 256 512 1024 \
   --output dism_v3/build/summary_program/fresh.json
 ```
+
+### Scratch lifetime / in-place reduction analysis
+
+The prototype above is committed as `8a0a473`. CPU read-set analysis of the same
+8K/H12/R32/DV64/S256 synthetic labels shows that the dense Euler prefix accounts
+for more than 99% of scratch. The current interpreter already updates block
+totals into exclusive carries in place and updates sampled outputs from local
+to complete affine values in place. Subtree values and local affine accumulators
+live in registers; there is no separate dense subtree or path matrix array to
+remove by aliasing.
+
+| Pattern | Dense prefix MiB | Prefix rows actually read | Prefix MiB with read-set compaction |
+|---|---:|---:|---:|
+| Repeat | 768.094 | 98,316 / 98,316 | 768.094 |
+| Period-7 | 768.094 | 98,316 / 98,316 | 768.094 |
+| Vocabulary-4 | 1,243.531 | 972 / 159,172 | 7.594 |
+
+Only interval endpoints are read by subtree queries. Heads without sampled
+prefixes need endpoints for materialized outputs only, hence the large savings
+in vocabulary-4. A further backward liveness pass through sampled-prefix
+ancestors reduces the repeat/periodic prefix estimates to 756.188/684.750 MiB;
+that alone does not solve long-chain memory use. Endpoint compaction can preserve
+all current summation order by retaining the same scan and writing only selected
+prefix positions. These are static read-set counts, not implemented GPU results.
+
+The most direct general solution is a bounded pool of `head x matrix-tile`
+workspace slots. There are currently 192 such jobs at H12/tile128. A dense slot
+holds at most 8,193 x128 FP32 values (4.0005 MiB) for repeat/periodic, or
+13,333 x128 (6.5103 MiB) for the vocabulary-4 case. Eight / sixteen / thirty-two
+slots therefore require about 32 /64 /128 MiB of prefix for long chains.
+Sixteen live jobs expose 528 initial Euler tasks at S256 for the long-chain
+case, compared with the measured 512-worker configuration. This suggests a
+reasonable first budget, but is not a prediction of unchanged throughput;
+the carry phase and the admission schedule can still limit utilization.
+
+A slot's prefix and block carries can be overwritten by the next job after **all
+local-chain tasks of its current job finish**. Final boundary-completion tasks
+read only saved boundary values, provisional output and immutable metadata, so
+they need not hold the prefix slot. Keep those small boundary arrays separately
+at first. The last local-chain completion can release the slot and enqueue the
+next job entirely on device, preserving one persistent interpreter launch.
+Commands must retain their original job identity; slot reuse must not change
+metadata observed by an older boundary-completion task. Completion publication
+must cover every consumer's final read before a new producer overwrites storage.
+
+Estimated total scratch for sixteen slots, keeping all boundary values and the
+existing full task queue, is approximately 68 MiB for long-chain cases. For
+vocabulary-4 it is about 105 MiB with dense slots, or 1.3 MiB when combined with
+endpoint compaction. These estimates exclude output matrices, program metadata,
+allocator rounding and the diagnostic baseline's allocations. No throughput or
+sanitizer claim is made for this unimplemented scheduling change.
+
+Blindly overwriting dense prefixes with subtree values is unsafe: one prefix
+position can still be read by several other subtree tasks. A pure chain can use
+saved block boundaries and an ordered in-place traversal, but the current
+interpreter does not allocate a dense subtree array anyway; that transformation
+alone would retain the dominant prefix allocation. Reusing old snapshot output
+buffers also cannot remove this prefix scratch. When decode runs concurrently,
+its active summaries must remain immutable until retirement; incremental SAM
+updates can additionally change suffix links, cloned nodes and materialization
+IDs, so direct additive updates require separate correctness work.
+
+Read-set counts and the standalone CPU analysis are saved under ignored
+`dism_v3/build/summary_scratch/`. No kernel or production default was changed by
+this analysis. Recommended implementation order: bounded workspace slots, then
+endpoint compaction, followed by actual latency/memory and concurrent-decode
+measurements.
+
+### Bounded workspace slots and prefix compaction implemented
+
+The opt-in `SummaryProgram` now accepts trailing `slots=0, compact=False`
+constructor arguments. Zero slots retains the fully expanded prototype as a
+comparison path. Positive slots bound the number of admitted head/tile jobs;
+`compact=True` additionally stores only prefix positions read by local-chain
+instructions. Compaction requires positive slots. Requested slots are capped at
+the number of active jobs, including zero when there are no summaries. Production
+decode dispatch and all existing defaults remain unchanged.
+
+The device scheduler assigns an immutable job ID to each head/tile, records its
+workspace slot, and admits another job when the last local-chain task releases
+that slot. Pending final-completion tasks keep their original job ID and use only
+global boundary/output storage. They never read the reassigned prefix/carry slot.
+Every consumer completes its reads and writes before its completion counter is
+published; the final acquire/release completion publishes the next slot owner
+before its tasks become visible. No extra host synchronization or kernel launch
+is added. Execution remains two kernels plus the initial task-list D2D copy.
+
+Each slot has a prefix pitch equal to the largest active head's required prefix
+row count and a carry pitch equal to its largest Euler-block count. Thus mixed
+heads share a conservative fixed-size pool; the very small vocabulary-4 figures
+below apply to that workload, not to a mixture containing a dense long-chain
+head. Boundary matrices remain globally allocated, as proposed above. Immutable
+program metadata and final output matrices are not counted as scratch.
+
+`stats()` now reports `prefix_bytes`, `carry_bytes`, `boundary_bytes`,
+`workspace_slots`, `compact_prefix`, `prefix_rows_per_slot` and `initial_tasks`.
+After `prepare()`, `allocated_scratch_bytes` sums the actual scratch tensors and
+is checked against the estimate. `output_bytes` and
+`diagnostic_baseline_scratch_bytes` are reported separately. These are live tensor
+sizes, not the CUDA allocator's reserved high-water mark or total process VRAM.
+
+Same-device comparison: RTX 5090, 8K, 12 heads, BF16 R32/DV64, tau=.5, S256,
+tile128, 512 persistent CTAs, median of three CUDA-event graph replays. Capture
+and host compilation are excluded; jobs ran serially, clocks/affinity were not
+fixed. All times below measure prepared summary execution, not model throughput.
+
+| Pattern | Expanded scratch MiB | 16 compact slots MiB | Expanded ms | 16 compact slots ms |
+|---|---:|---:|---:|---:|
+| Repeat | 774.557 | 67.635 | 5.906 | 5.902 |
+| Period-7 | 774.290 | 67.368 | 6.645 | 6.098 |
+| Vocabulary-4 | 1,248.615 | 1.256 | 3.190 | 2.895 |
+
+Long-chain scratch falls about 11.5x without a material loss in this measurement;
+vocabulary-4 falls about 994x. The layout, active working set and scheduling all
+change, so modest timing improvements cannot be attributed solely to one cause.
+Uniform vocabulary-512 still produces no summary work.
+
+The slot budget matters. With compact storage and 512 CTAs:
+
+| Slots | Repeat MiB / ms | Period-7 MiB / ms | Vocabulary-4 MiB / ms |
+|---:|---:|---:|---:|
+| 8 | 35.502 / 12.906 | 35.235 / 13.247 | .728 / 6.018 |
+| 16 | 67.635 / 5.902 | 67.368 / 6.098 | 1.256 / 2.895 |
+| 32 | 131.900 / 5.823 | 131.634 / 5.936 | 2.310 / 2.553 |
+| 192 | 774.557 / 6.121 | 774.290 / 7.071 | 12.857 / 2.262 |
+
+Eight slots limit ready work too much for this worker count. With 256 CTAs,
+its repeat/periodic/vocabulary-4 times improve to 9.437/10.291/4.987 ms, but
+remain slower than sixteen slots at 512 CTAs. Sixteen slots are a useful first
+tradeoff; more slots can be useful when the compact rows are inexpensive.
+Noncompact sixteen-slot measurements allocate 67.635/67.368/104.779 MiB,
+confirming that prefix compaction supplies most of the vocabulary-4 savings.
+
+At 16K with default S182 and 512 CTAs:
+
+| Pattern | Expanded MiB / ms | 16 compact slots MiB / ms |
+|---|---:|---:|
+| Repeat | 1,554.069 / 13.544 | 138.163 / 12.972 |
+| Period-7 | 1,553.600 / 14.149 | 137.694 / 12.460 |
+| Vocabulary-4 | 2,505.148 / 6.292 | 2.328 / 5.799 |
+
+Validation preserves the arithmetic sequence and existing tolerances:
+
+- All 37 probe tests pass. New tests compare bounded/compact output **bitwise**
+  against expanded output with BF16 and FP32 inputs, 1/3/16 slots, mixed active
+  and empty heads, 1/64 workers, repeated execution, and graph replay with changing
+  inputs. Empty programs, invalid options and allocation accounting are checked.
+- The three 8K tau=0 regressions also compare a three-slot compact run bitwise
+  with the expanded run before the independent FP64 summary check. The separate
+  8K repeat/periodic/vocabulary-4 sweep at tau=0/.5 has the same FP64 errors as
+  the prior prototype (relative L2 6.8e-8..2.11e-7). No tolerance was loosened.
+- BF16 and FP32, expanded and bounded kernels all compile to 40 registers/thread
+  with zero stack/local memory. SASS inspection finds no CALL/LDL/STL instructions.
+  CUDA device files remain Torch-free; no FP32 atomic operation was added.
+- Compute Sanitizer memcheck, synccheck and racecheck each pass all 13 new
+  workspace/compaction tests with zero reported errors or hazards; racecheck
+  also reports zero warnings. These selected tests exercise both input dtypes,
+  a single reused slot, mixed heads, input-changing graph replay and empty jobs.
+  The 8K/16K performance sweeps are not sanitizer runs.
+
+These results do not establish concurrent model-decode latency, end-to-end rebuild
+speedup or host compiler efficiency. Host ASan/UBSan coverage remains outstanding.
+The scheduler is still a prototype, explicitly selected through its constructor
+or benchmark flags, rather than a new production default.
+
+Generated artifacts are ignored under `dism_v3/build/summary_slots/`:
+`slots_*_compact_*.json` for the 8K sweep, `long_0/16/32.json` for 16K,
+`reference.json`, `tests_final.log`, sanitizer logs and CUDA resource/SASS dumps.
+The saved old extension and source snapshot are under its `baseline/` directory.
+
+```bash
+# Same environment/build instructions as the original probe above.
+python dism_v3/tools/bench_summary_program.py --heads 12 --lengths 8192 \
+  --block 256 --tile 128 --slots 16 --compact --workers 128 256 512 \
+  --output dism_v3/build/summary_slots/fresh.json
+python -m pytest -q dism_v3/tests/test_summary_program_probe.py
+```

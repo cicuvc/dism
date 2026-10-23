@@ -53,7 +53,7 @@ def error(a,b):
 
 def case(args,h,n,pattern,tau):
     mod=load_summary_probe();labels=labels_for(pattern,h,n)
-    start=time.perf_counter();p=mod.SummaryProgram(labels,[tau]*h,32,64,args.block,args.tile)
+    start=time.perf_counter();p=mod.SummaryProgram(labels,[tau]*h,32,64,args.block,args.tile,args.slots,args.compact)
     compile_ms=(time.perf_counter()-start)*1000
     torch.manual_seed(450)
     k=torch.randn(h,n,32,device='cuda',dtype=torch.bfloat16)*.2
@@ -88,6 +88,8 @@ def main():
     p.add_argument('--tau',type=float,nargs='+',default=[.5])
     p.add_argument('--block',type=int,default=0)
     p.add_argument('--tile',type=int,default=128)
+    p.add_argument('--slots',type=int,default=0,help='0 retains the fully expanded prototype')
+    p.add_argument('--compact',action='store_true',help='retain only read prefix positions in bounded slots')
     p.add_argument('--workers',type=int,nargs='+',default=[32,64,128])
     p.add_argument('--repeats',type=int,default=3)
     p.add_argument('--reference',action='store_true')

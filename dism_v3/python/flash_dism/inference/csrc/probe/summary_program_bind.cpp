@@ -18,24 +18,27 @@ template<class T> torch::Tensor tensor(const std::vector<T>& x) {
 }
 class SummaryProgram {
     int h,n,r,d,block,tile,tiles,nn=0,nb=0,nc=0,nf=0,nm=0,jobs=0,qcap=0,maxnodes=0;
+    int slots=0,prefix_pitch=0,carry_pitch=0;
+    bool compact=false;
     std::vector<dism_decode::Planner> planners;
     std::vector<torch::Tensor> cpu,device,old_topo,old_coef;
     std::vector<int> levels,counts,offsets;
-    torch::Tensor prefix,carry,tail,out,queue,ready,control,initial;
+    torch::Tensor prefix,carry,tail,out,queue,ready,control,initial,job_slots;
     torch::Tensor bp,bt,bping,bpong;
     torch::Device owner=torch::Device(torch::kCPU);
     cudaStream_t stream=nullptr;
     std::map<std::string,int64_t> metrics;
   public:
-    SummaryProgram(torch::Tensor labels,std::vector<double> tau,int r_,int d_,int block_,int tile_)
-        : h(labels.dim()==2?labels.size(0):0),n(labels.dim()==2?labels.size(1):0),r(r_),d(d_),block(block_),tile(tile_) {
+    SummaryProgram(torch::Tensor labels,std::vector<double> tau,int r_,int d_,int block_,int tile_,int slots_=0,bool compact_=false)
+        : h(labels.dim()==2?labels.size(0):0),n(labels.dim()==2?labels.size(1):0),r(r_),d(d_),block(block_),tile(tile_),slots(slots_),compact(compact_) {
         TORCH_CHECK(labels.device().is_cpu() && labels.scalar_type()==torch::kInt32 && labels.is_contiguous() && h>0 && n>0,"CPU int32 [H,N] keys required");
         TORCH_CHECK((r==16||r==32)&&(d==32||d==64)&&int(tau.size())==h,"R16/32 DV32/64 and H taus required");
         TORCH_CHECK(tile==32||tile==64||tile==128||tile==256,"tile must be 32/64/128/256");
         TORCH_CHECK(n<=(1<<20) && h<=128,"probe bounds: N<=2^20, H<=128");
+        TORCH_CHECK(slots>=0 && slots<=8192 && (!compact || slots>0),"slots must be in [0,8192]; compaction requires slots>0");
         if(!block)block=int(std::ceil(std::sqrt(2.*n))); // same block width across all heads
         TORCH_CHECK(block>0&&block<=n*2,"block size bounds");tiles=(r*d+tile-1)/tile;
-        std::vector<int> hd,node,co{0},cn,ao{0},anc,init;
+        std::vector<int> hd,node,co{0},cn,ao{0},anc,init,prefix_map,job_ids;
         std::vector<float> w,rho,sc,asc;
         int64_t work=0,span=0,active=0,max_chain=0,max_anc=0,max_blocks=0,baseline_launches=0;
         for(int hi=0;hi<h;++hi) {
@@ -51,6 +54,7 @@ class SummaryProgram {
             ws.pack_summary(p,ot.data(),oc.data());old_topo.push_back(tensor(ot));old_coef.push_back(tensor(oc));
             if(!count) {hd.insert(hd.end(),{nn,0,nb,0,nc,0,nm,0,0,0});continue;}
             ++active;jobs+=tiles;
+            for(int t=0;t<tiles;++t)job_ids.push_back(hi*tiles+t);
             baseline_launches+=((r*d+31)/32)*(3+ws.levels+(ws.levels>0));
             int blocks=(nodes+block-1)/block,chain_base=nc;
             std::vector<int> size(nodes,1),heavy(nodes,-1),which(nodes,-1),parent,parent_node;
@@ -113,6 +117,15 @@ class SummaryProgram {
                 ao.push_back(anc.size());longest=std::max(longest,length);
             }
             int chains=nc-chain_base;
+            prefix_map.resize(nn+nodes,-1);
+            std::vector<bool> read(nodes,!compact);
+            if(compact)for(int j=co[chain_base];j<co[nc];++j) {
+                int u=cn[j]-nn;
+                read[ws.end[u]-1]=true;if(ws.inverse[u])read[ws.inverse[u]-1]=true;
+            }
+            int points=0;
+            for(int i=0;i<nodes;++i)if(read[i])prefix_map[nn+i]=points++;
+            prefix_pitch=std::max(prefix_pitch,points);carry_pitch=std::max(carry_pitch,blocks);
             hd.insert(hd.end(),{nn,nodes,nb,blocks,chain_base,chains,nm,count,int(!p.samples.empty()),0});
             for(int t=0;t<tiles;++t)for(int b=0;b<blocks;++b)init.insert(init.end(),{0,hi,t,b});
             int64_t extra=int64_t(tiles)*(blocks+1+int64_t(chains)*(p.samples.empty()?1:2));
@@ -124,13 +137,27 @@ class SummaryProgram {
             max_anc=std::max(max_anc,int64_t(longest));max_blocks=std::max(max_blocks,int64_t(blocks));
             nn+=nodes;nb+=blocks;nm+=count;
         }
-        cpu={tensor(hd),tensor(node),tensor(co),tensor(cn),tensor(ao),tensor(anc),tensor(w),tensor(rho),tensor(sc),tensor(asc),tensor(init)};
+        if(slots) {
+            slots=std::min(slots,jobs);init.clear();
+            for(int ordinal=0;ordinal<slots;++ordinal) {
+                int job=job_ids[ordinal],hi=job/tiles,t=job%tiles;
+                for(int b=0;b<hd[10*hi+3];++b)init.insert(init.end(),{0,hi,t,b});
+            }
+        }
+        cpu={tensor(hd),tensor(node),tensor(co),tensor(cn),tensor(ao),tensor(anc),tensor(w),tensor(rho),tensor(sc),tensor(asc),tensor(init),tensor(prefix_map),tensor(job_ids)};
         metrics={{"heads",h},{"active_heads",active},{"tokens",n},{"nodes",nn},{"matrices",nm},{"block_size",block},{"tile",tile},{"tiles_per_head",tiles},
                  {"euler_blocks",nb},{"chain_blocks",nc},{"boundary_nodes",nf},{"max_chain_nodes",max_chain},{"max_ancestor_blocks",max_anc},
                  {"euler_tasks",int64_t(nb)*tiles},{"local_chain_tasks",int64_t(nc)*tiles},{"total_tasks",qcap},
                  {"baseline_launches",baseline_launches},{"program_launches",jobs?2:0},
                  {"node_work_per_coordinate",work},{"estimated_span_node_iterations",span},{"max_euler_blocks_per_head",max_blocks},
                  {"scratch_bytes",int64_t(nn+nb+nf)*r*d*4+int64_t(qcap)*20+(3+3*h*tiles)*4}};
+        int64_t prefix_bytes=(slots?int64_t(slots)*prefix_pitch*tile:int64_t(nn)*r*d)*4;
+        int64_t carry_bytes=(slots?int64_t(slots)*carry_pitch*tile:int64_t(nb)*r*d)*4;
+        int64_t boundary_bytes=int64_t(nf)*r*d*4;
+        metrics["scratch_bytes"]=prefix_bytes+carry_bytes+boundary_bytes+int64_t(qcap)*20+(4+4*h*tiles)*4;
+        metrics["prefix_bytes"]=prefix_bytes;metrics["carry_bytes"]=carry_bytes;metrics["boundary_bytes"]=boundary_bytes;
+        metrics["workspace_slots"]=slots;metrics["compact_prefix"]=compact;
+        metrics["prefix_rows_per_slot"]=prefix_pitch;metrics["initial_tasks"]=init.size()/4;
         int64_t bytes=0;for(auto &x:cpu)bytes+=x.nbytes();metrics["program_bytes"]=bytes;
     }
     std::map<std::string,int64_t> stats() const{return metrics;}
@@ -139,9 +166,16 @@ class SummaryProgram {
         device.clear();for(auto &x:cpu)device.push_back(x.to(owner));
         for(auto &x:old_topo)x=x.to(owner);for(auto &x:old_coef)x=x.to(owner);
         auto f=prototype.options().dtype(torch::kFloat32),i=prototype.options().dtype(torch::kInt32);
-        prefix=torch::empty({int64_t(nn),r*d},f);carry=torch::empty({int64_t(nb),r*d},f);tail=torch::empty({int64_t(nf),r*d},f);
-        out=torch::empty({nm,r*d},f);queue=torch::empty({qcap,4},i);ready=torch::empty({qcap},i);control=torch::empty({3+3*h*tiles},i);initial=device[10];
+        prefix=torch::empty({slots?int64_t(slots)*prefix_pitch:int64_t(nn),slots?tile:r*d},f);
+        carry=torch::empty({slots?int64_t(slots)*carry_pitch:int64_t(nb),slots?tile:r*d},f);tail=torch::empty({int64_t(nf),r*d},f);
+        out=torch::empty({nm,r*d},f);queue=torch::empty({qcap,4},i);ready=torch::empty({qcap},i);control=torch::empty({4+3*h*tiles},i);initial=device[10];job_slots=torch::empty({h*tiles},i);
         bp=torch::empty({maxnodes*32},f);bt=torch::empty({((maxnodes+255)/256)*32},f);bping=torch::empty_like(bp);bpong=torch::empty_like(bp);
+        int64_t allocated=0;
+        for(const auto &x:{prefix,carry,tail,queue,ready,control,job_slots})allocated+=x.nbytes();
+        metrics["allocated_scratch_bytes"]=allocated;
+        metrics["output_bytes"]=out.nbytes();
+        metrics["diagnostic_baseline_scratch_bytes"]=bp.nbytes()+bt.nbytes()+bping.nbytes()+bpong.nbytes();
+        TORCH_CHECK(allocated==metrics["scratch_bytes"],"scratch accounting mismatch");
     }
     void validate(torch::Tensor k,torch::Tensor v) {
         TORCH_CHECK(k.is_cuda()&&k.device()==owner&&v.device()==owner&&k.is_contiguous()&&v.is_contiguous(),"prepared device/contiguous payload required");
@@ -152,9 +186,9 @@ class SummaryProgram {
     torch::Tensor run(torch::Tensor k,torch::Tensor v,int workers) {
         c10::cuda::CUDAGuard guard(k.device());validate(k,v);TORCH_CHECK(workers>0&&workers<=1024,"workers in [1,1024]");
         SummaryProgramArgs a{k.data_ptr(),v.data_ptr(),device[0].data_ptr<int>(),device[1].data_ptr<int>(),device[2].data_ptr<int>(),device[3].data_ptr<int>(),
-            device[4].data_ptr<int>(),device[5].data_ptr<int>(),device[6].data_ptr<float>(),device[7].data_ptr<float>(),device[8].data_ptr<float>(),device[9].data_ptr<float>(),
+            device[4].data_ptr<int>(),device[5].data_ptr<int>(),device[11].data_ptr<int>(),device[12].data_ptr<int>(),job_slots.data_ptr<int>(),device[6].data_ptr<float>(),device[7].data_ptr<float>(),device[8].data_ptr<float>(),device[9].data_ptr<float>(),
             prefix.data_ptr<float>(),carry.data_ptr<float>(),tail.data_ptr<float>(),out.data_ptr<float>(),queue.data_ptr<int>(),ready.data_ptr<int>(),control.data_ptr<int>(),
-            h,int(k.size(1)),r,d,tile,tiles,block,qcap,int(initial.numel()/4),jobs};
+            h,int(k.size(1)),r,d,tile,tiles,block,qcap,int(initial.numel()/4),jobs,slots,prefix_pitch,carry_pitch};
         launch_summary_program(a,initial.data_ptr<int>(),k.scalar_type()==torch::kBFloat16,workers,stream);C10_CUDA_KERNEL_LAUNCH_CHECK();return out;
     }
     torch::Tensor baseline(torch::Tensor k,torch::Tensor v) {
@@ -197,7 +231,9 @@ class SummaryProgram {
 };
 PYBIND11_MODULE(TORCH_EXTENSION_NAME,m) {
     pybind11::class_<SummaryProgram>(m,"SummaryProgram")
-        .def(pybind11::init<torch::Tensor,std::vector<double>,int,int,int,int>())
+         .def(pybind11::init<torch::Tensor,std::vector<double>,int,int,int,int,int,bool>(),
+             pybind11::arg("labels"),pybind11::arg("tau"),pybind11::arg("r"),pybind11::arg("dv"),
+             pybind11::arg("block"),pybind11::arg("tile"),pybind11::arg("slots")=0,pybind11::arg("compact")=false)
         .def("stats",&SummaryProgram::stats).def("prepare",&SummaryProgram::prepare)
         .def("run",&SummaryProgram::run,pybind11::call_guard<pybind11::gil_scoped_release>())
         .def("baseline",&SummaryProgram::baseline,pybind11::call_guard<pybind11::gil_scoped_release>())
