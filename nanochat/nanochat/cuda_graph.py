@@ -32,7 +32,7 @@ def _workspace_tensors(model):
             visit(vars(value))
 
     for module in model.modules():
-        for name in ('_forward_states', '_backward_states', '_forward_plans', '_backward_plans'):
+        for name in ('_forward_states', '_backward_states', '_forward_plans', '_backward_plans', '_states'):
             visit(getattr(module, name, None))
     return found
 
@@ -94,7 +94,7 @@ class PackedTrainingGraph:
             # eager call. Rebuild these runtime-only plans on the capture stream
             # so their AccumulateGrad nodes cannot refer to the default stream.
             for module in model.modules():
-                for name in ('_forward_states', '_backward_states', '_forward_plans', '_backward_plans'):
+                for name in ('_forward_states', '_backward_states', '_forward_plans', '_backward_plans', '_states'):
                     cache = getattr(module, name, None)
                     if cache is not None:
                         cache.clear()

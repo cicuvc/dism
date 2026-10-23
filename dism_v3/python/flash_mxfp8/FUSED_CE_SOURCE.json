@@ -1,0 +1,39 @@
+{
+  "repository": "fp8gemm",
+  "base_commit": "ada3b35563d5e4fccbb58ba584ac25641b42e1c5",
+  "note": "Includes uncommitted upstream softcap implementation, identified by per-file SHA256. Local changes: package imports/build path, document_sum, Dynamo boundary.",
+  "files": [
+    {
+      "path": "experiments/tk_mxfp8_fused_ce.py",
+      "sha256": "c7367b1be7213908281b2b5026a56145a02f0836af55d0d12958883f904edc32"
+    },
+    {
+      "path": "experiments/mxfp8_ce.py",
+      "sha256": "8eef7920cdd4282f7702dd82319364e2c2ab482b4fdecd23180f274ed80526d5"
+    },
+    {
+      "path": "experiments/mxfp8_balance.py",
+      "sha256": "a27414fbc6de200f79eccc5b4b731b2bb05f516dc9c3228ee812a697826eae41"
+    },
+    {
+      "path": "experiments/tk_mxfp8_lse.py",
+      "sha256": "7682217685bcf3283e323ba3c190516087dc84c6fab39ae58e5ea512be42c920"
+    },
+    {
+      "path": "cuda/persistent_mxfp8_gemm.cu",
+      "sha256": "448e36485699b0cac8709bb4996213c6a2ab14933af9393a3bffbc9b74f978bb"
+    },
+    {
+      "path": "cuda/persistent_mxfp8_lse.cu",
+      "sha256": "e9172219bb187d4cd19e85904093efdc0c9d3442b196850597f14206802ccea1"
+    },
+    {
+      "path": "cuda/mxfp8_lse.cuh",
+      "sha256": "d632ec26bbfd8e8cc647f775fe3a60e64b71c3b97d2e08a1582694fa198037b0"
+    },
+    {
+      "path": "cuda/mxfp8_lse_configs.inc",
+      "sha256": "5bfb753356cc19db8ea76519b7c7af992e9913053429a9fb27dec8e970e6c976"
+    }
+  ]
+}

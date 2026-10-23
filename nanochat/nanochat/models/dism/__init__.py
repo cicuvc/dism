@@ -36,6 +36,7 @@ class DismConfig:
     mxfp8: bool = False
     mxfp8_projections: bool = False
     mxfp8_optimizer: bool = False
+    mxfp8_ce: bool = False
     layer_layout: str | None = None
 
     def __post_init__(self):
@@ -73,6 +74,10 @@ class DismConfig:
             )
         if self.mxfp8_optimizer and not self.mxfp8:
             raise ValueError("mxfp8_optimizer requires mxfp8=True")
+        if type(self.mxfp8_ce) is not bool:
+            raise ValueError("mxfp8_ce must be boolean")
+        if self.mxfp8_ce and (self.n_embd % 128 or self.vocab_size % 128):
+            raise ValueError("mxfp8_ce requires model/vocabulary widths divisible by 128")
         if self.mxfp8_projections and not self.mxfp8:
             raise ValueError("mxfp8_projections requires mxfp8=True")
         if not 0.0 <= self.hard_prob_max <= 1.0:

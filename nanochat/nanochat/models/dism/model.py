@@ -243,6 +243,12 @@ class DismLM(nn.Module):
         self.lm_head = nn.Linear(
             config.n_embd, config.vocab_size, bias=False, dtype=core_dtype
         )
+        self.mxfp8_ce = None
+        if config.mxfp8_ce:
+            from flash_mxfp8 import MXFP8FusedLinearCrossEntropy
+            self.mxfp8_ce = MXFP8FusedLinearCrossEntropy(
+                ignore_index=-1, balance="document_sum", softcap=config.softcap,
+            )
         self.register_buffer("training_step", torch.zeros((), dtype=torch.int64))
         self.register_buffer("rng_counter", torch.zeros((), dtype=torch.int64))
         self.register_buffer("hard_probability", torch.zeros((), dtype=torch.float32))
@@ -550,6 +556,15 @@ class DismLM(nn.Module):
             x = self.norm(x).to(torch.bfloat16)
             if targets is not None and loss_reduction in ("mean", "document_sum"):
                 with torch.autocast("cuda", enabled=False):
+                    if self.mxfp8_ce is not None and torch.is_grad_enabled():
+                        numerator, count = self.mxfp8_ce(
+                            x.reshape(-1, x.shape[-1]).contiguous(),
+                            targets.reshape(-1).contiguous(), self.lm_head.weight,
+                            cu_seqlens=cu_seqlens.to(device=x.device).contiguous(),
+                        )
+                        if loss_reduction == "document_sum":
+                            return numerator, count
+                        return numerator / count.clamp_min(1)
                     return packed_document_ce(
                         x,
                         self.lm_head.weight,

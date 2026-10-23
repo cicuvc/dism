@@ -9,14 +9,14 @@ from nanochat.cuda_graph import PackedTrainingGraph
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 
 
-def model_pair(mxfp8, planner=False, layers=2, layout=None):
+def model_pair(mxfp8, planner=False, layers=2, layout=None, mxfp8_ce=False):
     torch.manual_seed(981)
     spec = ModelSpec('dism_gdn_hybrid', 1, dict(
         sequence_len=512, vocab_size=128, n_layer=layers, n_head=4,
         layer_layout=layout, n_embd=128, intermediate_size=256, head_dim=32, value_dim=64 if planner else 32,
         readout_dim=32 if planner else 16, qk_vocab_size=32, anneal_steps=10,
         hard_prob_max=.95, mxfp8=mxfp8, mxfp8_projections=False,
-        mxfp8_optimizer=mxfp8,
+        mxfp8_optimizer=mxfp8, mxfp8_ce=mxfp8_ce,
     ))
     a = build_model(spec).cuda().train()
     a.init_weights()
@@ -26,10 +26,10 @@ def model_pair(mxfp8, planner=False, layers=2, layout=None):
 
 
 @pytest.mark.parametrize('planner', [False, True])
-@pytest.mark.parametrize('mxfp8', [False, True])
-def test_packed_replay_matches_training(monkeypatch, mxfp8, planner):
+@pytest.mark.parametrize('mxfp8,mxfp8_ce', [(False, False), (True, False), (True, True)])
+def test_packed_replay_matches_training(monkeypatch, mxfp8, mxfp8_ce, planner):
     monkeypatch.setenv('DISM_HARD_PLANNER', '0')
-    model, reference = model_pair(mxfp8, planner)
+    model, reference = model_pair(mxfp8, planner, mxfp8_ce=mxfp8_ce)
     ids = torch.randint(128, (2, 512), device='cuda')
     labels = torch.randint(128, (2, 512), device='cuda')
     initial = torch.tensor([0,512,1024], dtype=torch.int32, device='cuda')
@@ -86,9 +86,10 @@ def test_packed_replay_matches_training(monkeypatch, mxfp8, planner):
 
 
 @pytest.mark.parametrize('planner', [False, True])
-def test_capture_preserves_resumed_state_and_existing_gradients(monkeypatch, planner):
+@pytest.mark.parametrize('mxfp8_ce', [False, True])
+def test_capture_preserves_resumed_state_and_existing_gradients(monkeypatch, planner, mxfp8_ce):
     monkeypatch.setenv('DISM_HARD_PLANNER', '0')
-    model, restored = model_pair(True, planner)
+    model, restored = model_pair(True, planner, mxfp8_ce=mxfp8_ce)
     ids = torch.randint(128,(1,512),device='cuda')
     labels = torch.randint(128,(1,512),device='cuda')
     bounds = torch.tensor([0,256,512],device='cuda',dtype=torch.int32)

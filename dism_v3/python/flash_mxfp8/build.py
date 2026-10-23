@@ -4,6 +4,7 @@ from pathlib import Path
 
 from . import tk_mxfp8_dgrad
 from . import tk_mxfp8_gemm
+from . import tk_mxfp8_lse
 from . import tk_mxfp8_swiglu
 from . import tk_mxfp8_swiglu_dgrad
 from . import tk_mxfp8_wgrad
@@ -17,6 +18,7 @@ _TARGETS = (
      else tk_weight_quantize.DEFAULT_OUTPUT, "libquant.so",
      tk_weight_quantize.build),
     (tk_mxfp8_gemm.OUTPUT, "libgemm.so", tk_mxfp8_gemm.build),
+    (tk_mxfp8_lse.OUTPUT, "liblse.so", tk_mxfp8_lse.build),
     (tk_mxfp8_dgrad.OUTPUT, "libdgrad.so", tk_mxfp8_dgrad.build),
     (tk_mxfp8_wgrad.OUTPUT, "libwgrad.so", tk_mxfp8_wgrad.build),
     (tk_mxfp8_swiglu.OUTPUT, "libswiglu.so", tk_mxfp8_swiglu.build),
@@ -52,8 +54,13 @@ def build_all(*, force=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--only", choices=["lse"],
+                        help="Build only the new CE library; leave other libraries untouched")
     args = parser.parse_args()
-    build_all(force=args.force)
+    if args.only == "lse":
+        tk_mxfp8_lse.build()
+    else:
+        build_all(force=args.force)
 
 
 if __name__ == "__main__":

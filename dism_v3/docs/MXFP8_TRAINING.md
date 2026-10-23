@@ -15,7 +15,8 @@ MXFP8 is used for:
 The following remain BF16:
 
 - token embedding;
-- untied LM head and document-balanced fused cross-entropy;
+- untied LM head and document-balanced fused cross-entropy by default
+  (the independent `mxfp8_ce=True` option below quantizes their training GEMMs);
 - `o_proj`;
 - GDN recurrence;
 - DISM suffix-matching core, embedding interpolation and hard planner;
@@ -210,3 +211,130 @@ to the device budget. Device copies remain 595 D2D events / 3.22 GB, with only
 58 D2H and 139 H2D events. The next useful targets are therefore the new
 RMSNorm-to-SwiGLU boundary and forward attention/projection serialization, not
 hard-backward fallback traffic.
+
+
+## Optional MXFP8 fused linear cross entropy (2026-10-23)
+
+`DismConfig.mxfp8_ce=True` selects the imported `fp8gemm` fused CE for
+**differentiable training losses**. It is independent of the FFN/projection
+switches. Omitted/false retains the existing BF16 loss, including when loading
+an older checkpoint. No environment variable silently changes this choice.
+The opt-in belongs to `ModelSpec` and therefore its checkpoint fingerprint;
+changing it is not an exact resume of an older run.
+
+The ready-to-use config is
+`nanochat/configs/sequence_true_125m_valres_mxfp8_ffnonly_slimpajama_3b_h768_h12_i1152_r32_ce.json`.
+It differs from the existing `gggddddddggg` 3B config only in `mxfp8_ce: true`.
+Use the usual `--model-spec` option; graph/planner still require the separate
+`--cuda-graph --cuda-graph-planner` flags. This integration did not restart or
+modify the already-running pretraining job or its configuration/checkpoints.
+
+The implementation is vendored under `flash_mxfp8`, with no runtime import from
+`~/cs/project/fp8gemm`. `FUSED_CE_SOURCE.json` records the base commit and exact
+source hashes: the snapshot includes the upstream, then-uncommitted softcap
+implementation. Local adaptations are package/build paths, a Dynamo boundary,
+and the document-sum interface. CUDA device sources remain Torch-free.
+
+### Objective and state contracts
+
+- MXFP8 computes the LM projection, dX and dW; the raw projection output is BF16.
+  CUDA computes partial LSE from `softcap * tanh(raw / softcap)` in FP32.
+  Triton applies the same transform and its derivative before independent
+  row/column MXFP8 quantization of dlogits. The existing `softcap=30` is retained.
+- Targets use `ignore_index=-1`. Empty and ignored-only documents contribute
+  zero numerator/count/gradients. Document weights are based on valid target
+  tokens, not sequence-level hard-sampling flags. Documents may cross CE chunks.
+- `balance="document_sum"` returns `(sum_of_document_means, valid_document_count)`.
+  The count is nondifferentiable and remains on the GPU. The existing
+  `DocumentLossAccumulator` still performs the single global normalization
+  across microbatches/ranks, before clipping and optimizer updates.
+- The criterion owns no parameters or persistent buffers. LM-head parameter
+  identity/dtype, optimizer grouping/schema, RNG counters, annealing state and
+  dataloader state are unchanged. Weight quantization runs on each invocation,
+  so eager and captured training see optimizer updates without a stale cache.
+- Inference, no-grad validation and unreduced evaluation retain BF16 LM-head/CE.
+  Only first-order differentiation is supported. Configured model/ vocabulary
+  widths must be multiples of 128 for the selected upstream GEMM configs.
+- The default upstream chunk/config choices remain 1024 tokens, fwd=8,
+  dX=12, dW=12, raster_group=13. The criterion is a Dynamo boundary; concurrent
+  use of one criterion on multiple streams is unsupported. Graph setup clears
+  its `_states` cache and retains all captured workspace tensors.
+
+### Build without replacing libraries used by a running job
+
+```bash
+conda activate blkw
+PYTHONPATH=dism_v3/python python -m flash_mxfp8.build --only lse
+```
+
+This builds only `_libs/tk_mxfp8_lse/liblse.so`. The ordinary version build and
+`python -m flash_mxfp8.build` also include the new library. Do not run a full
+in-place rebuild over the libraries mapped by a running training process.
+No existing loaded library was rebuilt during this integration.
+
+### Validation and numerical limits
+
+The CUDA graph tests cover planner on/off, changing packed boundaries,
+ignored targets, optimizer updates, intervening evaluation, and restored
+optimizer/RNG/annealing state. Ten replay/resume combinations passed, including
+four using the new CE. A separate metadata test verifies unchanged legacy
+model identity, state keys and parameter/no-decay schema.
+
+The imported softcap tests keep the upstream input distribution (`W ~ N(0,.05)`)
+and tolerances; integration tests add document-sum accumulation and saved-gradient
+reuse. The initial 29 operator cases passed normally and under memcheck
+(0 errors). The final 32 operator cases, including H=768/V=32000 BF16
+accuracy and the Dynamo boundary, passed under synccheck (0 errors). Together
+with the ten graph/resume cases and one identity test, 43 checks passed.
+The BF16 accuracy tests use the upstream loss-error <.01 and gradient
+relative-L2 <.08 budgets, distinct from the stricter quantized-component
+comparisons. No whole-training sanitizer claim is made.
+
+A stronger exploratory input (`W ~ N(0,1/sqrt(H))`, activations doubled on the
+second replay, softcap=30) **fails** the upstream `atol=rtol=2e-6` partial-LSE
+comparison: the largest difference was `5.44e-5` against PyTorch tanh. The
+separate FP64 comparison reproduces this; an instruction-matched Triton probe
+agrees with the CUDA LSE within `9.54e-7` on the inspected case. Thus the
+`tanh.approx.f32` approximation is visible at larger logits. The original
+acceptance tolerance was not widened, and the instruction-matched probe is
+only diagnostic, not a replacement oracle. Logs/probes are under ignored
+`dism_v3/build/mxfp8_ce_*` and `diagnose_mxfp8_ce.py`.
+
+All eight new CUDA specializations use 168 registers, zero stack and zero
+spill loads/stores. SASS inspection found zero CALL instructions in uncapped
+kernels, but 16/64/64/256 static CALL sites in the softcap configs 0/8/70/71.
+These occur in the generated division slow paths around the upstream
+`div.rn.f32`; zero-spill does not mean zero-CALL. No math/launch tuning was done
+in this port. The standalone upstream graph test emits PyTorch's existing
+AccumulateGrad stream-mismatch warning, while replay checks pass; the warning
+has not been suppressed. Throughput was not measured while the pretraining
+job shared the GPU.
+
+
+### Idle-GPU training-step throughput (2026-10-23 afternoon)
+
+Measured on the RTX 5090 after the GPU became free, with the existing
+`bench_training_cuda_graph.py`. Both variants use `--mode graph --planner`,
+`gggddddddggg`, changing packed boundaries, 8 rows × 2048 tokens × 8 microbatches
+(131,072 tokens/optimizer step), `--warmup 8 --steps 32`, one Torch CPU thread,
+16 planner workers, and separate fresh processes with the same seed. Only the
+model-spec `mxfp8_ce` switch differs. These are synthetic resident batches;
+H2D, forward/backward, planner drain, global document normalization, clipping,
+and optimizer are timed. Capture/warmup, dataset reading, evaluation, saving,
+and training diagnostics are excluded. Clocks were not locked.
+
+| Hard probability | BF16 CE ms/step | MXFP8 CE ms/step | BF16 tokens/s | MXFP8 tokens/s | Throughput gain |
+|---|---:|---:|---:|---:|---:|
+| 0.000 | 901.1 | 878.2 | 145,451 | 149,256 | +2.6% |
+| 0.475 | 862.1 | 827.7 | 152,034 | 158,358 | +4.2% |
+| 0.950 | 836.8 | 811.7 | 156,636 | 161,485 | +3.1% |
+
+The measured allocator peak increases by about 175–177 MiB. At p=0 and p≈.475,
+both variants take 1536 event routes and zero quadratic routes. At p=.95,
+BF16 CE records e=1452/q=84 (5.5% fallback), while MXFP8 CE records e=1312/q=224
+(14.6% fallback); the measured end-to-end gain already includes this difference.
+This comparison does not isolate planner timing from model trajectory changes
+caused by quantization, and does not establish long-run convergence equivalence.
+Logs, exact commands and result JSON are in ignored
+`dism_v3/build/ce_throughput/`. No checkpoint was loaded or modified, and no
+pretraining job was started for this measurement.

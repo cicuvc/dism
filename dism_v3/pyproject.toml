@@ -36,6 +36,7 @@ namespaces = true
 [tool.setuptools.package-data]
 "flash_dism.inference" = ["csrc/*.cpp", "csrc/*.cu", "csrc/*.h", "csrc/*.hpp", "csrc/*.cuh"]
 "flash_mxfp8" = [
+    "FUSED_CE_SOURCE.json",
     "_libs/**/*.so",
     "cuda/*.cu",
     "cuda/*.cuh",

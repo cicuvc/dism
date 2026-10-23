@@ -93,3 +93,26 @@ def test_dism_compiled_resume(tmp_path):
         for p, r in zip(model.parameters(), restored.parameters()):
             torch.testing.assert_close(p, r, atol=2e-5, rtol=.001)
         assert model.rng_counter.item() == restored.rng_counter.item() == 2
+
+
+def test_mxfp8_ce_preserves_legacy_identity_and_parameter_schema():
+    from nanochat.models import ModelSpec, build_model
+    from nanochat.models.dism import DismConfig
+    config = dict(n_layer=2, n_embd=128, n_head=4, head_dim=32,
+                  value_dim=32, readout_dim=16, vocab_size=128, intermediate_size=256)
+    legacy = ModelSpec('dism_gdn_hybrid', 1, config)
+    selected = ModelSpec('dism_gdn_hybrid', 1, {**config, 'mxfp8_ce': True})
+    with torch.device('meta'):
+        old, new = build_model(legacy), build_model(selected)
+    assert old.model_spec.fingerprint() == legacy.fingerprint()
+    assert selected.fingerprint() != legacy.fingerprint()
+    assert old.mxfp8_ce is None and not new.mxfp8_ce.state_dict()
+    assert set(old.state_dict()) == set(new.state_dict())
+    assert [(n, p.shape, p.dtype, getattr(p, '_no_weight_decay', False))
+            for n, p in old.named_parameters()] == [
+                (n, p.shape, p.dtype, getattr(p, '_no_weight_decay', False))
+                for n, p in new.named_parameters()]
+    assert not DismConfig(**config).mxfp8_ce
+    for invalid in ({'vocab_size': 129}, {'n_embd': 64}, {'mxfp8_ce': 'true'}):
+        with pytest.raises(ValueError, match='mxfp8_ce'):
+            DismConfig(**{**config, 'mxfp8_ce': True, **invalid})
