@@ -1698,3 +1698,148 @@ book hashes, full 8K-bin loss statistics, finite checks, both SAM repeats and
 the exact paired target positions. Reproduce in the same offline environment
 as the crossover benchmark with `tools/diagnose_long_context_ce.py
 --checkpoint ... --output dism_v3/build/eval_sam/ce_128k.json`.
+
+### Opt-in nanochat cached generation prototype (2026-10-24)
+
+`nanochat.models.dism.inference.SamDecodeSession` adds request-owned state for
+this checkpoint architecture. This is a separate explicit API, not an extension
+of FLA's `past_key_values` or the training model's `forward` dispatch:
+
+* Prime: unpadded, equal-length fixed batch; existing CPU SAM prefill plus full
+  history `HardDismDecoder.prime`, GDN chunk final state, and each independent
+  convolution's last K-1 projected inputs.
+* Append: one token per call; GPU SAM planner, fused recurrent GDN, convolution
+  history update. The first layer's value residual, both hybrid branches,
+  gated norm, postnorm and MXFP8 FFN are preserved.
+* The existing vocabulary kernel uses local 256-row padding, sliced away before
+  prime/append. MXFP8 postnorm/FFN likewise uses local 256-row padding. Neither
+  padding enters GDN, convolution, or SAM history.
+* GPU rebuild uses the existing synchronous implementation at interval 128.
+  Concurrent rebuild, model CUDA graphs, beam reorder, ragged cached batches,
+  MXFP8 projections and decode-to-prefill transitions are not supported here.
+* A session owns fixed weights/tau, stream, batch order, position and capacity.
+  Exceptions during advancement poison the session; close releases its state.
+  No model parameters, checkpoint counters or training dispatch are changed.
+
+The local downstream adapters (`adapter_layout.py`, `adapter_layout_bounded.py`)
+and `run_layout_comparison.py` now accept `--decode-backend sam`. Default remains
+`recompute`. Cached generation uses SAM prefill even if `--hard-backend quadratic`
+is selected for likelihood scoring. `--prefill-workers`/`--prefill-precision`
+configure that prefill engine. This first adapter runs independent requests
+serially (physical generation batch 1), preserving truncation budget, greedy
+selection, EOS and stop-string behavior. It does not cache padded rows or compact
+an active batch. The runner uses a separate `_decode_sam` results directory and
+records the decode flag and new model-session source hash in provenance. These
+three adapter files live outside this Git repository.
+
+Validation uses the same step-22888 `gggddddddggg` checkpoint as the preceding
+long-context checks. `tools/validate_model_sam_decode.py` compares cached hidden
+states with quadratic prefix recomputation under teacher forcing. Inputs for the
+following diagnostics are repeated English prose, not a representative task
+benchmark. Timings exclude tokenization and LM head, interleave both methods,
+and exclude initial compilation/prime and first decode call:
+
+| Prompt / sampled positions | Cached ordinary step median | Recompute median | Greedy agreement |
+| --- | ---: | ---: | ---: |
+| 511 tokens / 133 positions | 24.58 ms | 29.01 ms | 133/133 |
+| 8191 tokens / 17 positions | 24.49 ms | 33.11 ms | 16/17 |
+
+The 511-token run crossed the default rebuild horizon; that step took 75.06 ms.
+All hidden outputs were finite and every layer's native cache position matched
+its session position. This is not an end-to-end batched suite speedup claim.
+
+Numerical equivalence is **not** established for the trained model. Median
+final-token hidden relative L2 was about .0535/.0519 for these two runs, with
+maxima .1134/.2844. Two short free-generation prompts diverged from recomputation
+within 16 tokens. Prefix shape changes, GDN recurrent versus chunk arithmetic,
+and SAM reduction ordering can affect discrete later-layer routing. These are
+observations, not proof of the relative contribution of each source. Keep this
+backend opt-in and record it separately; do not replace historical evaluation
+scores or claim tokenwise parity.
+
+`nanochat/tests/test_sam_decode.py` verifies exact convolution-history output,
+unaligned/aligned prime, five token appends through forced interval-2 rebuilds,
+cache position, capacity/batch/chunk rejection, closure, and unchanged model
+state. The small non-MXFP8 full-session comparison uses the existing module
+cached-decoding tolerance (`atol=.005, rtol=.02`); no production tolerance was
+relaxed. No CUDA kernels changed and no new full-model sanitizer run is claimed.
+Ignored diagnostic artifacts: `build/eval_sam/decode_{smoke,511,8191}.json` and
+corresponding logs.
+
+Combined regression run: 23 passed, one existing
+`test_packed_core[bf16-lengths2]` failed its packed-versus-independent **bitwise**
+comparison (1/32768 elements, absolute difference 2.3283064e-10). The preceding
+quadratic comparison passed its unchanged tolerance. No prefill implementation
+or tolerance was edited in this change. This is consistent with the previously
+observed SAM accumulation-order nondeterminism; it remains a numerical
+validation limitation rather than a suppressed test.
+
+#### Rebuild interval 512 and decode component profile
+
+The model session and downstream generation adapters now default to interval
+**512** (previous prototype: 128). `--decode-rebuild-interval` overrides it in
+both adapters and the comparison runner; the latter includes the interval in
+its result-directory suffix and provenance. Low-level `HardDismDecoder` /
+`NativeDecodeCache` defaults remain unchanged. This remains opt-in SAM decoding.
+
+`tools/profile_model_sam_decode.py` measures real PG19 book 10, B=1, prompt=8191,
+step-22888 checkpoint on the RTX 5090. It first measures uninstrumented hidden
+forward through one complete rebuild cycle, then uses lightweight CPU scopes
+and separate CUPTI traces. CPU scope medians are collected just after a rebuild;
+GPU kernel durations below are collected at the end of the 512-token horizon.
+They are separate samples, not additive pieces of a single wall-clock sample.
+CUDA user-annotation durations include launch gaps and **must not** be counted
+as kernel time: attribution instead uses actual `kernel` events and CUDA launch
+correlation IDs. DtoD/DtoH copies are counted separately.
+
+Separate fresh-process interval-128 control: ordinary median **24.64 ms**,
+rebuild step **162.48 ms**, amortized hidden step **25.74 ms**. Increasing to
+512 reduces amortized time by about **3.8%** in this diagnostic, primarily
+through fewer rebuilds; a single spike is not reduced.
+
+Fresh-process interval-512 results: ordinary median **24.46 ms**, first-quarter
+24.32 ms, last-quarter 24.56 ms; rebuild step **168.92 ms**; amortized hidden step
+**24.76 ms**. Lightweight complete hidden + LM-head/greedy step: **24.81 ms**.
+A prior profiler run in the same process measurably increases later CPU cost;
+use separate processes for interval comparisons rather than interpreting the
+second configuration in a combined profiling run as a regression.
+
+| Component (all layers) | CPU scope median ms | GPU kernels ms | Kernel count |
+| --- | ---: | ---: | ---: |
+| GDN projections, conv history, value residual and gates | 6.741 | .491 | 324 |
+| GDN recurrent state update | 1.115 | .020 | 12 |
+| DISM projections, conv history and SQ/SK | 2.884 | .225 | 144 |
+| Vocabulary selection (256 physical rows) | .993 | .136 | 42 |
+| SAM append, including GPU planner | .488 | .440 | 24 |
+| Mixer gating, RMSNorm and output projection | 2.113 | .149 | 96 |
+| Postnorm, local padding and MXFP8 quantization | 1.873 | .070 | 72 |
+| MXFP8 FFN (256 physical rows) | 7.164 | .287 | 84 |
+| FFN residual/postnorm and slicing | .642 | .080 | 48 |
+| Embedding + final norm | .046 | .006 | 4 |
+| LM head + greedy + token DtoH | .163 | .130 | 7 |
+| Other hybrid-branch additions | — | .006 | 6 |
+
+Total: **863 kernels, 2.041 ms GPU kernel execution**, 109 DtoD copies and one
+small token DtoH copy. CPU scopes are elapsed host-side call times (including
+launch/allocation/API work), not CPU hardware-counter cycles; CPU/GPU overlap
+precludes adding those columns. The main ordinary-step bottleneck is the eager
+host dispatch and temporary-workspace path, not CPU SAM planning or PCIe traffic.
+GDN/DISM frontends still run many tiny projection, conv, activation and state-copy
+ops; FFN workspaces are constructed for eager invocations and tokenwise FFN uses
+256 padded rows. Fusing/stabilizing these paths is the larger opportunity than
+optimizing the already-small ordinary GPU planner core.
+
+The rebuild profile is different: six layer rebuilds launch **22482 kernels**,
+with **114.23 ms** of GPU kernel execution, plus 3.10 ms GPU copy duration.
+Dominant kernels are `euler_scan` (4608 launches,48.19 ms), `subtree_init`
+(4608,36.48 ms), `ancestor_step` (8064,18.66 ms), and `scan_totals`
+(4608,9.94 ms). The model adapter uses `GpuPlannerCache.rebuild` -> native
+`refresh_gpu`; the earlier persistent summary-program/concurrent rebuild
+prototypes remain in the probe path and are **not wired into this session**.
+A larger interval reduces spike frequency, not the need to integrate that work.
+
+The new 512-horizon run checked native positions after crossing the boundary and
+finite hidden output. All six session regression tests pass after the interval
+and optional profiling-scope changes. The earlier existing BF16 packed-prefill
+bitwise failure reproduced unchanged on standalone rerun; it was not suppressed.
+Raw traces/results stay under ignored `build/eval_sam/decode_components*`.
