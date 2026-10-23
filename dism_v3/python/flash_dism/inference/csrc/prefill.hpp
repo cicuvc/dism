@@ -427,6 +427,16 @@ class Builder {
         if (!n) throw std::logic_error("build must precede finish");
         Program out; out.n=n; out.states=int(sam.nodes.size()); out.logden.assign(n,0.);
         if (gradients) out.dlogden.assign(n,0.);
+        // Per-query scaled denominator: den = exp(P)*Z, dlogden = D/Z.
+        // A stream contributes exp(a+pivot)*mass and its unnormalized tau
+        // derivative exp(a+pivot)*(da*mass+dmass). Treat pivots as numerical
+        // scales, not differentiable model parameters. Rescale both sums when
+        // P increases; this needs one exp per contribution and one final log
+        // per query, instead of logadd and derivative exps at every event.
+        // P=0, Z=1, D=0 preserves the constant unit denominator contribution.
+        static thread_local std::vector<double> norm_pivot, norm_mass, norm_derivative;
+        norm_pivot.assign(n,0.); norm_mass.assign(n,1.);
+        if (gradients) norm_derivative.assign(n,0.);
         // Scalar pass. Only causal keys participate in each stream's pivot.
         // The exponential pair (decay, weight) for a key depends only on the
         // running pivot, so the two passes walk the identical key sequence and
@@ -448,12 +458,24 @@ class Builder {
                     key_decay.push_back(decay); key_weight.push_back(weight);
                 }
                 if (mass) {
-                    double term=stream_a[qi]+pivot+std::log(mass), next=logadd(out.logden[i],term);
-                    if (gradients) out.dlogden[i]=std::exp(out.logden[i]-next)*out.dlogden[i]
-                        +std::exp(term-next)*(stream_da[qi]+dmass/mass);
-                    out.logden[i]=next;
+                    double t=stream_a[qi]+pivot;
+                    double d=gradients ? stream_da[qi]*mass+dmass : 0.;
+                    if (t>norm_pivot[i]) {
+                        double scale=std::exp(norm_pivot[i]-t);
+                        norm_mass[i]=norm_mass[i]*scale+mass;
+                        if (gradients) norm_derivative[i]=norm_derivative[i]*scale+d;
+                        norm_pivot[i]=t;
+                    } else {
+                        double scale=std::exp(t-norm_pivot[i]);
+                        norm_mass[i]+=mass*scale;
+                        if (gradients) norm_derivative[i]+=d*scale;
+                    }
                 }
             }
+        }
+        for (int i=0;i<n;++i) {
+            out.logden[i]=norm_pivot[i]+std::log(norm_mass[i]);
+            if (gradients) out.dlogden[i]=norm_derivative[i]/norm_mass[i];
         }
         // Compile all floating point transcendental work into coefficients.
         size_t capacity=stream_q.size()+stream_k.size();

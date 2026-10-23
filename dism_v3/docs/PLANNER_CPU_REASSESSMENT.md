@@ -5,6 +5,9 @@
 上将 W16 CPU plan+pack 耗时降低约 4–12%；这不是训练吞吐提升。
 更大的候选方向是减少事件复制和中间 Program 物化，而非继续更换 allocator。
 
+后续允许浮点重排的归一化实验与已采用实现见
+[PLANNER_NORMALIZATION.md](PLANNER_NORMALIZATION.md)。下面保留本轮评估时的源码状态。
+
 生产 planner 没有修改。本轮只修复 profiling 工具的头文件依赖并记录评估。
 候选代码、二进制、完整测量和 VTune 数据全部位于 ignored
 `dism_v3/build/planner_reassessment/`。没有加载或改写 checkpoint，没有启动训练、
