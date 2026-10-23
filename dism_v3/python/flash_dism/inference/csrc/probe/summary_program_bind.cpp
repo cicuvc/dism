@@ -161,21 +161,60 @@ class SummaryProgram {
         int64_t bytes=0;for(auto &x:cpu)bytes+=x.nbytes();metrics["program_bytes"]=bytes;
     }
     std::map<std::string,int64_t> stats() const{return metrics;}
-    void prepare(torch::Tensor prototype) {
+    // Release the large host SAM with the GIL released, before Python destroys
+    // this object. Otherwise its destructor can stall foreground submission.
+    void release_compiler() {planners.clear();cpu.clear();old_topo.clear();old_coef.clear();}
+    torch::Tensor prepare(torch::Tensor prototype, bool diagnostic=true) {
+        TORCH_CHECK(int(planners.size())==h,"compiler already released");
         TORCH_CHECK(prototype.is_cuda(),"CUDA prototype required");owner=prototype.device();c10::cuda::CUDAGuard guard(owner);stream=at::cuda::getCurrentCUDAStream();
-        device.clear();for(auto &x:cpu)device.push_back(x.to(owner));
-        for(auto &x:old_topo)x=x.to(owner);for(auto &x:old_coef)x=x.to(owner);
+        device.clear();for(auto &x:cpu)device.push_back(x.pin_memory().to(owner, true));
+        if(diagnostic) {for(auto &x:old_topo)x=x.to(owner);for(auto &x:old_coef)x=x.to(owner);}
         auto f=prototype.options().dtype(torch::kFloat32),i=prototype.options().dtype(torch::kInt32);
         prefix=torch::empty({slots?int64_t(slots)*prefix_pitch:int64_t(nn),slots?tile:r*d},f);
         carry=torch::empty({slots?int64_t(slots)*carry_pitch:int64_t(nb),slots?tile:r*d},f);tail=torch::empty({int64_t(nf),r*d},f);
         out=torch::empty({nm,r*d},f);queue=torch::empty({qcap,4},i);ready=torch::empty({qcap},i);control=torch::empty({4+3*h*tiles},i);initial=device[10];job_slots=torch::empty({h*tiles},i);
-        bp=torch::empty({maxnodes*32},f);bt=torch::empty({((maxnodes+255)/256)*32},f);bping=torch::empty_like(bp);bpong=torch::empty_like(bp);
+        if(diagnostic) {bp=torch::empty({maxnodes*32},f);bt=torch::empty({((maxnodes+255)/256)*32},f);bping=torch::empty_like(bp);bpong=torch::empty_like(bp);}
         int64_t allocated=0;
         for(const auto &x:{prefix,carry,tail,queue,ready,control,job_slots})allocated+=x.nbytes();
         metrics["allocated_scratch_bytes"]=allocated;
         metrics["output_bytes"]=out.nbytes();
-        metrics["diagnostic_baseline_scratch_bytes"]=bp.nbytes()+bt.nbytes()+bping.nbytes()+bpong.nbytes();
+        metrics["diagnostic_baseline_scratch_bytes"]=diagnostic?bp.nbytes()+bt.nbytes()+bping.nbytes()+bpong.nbytes():0;
         TORCH_CHECK(allocated==metrics["scratch_bytes"],"scratch accounting mismatch");
+        return out;
+    }
+    // Build a private frozen matcher at the same cutoff as this summary program.
+    // The live GPU rolling band is deliberately not read or overwritten here.
+    std::vector<torch::Tensor> decode_metadata(torch::Tensor history,int capacity) {
+        TORCH_CHECK(owner.is_cuda() && int(planners.size())==h,"live compiler and prepare required before metadata upload");
+        c10::cuda::CUDAGuard guard(owner);
+        TORCH_CHECK(at::cuda::getCurrentCUDAStream()==stream,"probe stream mismatch");
+        TORCH_CHECK(history.device().is_cpu() && history.scalar_type()==torch::kInt32 && history.is_contiguous() &&
+                    history.sizes()==torch::IntArrayRef({n,3,h}) && capacity>=n,"CPU history [N,3,H] and capacity required");
+        std::vector<dism_decode::RebuildWorkspace> ws(h);
+        int pitch=(maxnodes+1)&~1,edge_pitch=1;
+        const int *data=history.data_ptr<int>();
+        for(int hi=0;hi<h;++hi) {
+            auto &p=planners[hi];p.state=p.match=0;
+            for(int i=0;i<n;++i) {
+                TORCH_CHECK(data[(int64_t(i)*3)*h+hi]==p.keys[i],"history key mismatch");
+                int reset=data[(int64_t(i)*3+2)*h+hi];TORCH_CHECK(reset==0||reset==1,"reset must be binary");
+                p.advance(data[(int64_t(i)*3+1)*h+hi],reset);
+            }
+            ws[hi].prepare(p);edge_pitch=std::max(edge_pitch,ws[hi].edges);
+        }
+        int64_t nt=int64_t(h)*13*pitch,ne=int64_t(h)*2*edge_pitch,ns=int64_t(h)*8;
+        auto host=torch::empty({nt+ne+ns+nm+h},torch::TensorOptions().dtype(torch::kFloat32).pinned_memory(true));
+        float *f=host.data_ptr<float>();int *ints=reinterpret_cast<int*>(f);
+        std::vector<int> unused_band(256);
+        for(int hi=0;hi<h;++hi) {
+            auto &p=planners[hi];
+            ws[hi].pack_snapshot(p,pitch,edge_pitch,capacity,offsets[hi],p.materialized.size(),
+                ints+int64_t(hi)*13*pitch,ints+nt+int64_t(hi)*2*edge_pitch,ints+nt+ne+8*hi,
+                unused_band.data(),f+nt+ne+ns,f+nt+ne+ns+nm+hi);
+        }
+        auto gpu=host.to(owner,true);auto ii=gpu.view(torch::kInt32);
+        return {ii.narrow(0,0,nt).view({h,13,pitch}),ii.narrow(0,nt,ne).view({h,2,edge_pitch}),
+                ii.narrow(0,nt+ne,ns).view({h,8}),gpu.narrow(0,nt+ne+ns,nm),gpu.narrow(0,nt+ne+ns+nm,h)};
     }
     void validate(torch::Tensor k,torch::Tensor v) {
         TORCH_CHECK(k.is_cuda()&&k.device()==owner&&v.device()==owner&&k.is_contiguous()&&v.is_contiguous(),"prepared device/contiguous payload required");
@@ -192,6 +231,7 @@ class SummaryProgram {
         launch_summary_program(a,initial.data_ptr<int>(),k.scalar_type()==torch::kBFloat16,workers,stream);C10_CUDA_KERNEL_LAUNCH_CHECK();return out;
     }
     torch::Tensor baseline(torch::Tensor k,torch::Tensor v) {
+        TORCH_CHECK(bp.defined() && int(planners.size())==h,"live compiler and diagnostic=true required for baseline");
         c10::cuda::CUDAGuard guard(k.device());validate(k,v);
         for(int hi=0;hi<h;++hi)if(counts[hi]) {
             int nodes=planners[hi].nodes.size();
@@ -204,6 +244,7 @@ class SummaryProgram {
         C10_CUDA_KERNEL_LAUNCH_CHECK();return out;
     }
     torch::Tensor reference(torch::Tensor k,torch::Tensor v) {
+        TORCH_CHECK(int(planners.size())==h,"compiler already released");
         TORCH_CHECK(k.device().is_cpu()&&v.device().is_cpu()&&k.scalar_type()==torch::kFloat32&&v.scalar_type()==torch::kFloat32&&k.is_contiguous()&&v.is_contiguous(),"CPU FP32 contiguous vectors required");
         TORCH_CHECK(k.sizes()==torch::IntArrayRef({h,n,r})&&v.sizes()==torch::IntArrayRef({h,n,d}),"reference shape");
         auto result=torch::empty({nm,r*d},torch::TensorOptions().dtype(torch::kFloat64));auto dest=result.data_ptr<double>();
@@ -229,12 +270,17 @@ class SummaryProgram {
         return result;
     }
 };
+void bind_concurrent_probe(pybind11::module_ &);
 PYBIND11_MODULE(TORCH_EXTENSION_NAME,m) {
+    bind_concurrent_probe(m);
     pybind11::class_<SummaryProgram>(m,"SummaryProgram")
          .def(pybind11::init<torch::Tensor,std::vector<double>,int,int,int,int,int,bool>(),
              pybind11::arg("labels"),pybind11::arg("tau"),pybind11::arg("r"),pybind11::arg("dv"),
-             pybind11::arg("block"),pybind11::arg("tile"),pybind11::arg("slots")=0,pybind11::arg("compact")=false)
-        .def("stats",&SummaryProgram::stats).def("prepare",&SummaryProgram::prepare)
+             pybind11::arg("block"),pybind11::arg("tile"),pybind11::arg("slots")=0,pybind11::arg("compact")=false,pybind11::call_guard<pybind11::gil_scoped_release>())
+        .def("stats",&SummaryProgram::stats)
+        .def("release_compiler",&SummaryProgram::release_compiler,pybind11::call_guard<pybind11::gil_scoped_release>())
+        .def("prepare",&SummaryProgram::prepare,pybind11::arg("prototype"),pybind11::arg("diagnostic")=true,pybind11::call_guard<pybind11::gil_scoped_release>())
+        .def("decode_metadata",&SummaryProgram::decode_metadata,pybind11::call_guard<pybind11::gil_scoped_release>())
         .def("run",&SummaryProgram::run,pybind11::call_guard<pybind11::gil_scoped_release>())
         .def("baseline",&SummaryProgram::baseline,pybind11::call_guard<pybind11::gil_scoped_release>())
         .def("reference",&SummaryProgram::reference,pybind11::call_guard<pybind11::gil_scoped_release>());

@@ -936,3 +936,168 @@ python dism_v3/tools/bench_summary_program.py --heads 12 --lengths 8192 \
   --output dism_v3/build/summary_slots/fresh.json
 python -m pytest -q dism_v3/tests/test_summary_program_probe.py
 ```
+
+### Concurrent frozen-snapshot rebuild prototype
+
+`flash_dism.inference.concurrent_probe.ConcurrentGpuPlannerCache` is an explicit,
+opt-in eager wrapper around the existing GPU planner and bounded summary program.
+It requires `DISM_BUILD_PROBES=1`; no model/cache dispatch or production defaults
+change. The production vector/planner kernel is linked into the probe unchanged.
+The only new device kernel replays query/reset labels into a new frozen matcher.
+
+The owner thread/stream continues decoding against snapshot S. `start_rebuild()`
+records a cutoff C on that stream and submits one background job. That job:
+
+1. Waits for the cutoff event on a separate, priority-0 stream; copies only the
+   newly appended label-history range to a persistent pinned host buffer. Only
+   the worker waits for D2H completion. KV/history below C are immutable.
+2. Compiles the full prefix into a private `SummaryProgram`, replays queries to C
+   on its CPU SAM, packs a private frozen topology/state/counts/tau snapshot,
+   and uploads metadata. This first prototype still builds heads serially and
+   does not reuse the production incremental CPU SAM or its worker pool.
+3. Allocates all private summary/scheduler/task buffers **before** launching the
+   persistent interpreter. `prepare(prototype, diagnostic=False)` returns its
+   private output tensor and skips diagnostic baseline allocations. Sixteen
+   compact scratch slots are used by default; slot reuse is internal to this job.
+4. Launches summary execution, records a CUDA-ready event, and releases the large
+   CPU compiler with the GIL released. Constructor, metadata packing and prepare
+   also release the GIL. A completed Python Future alone is not GPU readiness.
+
+`step()` polls readiness without waiting. Once both the Future and CUDA event
+are ready, foreground waits on that event, runs query-only catchup for `[C,P)`,
+then switches to the new snapshot. Catchup reads the old device position and
+sticky error flag, validates bounds/resets, advances the new frozen SAM, and
+invalidates its task cache. The live rolling band is **shared and never rewritten
+by the worker or catchup**. It continues to carry exact recent-history matches.
+The new horizon is C+interval, not P+interval.
+
+Old summary/topology/state/output/task storage stays alive through a foreground
+retirement event recorded after catchup. Background allocations consumed by
+foreground are registered with the CUDA caching allocator, including private C++
+task buffers. Raw KV/history also have their background use recorded. No active
+snapshot summary is overwritten; bounded prefix/carry scratch remains private to
+background summary execution. This is the intended compatibility with the
+previous in-place workspace-slot reuse scheme.
+
+Only one rebuild can be pending. `start_rebuild()` returns false for a pending
+job or an unchanged cutoff. The caller chooses the proactive trigger; `step()`
+forces completion or starts a synchronous fallback before it would cross the
+old horizon. `cancel_rebuild()` invalidates publication but drains submitted
+work rather than freeing its buffers early. Worker exceptions propagate and
+poison further operations; `close()` drains worker/streams even after failure.
+Use a context manager or explicitly close the cache. Prime is allowed once and
+requires complete history. Inputs, tau, sample spacing and materialization
+threshold must remain fixed; this wrapper uses the production default spacing
+4R and threshold 5R only. Output is a reused FP32 buffer: clone to retain tokens.
+
+The wrapper rejects capture and is bound to one foreground stream. Cross-version
+CUDA graph replay, prefill reentry, reset/reprime of an existing cache, automatic
+lead-time selection, a fixed double-buffer pool, and model integration remain
+outside this prototype. The bootstrap `GpuPlannerCache` is retained for the
+wrapper's lifetime, including its initial metadata and diagnostic/native scratch;
+total VRAM is therefore larger than just two snapshots plus the bounded scratch.
+
+#### Measurements and remaining latency
+
+RTX 5090, BF16 R32/DV64, H12, tau=.5, repeat labels, 8192-token prime followed by
+1536 eager tokens. Interval=1024; both modes request rebuilds at the same cutoffs
+8704 and 9216. S256, tile128, 16 compact slots, 256 persistent CTAs. Blocking uses
+**the same prototype compiler and summary kernel**, waiting immediately at each
+cutoff; it is not a comparison with the optimized production CPU rebuild path.
+Times exclude prime/JIT/warmup/final draining. Each token waits only for its
+foreground completion event, never for a device-wide synchronize. Three serial
+runs per mode; table entries are medians of run-level metrics, without locked
+clocks/CPU affinity.
+
+| Foreground workload | Rebuild mode | 1536 tokens ms | Token p50 ms | Token p99 ms | Maximum token ms |
+|---|---|---:|---:|---:|---:|
+| Planner/operator only | Blocking | 166.85 | .060 | .074 | 38.37 |
+| Planner/operator only | Concurrent | 121.63 | .075 | .118 | 1.03 |
+| Operator + 4 BF16 2048-square GEMMs/token | Blocking | 756.73 | .443 | .457 | 39.24 |
+| Operator + 4 BF16 2048-square GEMMs/token | Concurrent | 708.88 | .445 | .592 | 9.48 |
+
+Concurrent wall time falls about 27% / 6.3% respectively. Both jobs publish and
+there are zero deadline waits in all six concurrent runs above. GEMMs are a
+synthetic compute proxy, **not measured model throughput**. Rebuild events are
+rarer than 1% of tokens here, so p99 alone hides the blocking spikes. Concurrent
+work raises some ordinary-token latencies while reducing the larger pauses.
+
+At 256 CTAs, CPU compile is approximately 19–23 ms, preparation/metadata/task
+allocation 5–7 ms, summary execution 8–10 ms, and compiler release another 5–6 ms
+(overlapped with GPU summary). Delta D2H plus its worker-side wait is about
+.07–.31 ms in these warmed runs; the first full-history copy is excluded by the
+benchmark warmup. Cutoff-to-ready observation is roughly 34–41 ms. Catchup for
+about 60–420 tokens costs .06–.22 ms in the unprofiled runs. These ranges describe
+this synthetic pattern; compiler work and catchup depend on SAM/query structure.
+
+A separate two-run async worker sweep with the GEMM proxy gives:
+
+| Background CTAs | Summary ms | Tokens completed across each summary interval | Ordinary token during overlap ms |
+|---:|---:|---:|---:|
+| 64 | 32.8–35.5 | 51–55 | about .65 |
+| 128 | 16.4–18.0 | 26–28 | about .67 |
+| 256 | 9.0–9.6 | 14–16 | about .68 |
+
+All six worker-sweep runs avoid deadline waits and have maximum token latency
+1.28–1.68 ms. However, the independent three-run comparison above still exhibits
+approximately 9 ms spikes with the GEMM proxy; that result is retained rather
+than replaced by the smoother sweep. Moving allocations before the persistent
+kernel removes an avoidable synchronization opportunity but does not establish
+a hard tail-latency bound. Stream priority is not a reservation of GPU resources.
+The earlier 64-CTA operator-only run misses a deadline and rejects the second
+scheduled request while the first is pending; its total time is not comparable
+to runs completing both jobs. The benchmark reports rejected requests, published
+jobs and pending work separately.
+
+Nsight Systems 2025.5.2 confirms actual kernel overlap: the two measured summary
+kernels last 8.79/9.64 ms, with other-stream kernels executing during 8.31/9.18 ms
+of those intervals. There are 13/14 foreground GPU-planner calls and 52/57 GEMM
+calls overlapping them. The traced run is evidence of concurrency, not a source
+of the unprofiled throughput table. The older `nsys` on PATH (2023.4) did not
+capture CUDA activities for this environment; use the CUDA 13.1 bundled version.
+
+At cutoffs 8704/9216, actual bounded interpreter scratch is 71.86/76.09 MiB and
+private output summaries 12.66/13.41 MiB. Those numbers exclude topology, task
+buffers, raw KV/history, the retained bootstrap, pinned host buffers and CUDA
+allocator reservation. Output/topology must coexist across versions; scratch
+slot reuse does not remove that requirement.
+
+#### Validation and reproduction
+
+The concurrent tests compare BF16/FP32 decode against the independent FP64 dense
+oracle at the existing `atol=2e-5, rtol=2e-3`. Coverage includes repeat, periodic,
+branching and empty-summary patterns; mixed tau=0/.35/1.5; query resets; multiple
+versions; a forced 240-token lag; unchanged old snapshot/live band during
+handoff; automatic deadline fallback from an unprimed cache; cancellation;
+closing pending work; injected worker failure; stream/capacity guards.
+
+Catchup compiles to 30 registers/thread, zero shared/stack/local memory; SASS has
+no CALL/LDL/STL instructions. The unchanged interpreter remains at 40 registers
+and zero stack/local memory, with no CALL/LDL/STL. Device sources remain
+Torch-free and add no FP32 atomics. All **51 tests** pass (14 concurrent plus
+37 existing summary regressions). Compute Sanitizer memcheck and synccheck each
+pass all 14 concurrent tests with zero errors; racecheck passes the same 14 with
+zero errors, warnings or hazards. The ordinary pytest dependency/deprecation
+warnings remain visible in the logs. Host ASan/UBSan and a full-model concurrent
+run are not covered; racecheck alone does not prove cross-stream global-memory
+correctness, which also depends on the immutable-prefix and event-lifetime rules.
+
+```bash
+export PYTHONPATH="$PWD/dism_v3/python:$PWD/nanochat"
+export TORCH_EXTENSIONS_DIR="$PWD/dism_v3/build/torch_extensions"
+export DISM_BUILD_PROBES=1 MAX_JOBS=2 OMP_NUM_THREADS=1
+python -m flash_dism.inference.build --component summary-probe \
+  --output dism_v3/build/concurrent_rebuild/summary_probe.so
+python -m pytest -q dism_v3/tests/test_concurrent_rebuild_probe.py \
+  dism_v3/tests/test_summary_program_probe.py
+python dism_v3/tools/bench_concurrent_rebuild.py --workers 256 \
+  --proxy-gemms 0 4 --repeats 3 \
+  --output dism_v3/build/concurrent_rebuild/reproduce.json
+```
+
+Use the `blkw` conda environment. Generated results stay under ignored
+`dism_v3/build/concurrent_rebuild/`: `final_latency.json`, `worker_sweep.json`,
+`overlap_final.nsys-rep` and its SQLite export/analysis, resource/SASS dumps,
+and test/sanitizer logs. The older `latency.json` used different requested
+rebuild cadences and is exploratory only; `fair_latency.json` precedes the final
+allocation-order change. Neither supplies the comparison table above.

@@ -61,7 +61,8 @@ def load_summary_probe():
         raise RuntimeError('summary probe requires DISM_BUILD_PROBES=1')
     return _load('_dism_summary_program_probe',
                  ['probe/summary_program_bind.cpp', 'probe/summary_program.cu',
-                  'rebuild_parallel.cu'], cuda=True,
+                  'rebuild_parallel.cu', 'probe/concurrent_bind.cpp',
+                  'probe/concurrent_catchup.cu', 'gpu_planner.cu'], cuda=True,
                  flags=['-DDISM_DECODE_FP64_PREFIX=0'])
 
 
