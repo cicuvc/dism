@@ -66,7 +66,7 @@ def main():
     src=root/'dism_v3/python/flash_dism/inference/csrc'
     profile=args.output/'instrumented';profile.mkdir(exist_ok=True)
     (profile/'profile_support.hpp').write_text(SUPPORT)
-    for name in ('planner.hpp','prefill_matcher.hpp'):
+    for name in ('planner.hpp','prefill_matcher.hpp','planning_workers.hpp'):
         (profile/name).write_text((src/name).read_text())
     s=(src/'prefill.hpp').read_text()
     s='#include "profile_support.hpp"\n'+s
@@ -110,7 +110,7 @@ def main():
             if path.exists() and path.read_bytes()!=blob:
                 raise ValueError(f'Refusing to replace different workload: {path}')
             path.write_bytes(blob)
-    sources=[target,counter,Path(__file__),*(src/n for n in ('planner.hpp','prefill_matcher.hpp','prefill.hpp','prefill_training.hpp'))]
+    sources=[target,counter,Path(__file__),*(src/n for n in ('planner.hpp','prefill_matcher.hpp','planning_workers.hpp','prefill.hpp','prefill_training.hpp'))]
     (args.output/'build_manifest.json').write_text(json.dumps(dict(commands=commands,
         sources={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}),indent=2)+'\n')
 
