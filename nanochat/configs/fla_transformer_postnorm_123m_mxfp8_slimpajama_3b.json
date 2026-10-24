@@ -1,0 +1,19 @@
+{
+  "architecture": "fla_transformer",
+  "architecture_version": 1,
+  "config": {
+    "sequence_len": 2048,
+    "vocab_size": 32000,
+    "n_layer": 12,
+    "n_head": 12,
+    "n_embd": 768,
+    "intermediate_size": 1664,
+    "rope_theta": 10000.0,
+    "norm_eps": 1e-6,
+    "softcap": 30.0,
+    "post_norm": true,
+    "mxfp8": true,
+    "mxfp8_optimizer": true,
+    "mxfp8_ce": true
+  }
+}

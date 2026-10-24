@@ -439,7 +439,7 @@ def disable_fp8(model):
 # Compile the model
 
 orig_model = model # original, uncompiled model, for saving raw model state_dict and for inference/evaluation (because the shapes may change shape)
-hard_dispatch_layers = dism_dispatch_layers(orig_model)
+hard_dispatch_layers = 0 if model_spec.architecture == 'fla_transformer' else dism_dispatch_layers(orig_model)
 if args.log_hidden_rms:
     hidden_rms_handles, hidden_rms_buffer = register_residual_rms_probe(orig_model)
 else:
@@ -451,7 +451,7 @@ if getattr(orig_model, 'dynamic_compile', False):
     torch._inductor.config.compile_threads = 1
 if args.cuda_graph:
     if not getattr(orig_model, 'document_balanced_loss', False) or device_type != 'cuda':
-        raise ValueError('--cuda-graph requires the packed DISM CUDA training model')
+        raise ValueError('--cuda-graph requires a packed document-balanced CUDA training model')
     if COMPUTE_DTYPE == torch.float16:
         raise ValueError('--cuda-graph requires BF16 training without GradScaler')
 else:
@@ -890,8 +890,11 @@ try:
         for micro_step in range(grad_accum_steps):
             if args.cuda_graph:
                 if training_graph is None:
-                    from nanochat.cuda_graph import PackedTrainingGraph
-                    training_graph = PackedTrainingGraph(
+                    if model_spec.architecture == 'fla_transformer':
+                        from nanochat.attention_cuda_graph import PackedAttentionTrainingGraph as GraphClass
+                    else:
+                        from nanochat.cuda_graph import PackedTrainingGraph as GraphClass
+                    training_graph = GraphClass(
                         orig_model, x, y, cu_seqlens, microbatches=grad_accum_steps,
                         planner=args.cuda_graph_planner, planner_max_bytes=args.cuda_graph_planner_max_bytes)
                 loss, count = training_graph.forward_backward(x, y, cu_seqlens)

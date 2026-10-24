@@ -36,15 +36,18 @@ def _preserve_rng(device):
 def _evaluation_state(model, context):
     modes = [(module, module.training) for module in model.modules()]
     buffers = [(name, buffer, buffer.detach().clone()) for name, buffer in model.named_buffers()]
-    old_hard, old_context = model.eval_hard, model.config.sequence_len
+    has_hard = hasattr(model, 'eval_hard')
+    old_hard, old_context = getattr(model, 'eval_hard', None), model.config.sequence_len
     changed = []
     try:
         model.eval()
-        model.eval_hard = True
+        if has_hard:
+            model.eval_hard = True
         model.config.sequence_len = max(old_context, context)
         yield
     finally:
-        model.eval_hard = old_hard
+        if has_hard:
+            model.eval_hard = old_hard
         model.config.sequence_len = old_context
         for module, mode in modes:
             module.training = mode
@@ -189,7 +192,8 @@ class ShortNIAH:
 
     @torch.no_grad()
     def evaluate(self, model, tokenizer):
-        if not (getattr(model, 'aligned_segment_ends', False) and hasattr(model, 'eval_hard')
+        if not (getattr(model, 'aligned_segment_ends', False)
+                and (hasattr(model, 'eval_hard') or getattr(model, 'supports_packed_niah', False))
                 and hasattr(model, 'norm') and hasattr(model, 'lm_head')):
             return self._skip('model does not support the DISM packed NIAH probe')
         device = next(model.parameters()).device
