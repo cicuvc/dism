@@ -1,9 +1,9 @@
 """CPU-only diagnostic for differentiating the native hard-prefill program.
 
-This is NOT a production backend. SymbolicPlanner mirrors prefill.hpp's SAM /
-centroid event construction but retains integer match lengths. Tests compare
-its event topology and coefficients to the unchanged native planner. Only the
-dense oracle is quadratic; the event evaluator never constructs an N*N matrix.
+This is NOT a production backend. SymbolicPlanner retains the original whole-tree
+centroid construction and integer match lengths. The native planner may use a
+different event topology; compare evaluated results and derivatives, not event
+arrays. Only the dense oracle is quadratic; event evaluation is not.
 """
 from dataclasses import dataclass
 import heapq
@@ -346,3 +346,22 @@ def dense_exact_oracle(queries, keys, sq, sk, value, tau, dout):
     out = torch.stack(rows)
     gradients = torch.autograd.grad(out, (sq, sk, value, t), torch.tensor(dout, dtype=torch.float64))
     return out.detach().numpy(), tuple(g.numpy() for g in gradients)
+
+
+def assert_equivalent_programs(actual, expected, *, seed=318):
+    """Compare different decompositions without imposing an event ordering.
+
+    Use independent vector channels to exercise the numerator, all three vector
+    gradients, tau gradient and forward tangent. Preserve the native FP64 math
+    tolerance; packing/layout tests remain separate.
+    """
+    for name in ('logden', 'dlogden'):
+        np.testing.assert_allclose(getattr(actual, name), getattr(expected, name),
+                                   rtol=2e-9, atol=2e-10)
+    rng = np.random.default_rng(seed)
+    n = len(expected.logden)
+    vectors = [rng.normal(size=(n, width))*.2 for width in (3, 3, 4, 4)]
+    out, grads, tangent = actual.evaluate(*vectors)
+    ref_out, ref_grads, ref_tangent = expected.evaluate(*vectors)
+    for got, want in zip((out, *grads, tangent), (ref_out, *ref_grads, ref_tangent)):
+        np.testing.assert_allclose(got, want, rtol=2e-9, atol=2e-10)

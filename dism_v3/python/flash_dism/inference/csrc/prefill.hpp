@@ -125,7 +125,8 @@ class Builder {
     std::vector<char> on_path;
     std::vector<bool> removed;
     std::vector<Stream> streams;
-    Ids stream_q, stream_k, ids;
+    Ids stream_q, stream_k;
+    Ids forest_qhead, forest_qtail, forest_qnext, forest_queries, forest_keys;
     std::vector<double> stream_a, stream_b, stream_da, stream_db;
 
     double logweight(int length) const {
@@ -261,23 +262,60 @@ class Builder {
         }
     }
 
-    void decompose(int root, const Ids &qs, Range qr, const Ids &ks, Range kr, int depth) {
+    // Per-branch query buckets are populated during matching. Key buckets
+    // are populated by SAM extension, with clone positions excluded.
+    void build_root_forest() {
+        // F(0)=0: distinct root components have no cross contribution.
+        // Removing only the root isolates branches without changing suffix links.
+        removed[0]=true;
+        for (size_t g=0;g<sam.branch_roots.size();++g) {
+            int first_key=sam.key_head[g],last_query=forest_qtail[g];
+            if (last_query<first_key || last_query<0) continue;
+            forest_queries.clear();forest_keys.clear();
+            for (int i=forest_qhead[g];i>=0;i=forest_qnext[i])
+                if (i>=first_key) forest_queries.push_back(i);
+            for (int j=first_key;j>=0 && j<=last_query;j=sam.key_next[j])
+                forest_keys.push_back(j);
+            decompose(sam.branch_roots[g],forest_queries,{0,int(forest_queries.size())},
+                      forest_keys,{0,int(forest_keys.size())},0);
+        }
+    }
+
+    void decompose(int root, const Ids &qs, Range qr, const Ids &ks, Range kr, int depth,
+                   const Ids *known_nodes=nullptr, Range known_range={0,0}) {
         if (qr.b==qr.e || kr.b==kr.e || ks[kr.b]>qs[qr.e-1]) return;
         Scratch &S=scratch_at(depth);
-        Ids &order=S.order;
-        order.clear(); order.push_back(root); parent[root]=-1;
-        for (size_t i=0;i<order.size();++i) {
-            int v=order[i]; size[v]=1;
-            for (int w:neighbors(v)) if (!removed[w] && w!=parent[v]) {
-                parent[w]=v; order.push_back(w);
+        // Parent partitioning already produced this component's BFS order,
+        // orientation and subtree sizes. Each forest root needs one initial BFS.
+        parent[root]=-1;
+        if (!known_nodes) {
+            auto &initial=S.order;initial.clear();initial.push_back(root);
+            for (size_t i=0;i<initial.size();++i) {
+                int v=initial[i];size[v]=1;
+                for (int w:neighbors(v)) if (!removed[w] && w!=parent[v]) {
+                    parent[w]=v;initial.push_back(w);
+                }
             }
+            for (size_t i=initial.size();i-->1;) size[parent[initial[i]]]+=size[initial[i]];
         }
-        for (size_t i=order.size();i-->1;) size[parent[order[i]]]+=size[order[i]];
-        int c=root, best=int(order.size());
-        for (int v:order) {
-            int largest=int(order.size())-size[v];
+        // known_nodes belongs to the parent recursion level and stays immutable
+        // until this call returns. scratch is a deque, so deeper growth is safe.
+        const Ids &order=known_nodes ? *known_nodes : S.order;
+        const int begin=known_nodes ? known_range.b : 0;
+        const int end=known_nodes ? known_range.e : int(order.size());
+        const int total=end-begin;
+        int c=root,best=total;
+        for (int t=begin;t<end;++t) {
+            int v=order[t],largest=total-size[v];
             for (int w:neighbors(v)) if (!removed[w] && parent[w]==v) largest=std::max(largest,size[w]);
-            if (largest<best) { best=largest; c=v; }
+            if (largest<best) {best=largest;c=v;}
+        }
+        // Child-side sizes are unchanged by removing c. In the parent-side
+        // component only the old root-to-c path reverses. Repair those sizes
+        // before partitioning overwrites parent[] with the new orientations.
+        int cut=size[c];
+        for (int v=parent[c];v>=0;v=parent[v]) {
+            int previous=size[v];size[v]=total-cut;cut=previous;
         }
         removed[c]=true;
         S.node_arena.clear(); S.comps.clear();
@@ -355,7 +393,8 @@ class Builder {
         }
         emit(S.qs,S.gq[0],S.ks,S.gk[0],c,3);
         for (int g=1;g<nc;++g)
-            decompose(S.node_arena[S.comps[g].b],S.qs,S.gq[g],S.ks,S.gk[g],depth+1);
+            decompose(S.node_arena[S.comps[g].b],S.qs,S.gq[g],S.ks,S.gk[g],depth+1,
+                      &S.node_arena,S.comps[g]);
     }
 
   public:
@@ -429,6 +468,8 @@ class Builder {
         }
         int state=0, length=0;
         qnode.reserve(n); matched.reserve(n);
+        forest_qhead.assign(sam.branch_roots.size(),-1);
+        forest_qtail.assign(sam.branch_roots.size(),-1);forest_qnext.resize(n);
         for (int i=0;i<n;++i) {
             if (reset && reset[i]) state=length=0;
             int edge=sam.find(state,q[i]);
@@ -439,9 +480,14 @@ class Builder {
             if (edge<0) state=length=0;
             else { state=sam.edges[edge].target; ++length; }
             qnode.push_back(state); matched.push_back(length);
+            if (length) {
+                int group=sam.branch[state];forest_qnext[i]=-1;
+                if (forest_qtail[group]>=0) forest_qnext[forest_qtail[group]]=i;
+                else forest_qhead[group]=i;
+                forest_qtail[group]=i;
+            }
         }
-        ids.resize(n); std::iota(ids.begin(),ids.end(),0);
-        decompose(0,ids,{0,n},ids,{0,n},0);
+        build_root_forest();
     }
 
     Program finish() const {

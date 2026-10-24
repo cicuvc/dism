@@ -260,6 +260,15 @@ number of slots after padding each stream to chunk size C (default 16):
 | Scalar event program | `E = O(N log N)` | `O(E_C)` |
 | Triton vector execution | `O(E_C [R DV + C(R+DV)])` | `O(E_C + N(R+DV))` global storage |
 
+SAM construction also records stable suffix-link root branches and their key
+positions. Query matching collects queries into the same branches. Since the
+root has zero match weight, planning skips branches with no causal query/key
+pair, trims impossible temporal endpoints, and decomposes each active branch
+independently. Recursive components reuse their parent's traversal and subtree
+sizes. This preserves FP64 mathematics but can change stream order and event
+counts; repeated-label inputs use the same algorithm. See
+[the root-forest report](docs/PLANNER_ROOT_FOREST.md) for measurements and tests.
+
 For fixed C, R and DV, vector work is `O(N log N)`. Each `decompose` call
 answers every `lca(v, centroid)` in `O(component)` by walking the component's
 link chain and sweeping down from its topmost node, so the CPU planner no

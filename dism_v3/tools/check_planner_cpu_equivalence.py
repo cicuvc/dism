@@ -9,7 +9,7 @@ import importlib.util
 from pathlib import Path
 import numpy as np
 import torch  # Load extension dependencies; CUDA remains disabled.
-from hard_prefill_grad_reference import SymbolicPlanner
+from hard_prefill_grad_reference import SymbolicPlanner, Program, assert_equivalent_programs
 
 FIELDS = ('rows', 'prefixes', 'weights', 'dlog', 'lengths', 'resets', 'stream_heads')
 
@@ -80,8 +80,7 @@ def main():
             if pattern=='periodic':q=np.arange(n)%3;k=(np.arange(n)+1)%3
             for tau in (-2.,-1e-8,0.,1e-8,.5,2.,16.):
                 ref=SymbolicPlanner(q,k).compile(tau);got=module.plan_training(q.tolist(),k.tolist(),tau).arrays()
-                for key in ('offsets','rows'):np.testing.assert_array_equal(got[key],getattr(ref,key))
-                for key in ('weight','decay','logden','dlogden','dlogweight'):np.testing.assert_allclose(got[key],getattr(ref,key),rtol=2e-9,atol=2e-10)
+                assert_equivalent_programs(Program(**got),ref)
                 cases+=1
     print(f'{cases} symbolic numerical oracle cases passed',flush=True)
     pool=module.TrainingPlanner(4)

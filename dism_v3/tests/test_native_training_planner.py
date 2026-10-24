@@ -11,7 +11,7 @@ from flash_dism.inference.training_planner import NativeTrainingPlanner
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 from check_hard_prefill_training import fixture
-from hard_prefill_grad_reference import SymbolicPlanner
+from hard_prefill_grad_reference import SymbolicPlanner, Program, assert_equivalent_programs
 from hard_prefill_backward_triton import HardPrefillBackward, pack_program
 
 
@@ -23,16 +23,31 @@ def test_native_derivative_program(pattern, tau, n):
     p = SymbolicPlanner(q, k).compile(tau)
     native = load_prefill().plan_training(q.tolist(), k.tolist(), tau)
     arrays = native.arrays()
-    for name in ('offsets', 'rows'):
-        np.testing.assert_array_equal(arrays[name], getattr(p, name))
-    for name in ('weight', 'decay', 'logden', 'dlogden', 'dlogweight'):
-        np.testing.assert_allclose(arrays[name], getattr(p, name), rtol=2e-9, atol=2e-10)
-    expected = pack_program(p, 16)
+    program = Program(**arrays)
+    assert_equivalent_programs(program, p)
+    # Independently pack the native topology; the symbolic topology can differ.
+    expected = pack_program(program, 16)
     actual = native.chunks(16)
     for name in expected:
         if name == 'dlog' and not expected[name].size:
             continue  # Empty inference-style Program has no event derivative array.
         np.testing.assert_allclose(actual[name], expected[name], rtol=2e-6, atol=2e-7)
+
+
+@pytest.mark.parametrize('tau', [-2., 0., .5, 16.])
+def test_root_forest_causal_boundaries(tau):
+    # Branch 4 has queries before its first key only, branch 7 has keys without
+    # any queries, and branch 9 has queries without keys. Branch 3 includes
+    # equal-time pairs and a key after its final query; only valid pairs survive.
+    q = np.array([4, 9, 3, 3, 9, 9, 9, 9], np.int32)
+    k = np.array([7, 7, 3, 3, 4, 3, 7, 4], np.int32)
+    native = load_prefill().plan_training(q.tolist(), k.tolist(), tau)
+    arrays = native.arrays()
+    assert_equivalent_programs(Program(**arrays), SymbolicPlanner(q, k).compile(tau))
+    rows = arrays['rows']
+    assert set(rows[rows >= 0]).issubset({2, 3})
+    assert set(-rows[rows < 0]-1) == {2, 3}
+    np.testing.assert_array_equal(arrays['logden'][[0, 1, 4, 5, 6, 7]], 0.)
 
 
 def batch_fixture():
@@ -57,7 +72,9 @@ def test_batch_matches_independent_document_plans(workers, chunk_size):
         for h in range(3):
             if not hard[b, h]:
                 continue
-            p = pack_program(SymbolicPlanner(*labels[:, b, h, start:stop]).compile(tau[h]), chunk_size)
+            arrays = load_prefill().plan_training(
+                *[x.tolist() for x in labels[:, b, h, start:stop]], tau[h]).arrays()
+            p = pack_program(Program(**arrays), chunk_size)
             row = p['rows'].astype(np.int64)
             absolute = (np.where(row >= 0, row, -row-1)+b*65+start)*3+h
             expected['rows'].extend(np.where(row >= 0, absolute, -absolute-1))

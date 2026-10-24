@@ -47,14 +47,17 @@ def check_case(pattern, n, tau, *, r=32, dv=64, seed=318, precision='tf32x3',
     inputs = [torch.tensor(x, device='cuda', dtype=dtype) for x in vectors]
     cpu = [x.float().cpu().double().numpy() for x in inputs]
     plan = HardPrefillBackward(q, k, tau, chunk_size=chunk_size, mma_precision=precision)
+    symbolic_program = plan.program
     if fused:
         from hard_prefill_backward_fused import FusedHardPrefillBackward
         plan = FusedHardPrefillBackward.from_plan(plan, plan.packed['offsets'])
-    native = HardPrefillPlan(q, k, tau).native.chunks(chunk_size)
-    for name in ('offsets', 'rows', 'lengths', 'resets'):
-        np.testing.assert_array_equal(plan.packed[name], native[name])
-    for name in ('prefixes', 'weights'):
-        np.testing.assert_allclose(plan.packed[name], native[name], rtol=2e-6, atol=2e-7)
+    # The native root forest and the symbolic whole-tree planner have different
+    # event layouts. Compare the executed operator, retaining the strict FP64
+    # tolerance; the GPU gradients below still use the independent dense oracle.
+    native = HardPrefillPlan(q, k, tau)
+    expected_out, _, _ = symbolic_program.evaluate(*cpu)
+    np.testing.assert_allclose(native.execute(*cpu[:3], dtype=np.float64),
+                               expected_out, rtol=2e-9, atol=2e-10)
     _, reference = dense_oracle(q, k, *cpu[:3], tau, cpu[3], direction=bool(seed % 2))
     actual = plan.backward(*inputs)
     measurements, production_failures = {}, {}

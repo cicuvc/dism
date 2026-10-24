@@ -15,6 +15,8 @@ class PrefillMatcher {
     struct Edge { int node, symbol, target, next; };
     std::vector<Node> nodes;
     std::vector<Edge> edges;
+    // Stable root-component ids; cloning never changes existing membership.
+    std::vector<int> branch, branch_roots, key_head, key_tail, key_next;
   private:
     std::vector<int> table;
     size_t mask=0;
@@ -39,6 +41,9 @@ class PrefillMatcher {
         if (!n || n>size_t(std::numeric_limits<int>::max()/8))
             throw std::invalid_argument("offline SAM length exceeds index range");
         nodes.clear(); edges.clear();
+        branch.clear();branch.reserve(2*n);branch.push_back(-1);
+        branch_roots.clear();key_head.clear();key_tail.clear();
+        key_next.clear();key_next.reserve(n);
         nodes.reserve(2*n); edges.reserve(3*n);
         size_t capacity=16;
         while(capacity<8*n)capacity*=2;
@@ -61,6 +66,7 @@ class PrefillMatcher {
     }
     void extend(int symbol,int position,int& last) {
         int current=int(nodes.size());nodes.push_back({});
+        branch.push_back(-1);key_next.push_back(-1);
         nodes[current].length=nodes[last].length+1;
         nodes[current].position=position;
         int p=last, edge=-1;
@@ -76,6 +82,10 @@ class PrefillMatcher {
             else {
                 Node copy=nodes[q];copy.length=nodes[p].length+1;copy.position=-1;copy.first=-1;
                 int clone=int(nodes.size());nodes.push_back(copy);
+                int group=branch[q];branch.push_back(group);
+                // A root-child clone becomes the new root of the same branch.
+                // Existing nodes retain their ids; no subtree relabeling is needed.
+                if (copy.link==0) branch_roots[group]=clone;
                 for(int e=nodes[q].first;e>=0;) {
                     // insert can reallocate edges; retain values, never references.
                     Edge original=edges[e];insert(clone,original.symbol,original.target);e=original.next;
@@ -88,6 +98,16 @@ class PrefillMatcher {
                 nodes[current].link=nodes[q].link=clone;
             }
         }
+        int target=nodes[current].link;
+        int group=target==0 ? int(branch_roots.size()) : branch[target];
+        if (target==0) {
+            branch_roots.push_back(current);
+            key_head.push_back(-1);key_tail.push_back(-1);
+        }
+        branch[current]=group;
+        if (key_tail[group]>=0) key_next[key_tail[group]]=position;
+        else key_head[group]=position;
+        key_tail[group]=position;
         last=current;
     }
 };

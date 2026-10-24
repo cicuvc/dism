@@ -1,7 +1,8 @@
 """Build isolated current-source CPU profiler targets, never install extensions.
 
-The timed binary includes unchanged production headers. The phase binary copies
-headers into ignored build output and inserts coarse timers/allocation counters.
+The timed binary includes production headers by default; --source-dir selects
+an isolated experiment. The phase binary copies headers into ignored build
+output and inserts coarse timers/allocation counters.
 """
 import argparse
 import hashlib
@@ -58,25 +59,35 @@ def once(source,old,new):
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--output',type=Path,required=True)
+    ap.add_argument('--source-dir',type=Path,help='Isolated experimental csrc directory under dism_v3/build')
     ap.add_argument('--geometry-json',type=Path,help='CPU diagnosis JSON supplying geometry/documents for iid inputs')
     args=ap.parse_args();root=Path(__file__).resolve().parents[2]
     if not args.output.resolve().is_relative_to(root/'dism_v3/build'):
         ap.error('output must be under dism_v3/build')
     args.output.mkdir(exist_ok=True,parents=True)
     src=root/'dism_v3/python/flash_dism/inference/csrc'
+    if args.source_dir:
+        src=args.source_dir.resolve()
+        if not src.is_relative_to(root/'dism_v3/build'):
+            ap.error('experimental source-dir must be under dism_v3/build')
     profile=args.output/'instrumented';profile.mkdir(exist_ok=True)
     (profile/'profile_support.hpp').write_text(SUPPORT)
     for name in ('planner.hpp','prefill_matcher.hpp','planning_workers.hpp'):
         (profile/name).write_text((src/name).read_text())
     s=(src/'prefill.hpp').read_text()
+    forest_entry='        build_root_forest();'
+    if forest_entry in s:
+        s=once(s,forest_entry,'        prof::tick(4);\n'+forest_entry+'\n        prof::tick(10);')
+    else:
+        s=once(s,'        ids.resize(n);','        prof::tick(4);\n        ids.resize(n);')
+        entry='        decompose(0,ids,{0,n},ids,{0,n},0);'
+        s=once(s,entry,entry+'\n        prof::tick(10);')
     s='#include "profile_support.hpp"\n'+s
     for old,new in (
         ('        if (gradients) {\n            if (cached_tau!=tau)', '        prof::tick(0);\n        if (gradients) {\n            if (cached_tau!=tau)'),
         ('        // Build the offline SAM','        prof::tick(1);\n        // Build the offline SAM'),
         ('        int count=int(sam.nodes.size());','        prof::tick(2);\n        int count=int(sam.nodes.size());'),
         ('        int state=0, length=0;','        prof::tick(3);\n        int state=0, length=0;'),
-        ('        ids.resize(n);','        prof::tick(4);\n        ids.resize(n);'),
-        ('        decompose(0,ids,{0,n},ids,{0,n},0);','        decompose(0,ids,{0,n},ids,{0,n},0);\n        prof::tick(10);'),
         ('    Program finish() const {','    Program finish() const {\n        prof::tick(5);'),
         ('        // Compile all floating point transcendental work','        prof::tick(6);\n        // Compile all floating point transcendental work'),
         ('        return out;\n    }\n};','        prof::tick(7);\n        return out;\n    }\n};'),
