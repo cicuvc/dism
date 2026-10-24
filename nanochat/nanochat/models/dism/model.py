@@ -232,6 +232,9 @@ class DismLM(nn.Module):
                 layer_config.attention_type = "pure_gdn"
             blocks.append(DismBlock(layer_config, i))
         self.layers = nn.ModuleList(blocks)
+        if config.mixer_output == 'layernorm_sigmoid':
+            from .output_gate import install_layernorm_sigmoid
+            install_layernorm_sigmoid(self, config.mixer_gate_scales)
         if not getattr(self.layers[0].attn, "is_pure_mixer", False):
             raise ValueError("value residual requires a pure GDN first layer")
         _replace_convs_with_linear_fla(

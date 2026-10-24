@@ -407,7 +407,7 @@ class DismAttention(nn.Module):
         gate = self.g_proj_up(self.g_proj_down(x)).unflatten(
             -1, (self.heads, self.value_dim)
         )
-        if compiling:
+        if compiling and not getattr(self.norm, 'explicit_output_gate', False):
             # Let Inductor fuse this expression. FLA's current custom backward
             # queries Triton device properties from inside the traced graph.
             values = output.float()

@@ -45,7 +45,7 @@ class PureGdnAttention(nn.Module):
                          conv_seq_idx=kwargs.get('conv_seq_idx'),
                          gdn_chunk_indices=kwargs.get('gdn_chunk_indices'))
         gate=self.g_proj_up(self.g_proj_down(x)).reshape(b,n,self.heads,self.value_dim)
-        if torch.compiler.is_compiling():
+        if torch.compiler.is_compiling() and not getattr(self.norm, 'explicit_output_gate', False):
             values=out.float()*torch.rsqrt(out.float().square().mean(-1,keepdim=True)+self.norm.eps)
             out=(values*self.norm.weight.float()*F.silu(gate.float())).to(out.dtype).flatten(2)
         else:out=self.norm(out,gate).flatten(2)

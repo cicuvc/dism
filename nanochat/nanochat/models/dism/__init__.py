@@ -1,5 +1,6 @@
 """Selected DISM-GDN pretraining architecture."""
 from dataclasses import dataclass
+import math
 
 from nanochat.models import ModelCapabilities, register_model
 
@@ -38,8 +39,19 @@ class DismConfig:
     mxfp8_optimizer: bool = False
     mxfp8_ce: bool = False
     layer_layout: str | None = None
+    mixer_output: str = "rmsnorm_silu"
+    mixer_gate_scales: list[float] | None = None
 
     def __post_init__(self):
+        if self.mixer_output not in ('rmsnorm_silu', 'layernorm_sigmoid'):
+            raise ValueError('unsupported mixer_output')
+        if self.mixer_output == 'layernorm_sigmoid':
+            if (not isinstance(self.mixer_gate_scales, list)
+                    or len(self.mixer_gate_scales) != self.n_layer
+                    or any(not math.isfinite(float(s)) or float(s) <= 0 for s in self.mixer_gate_scales)):
+                raise ValueError('layernorm_sigmoid requires one positive finite mixer_gate_scale per layer')
+        elif self.mixer_gate_scales is not None:
+            raise ValueError('mixer_gate_scales requires layernorm_sigmoid')
         self.softcap = float(self.softcap)
         self.hard_prob_max = float(self.hard_prob_max)
         self.vocab_temperature = float(self.vocab_temperature)
