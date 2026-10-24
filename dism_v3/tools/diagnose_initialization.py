@@ -17,7 +17,44 @@ os.environ['DISM_HARD_BACKWARD'] = 'quadratic'
 import torch
 from torch.nn import functional as F
 from nanochat.models import build_model, ModelSpec
-from diagnose_layer_layout import batches, group
+
+
+def batches(directory, step, rows):
+    state = torch.load(directory/f'train_state_{step:06d}_rank0.pt', map_location='cpu', weights_only=False)
+    batch = state['prefetched_batch']
+    length = batch['inputs'].shape[1]
+    result = []
+    for start in range(0, len(batch['inputs']), rows):
+        stop = min(start+rows, len(batch['inputs']))
+        lo, hi = start*length, stop*length
+        cu = batch['cu_seqlens']
+        cu = cu[(cu >= lo) & (cu <= hi)]
+        assert cu[0] == lo and cu[-1] == hi
+        result.append((batch['inputs'][start:stop].cuda(), batch['targets'][start:stop].cuda(), (cu-lo).cuda()))
+    return result
+
+
+def group(name):
+    if not name.startswith('layers.'):
+        return None
+    _, index, suffix = name.split('.', 2)
+    if suffix.endswith('q_vocab'):
+        kind = 'q_vocab'
+    elif suffix.endswith('k_vocab'):
+        kind = 'k_vocab'
+    elif suffix.endswith('log_sel_tau'):
+        kind = 'tau'
+    elif suffix in ('attn.q_conv.weight', 'attn.k_conv.weight'):
+        kind = 'shared_qk'
+    elif suffix in ('attn.q_conv.conv.weight', 'attn.k_conv.conv.weight'):
+        kind = 'selector_conv'
+    elif 'sq_proj' in suffix or 'sk_proj' in suffix:
+        kind = 'readout'
+    elif suffix.startswith('mlp.'):
+        kind = 'mlp'
+    else:
+        kind = 'other'
+    return f'{int(index):02d}/{kind}'
 
 
 def rms(x):
