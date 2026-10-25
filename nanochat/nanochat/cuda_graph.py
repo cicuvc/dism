@@ -58,6 +58,8 @@ class PackedTrainingGraph:
         if input_ids.ndim != 2 or input_ids.shape != targets.shape:
             raise ValueError('expected matching [training rows, row length] inputs/targets')
         if planner:
+            if getattr(model.config, 'hard_query_topk', 1) != 1:
+                raise ValueError('top-four CUDA Graph currently requires planner=False')
             if torch.distributed.is_initialized() and torch.distributed.get_world_size() != 1:
                 raise ValueError('planner CUDA Graph currently supports one training rank')
             if (os.environ.get('DISM_HARD_BACKWARD', 'ready') != 'ready' or

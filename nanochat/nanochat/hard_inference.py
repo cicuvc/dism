@@ -98,6 +98,8 @@ class HardInferenceEngine:
     """
 
     def __init__(self, model, prefill_engine, *, capacity, planner_backend="cpu"):
+        if getattr(model.config, "hard_query_topk", 1) != 1:
+            raise NotImplementedError("SAM inference does not yet support top-four query reads")
         self.model = model
         self.prefill_engine = prefill_engine
         self.capacity = int(capacity)

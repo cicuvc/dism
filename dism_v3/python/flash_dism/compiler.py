@@ -97,7 +97,7 @@ def _voc_forward_impl(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: to
                 v: torch.Tensor, eq: torch.Tensor, ek: torch.Tensor, tau: torch.Tensor,
                 beta: torch.Tensor, direction: torch.Tensor, hard: torch.Tensor,
                 boundaries: Optional[torch.Tensor], layout: Optional[torch.Tensor],
-                need_backward: bool, direction_true=False, planner=None) -> list[torch.Tensor]:
+                need_backward: bool, direction_true=False, planner=None, hard_forward_override=None) -> list[torch.Tensor]:
     from .hard_training import default_hard_planner, layout_from_table
     from .hard_forward import forward_hard
     b = float(beta)
@@ -129,7 +129,8 @@ def _voc_forward_impl(q: torch.Tensor, k: torch.Tensor, sq: torch.Tensor, sk: to
             (qv, kv, sq, sk, v, lq.transpose(1, 2), lk.transpose(1, 2),
              iq, ik, direction, hard, tau), table,
             0, need_backward, False, True, direction_true)
-    combined = output + forward_hard(sq.contiguous(),sk.contiguous(),v.contiguous(),iq,ik,
+    hard_forward = forward_hard if hard_forward_override is None else hard_forward_override
+    combined = output + hard_forward(sq.contiguous(),sk.contiguous(),v.contiguous(),iq,ik,
                                      hard.contiguous(),tau.contiguous(),layout=pack)[0] if q.shape[1] else output.clone()
     # All auxiliary results own newly computed storage; no inputs alias outputs.
     # qfk/kfq are saved UNSCALED so the backward delta uses E_beta with dL/dE.

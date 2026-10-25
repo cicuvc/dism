@@ -232,6 +232,9 @@ class DismLM(nn.Module):
                 layer_config.attention_type = "pure_gdn"
             blocks.append(self._make_block(layer_config, i))
         self.layers = nn.ModuleList(blocks)
+        for layer in self.layers:
+            if not getattr(layer.attn, 'is_pure_mixer', False):
+                layer.attn.hard_query_topk = config.hard_query_topk
         if config.mixer_output in ('layernorm_sigmoid', 'rmsnorm_sigmoid'):
             from .output_gate import install_layernorm_sigmoid
             install_layernorm_sigmoid(self, config.mixer_gate_scales)

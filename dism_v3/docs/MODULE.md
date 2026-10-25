@@ -69,3 +69,11 @@ readout interfaces remain in this branch.
 frontend has an MXFP8 linear variant, while its depthwise convolution and the
 downstream DISM/GDN math remain BF16. `sq_proj`/`sk_proj` can use
 `flash_mxfp8.MXFP8Linear`. `o_proj` remains the common BF16 output path.
+
+## Opt-in top-four hard training
+
+Nanochat model specs may explicitly set `hard_query_topk=4` for local weighted
+query alternatives on the hard path, while retaining native v3 soft and a single
+committed argmax history. The default remains 1. This baseline supports aligned
+CUDA eager/graph training with planner disabled; cached/SAM inference and
+Dynamo are not supported. See [implementation and measured limits](TOPK_HARD_TRAINING.md).

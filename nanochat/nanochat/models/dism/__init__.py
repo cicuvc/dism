@@ -42,8 +42,13 @@ class DismConfig:
     layer_layout: str | None = None
     mixer_output: str = "rmsnorm_silu"
     mixer_gate_scales: list[float] | None = None
+    hard_query_topk: int = 1
 
     def __post_init__(self):
+        if type(self.hard_query_topk) is not int or self.hard_query_topk not in (1,4):
+            raise ValueError('hard_query_topk must be 1 or 4')
+        if self.hard_query_topk == 4 and self.qk_vocab_size < 4:
+            raise ValueError('top-four requires at least four vocabulary symbols')
         if self.hard_prob_fixed is not None:
             self.hard_prob_fixed = float(self.hard_prob_fixed)
             if not math.isfinite(self.hard_prob_fixed) or not 0 <= self.hard_prob_fixed <= 1:

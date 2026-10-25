@@ -77,3 +77,11 @@ conv_weight -> conv.weight
 
 and apply the same permutation to matching AdamW moment tensors. It must not
 mutate the source checkpoint in place.
+
+## Opt-in top-four hard training
+
+Nanochat model specs may explicitly set `hard_query_topk=4` for local weighted
+query alternatives on the hard path, while retaining native v3 soft and a single
+committed argmax history. The default remains 1. This baseline supports aligned
+CUDA eager/graph training with planner disabled; cached/SAM inference and
+Dynamo are not supported. See [implementation and measured limits](TOPK_HARD_TRAINING.md).

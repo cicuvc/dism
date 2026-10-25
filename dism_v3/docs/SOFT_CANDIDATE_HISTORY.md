@@ -206,3 +206,10 @@ two probes should not be treated as bitwise-equivalent. No backward or training
 update was performed. Results are in per-step `output_alignment.json`,
 `output_alignment_summary.json` and `output_alignment.png` under the same
 artifact directory. The historical series is deliberately not plotted.
+
+## Follow-up: change the hard readout rather than the soft surrogate
+
+[Top-k hard readout](TOPK_HARD_READOUT.md) keeps native v3 soft unchanged and
+tests probability-weighted local Q candidates from one committed hard history.
+It reports frozen-checkpoint PG19/NIAH screens and numerical controls; it does
+not reinterpret the earlier single-symbol interventions as equivalent tests.
