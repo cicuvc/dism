@@ -32,8 +32,16 @@ class LayerNormRawGate(nn.Module):
         return (normalized * self.weight.float() * (gate.float() * self.scale)).to(x.dtype)
 
 
+class RMSNormRawGate(LayerNormRawGate):
+    def forward(self, x, gate):
+        value = x.float()
+        normalized = value * torch.rsqrt(value.square().mean(-1, keepdim=True) + self.eps)
+        return (normalized * self.weight.float() * (gate.float() * self.scale)).to(x.dtype)
+
+
 def install_layernorm_sigmoid(model, scales):
     for layer, scale in zip(model.layers, scales, strict=True):
         attn = layer.attn
         attn.g_proj_up = SigmoidInputLinear(attn.g_proj_up)
-        attn.norm = LayerNormRawGate(attn.norm, scale)
+        norm_type = LayerNormRawGate if model.config.mixer_output == 'layernorm_sigmoid' else RMSNormRawGate
+        attn.norm = norm_type(attn.norm, scale)

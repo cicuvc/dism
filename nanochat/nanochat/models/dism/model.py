@@ -232,7 +232,7 @@ class DismLM(nn.Module):
                 layer_config.attention_type = "pure_gdn"
             blocks.append(DismBlock(layer_config, i))
         self.layers = nn.ModuleList(blocks)
-        if config.mixer_output == 'layernorm_sigmoid':
+        if config.mixer_output in ('layernorm_sigmoid', 'rmsnorm_sigmoid'):
             from .output_gate import install_layernorm_sigmoid
             install_layernorm_sigmoid(self, config.mixer_gate_scales)
         if not getattr(self.layers[0].attn, "is_pure_mixer", False):
@@ -258,7 +258,9 @@ class DismLM(nn.Module):
             )
         self.register_buffer("training_step", torch.zeros((), dtype=torch.int64))
         self.register_buffer("rng_counter", torch.zeros((), dtype=torch.int64))
-        self.register_buffer("hard_probability", torch.zeros((), dtype=torch.float32))
+        self.register_buffer("hard_probability", torch.full(
+            (), config.hard_prob_fixed if config.hard_prob_fixed is not None else 0.0,
+            dtype=torch.float32))
         self.vocab_temperature = float(config.vocab_temperature)
 
     def _mark_no_decay(self):
@@ -338,7 +340,8 @@ class DismLM(nn.Module):
 
         self.training_step.zero_()
         self.rng_counter.zero_()
-        self.hard_probability.zero_()
+        self.hard_probability.fill_(
+            self.config.hard_prob_fixed if self.config.hard_prob_fixed is not None else 0.0)
         self.vocab_temperature = float(self.config.vocab_temperature)
         for layer in self.layers:
             if hasattr(layer.attn, "vocab_temperature"):
@@ -374,7 +377,9 @@ class DismLM(nn.Module):
     def set_training_step(self, step):
         self.training_step.fill_(step)
         progress = min(max(step / max(1, self.config.anneal_steps - 1), 0.0), 1.0)
-        self.hard_probability.fill_(self.config.hard_prob_max * progress)
+        probability = (self.config.hard_prob_fixed if self.config.hard_prob_fixed is not None
+                       else self.config.hard_prob_max * progress)
+        self.hard_probability.fill_(probability)
         self.vocab_temperature = float(self.config.vocab_temperature)
 
         frac = self.config.tau_schedule_fraction

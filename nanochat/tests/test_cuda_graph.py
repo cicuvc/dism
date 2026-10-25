@@ -18,7 +18,7 @@ def model_pair(mxfp8, planner=False, layers=2, layout=None, mxfp8_ce=False, mixe
         hard_prob_max=.95, mxfp8=mxfp8, mxfp8_projections=False,
         mxfp8_optimizer=mxfp8, mxfp8_ce=mxfp8_ce,
         mixer_output=mixer_output,
-        mixer_gate_scales=[.55]*layers if mixer_output=='layernorm_sigmoid' else None,
+        mixer_gate_scales=[.55]*layers if mixer_output in ('layernorm_sigmoid','rmsnorm_sigmoid') else None,
     ))
     a = build_model(spec).cuda().train()
     a.init_weights()

@@ -77,3 +77,56 @@ validation and8K NIAH. Early throughput is about124k packed tokens/s.
 W&B: https://wandb.ai/cicuvc-personal/dism-spj-fixed/runs/0ck0de45
 Supervisor PID628640, training PID628643 at launch; durable PID/status markers
 in the run directory remain the source of truth for subsequent status checks.
+# Fixed hard-probability follow-up (2026-10-25)
+
+At the user's request, the annealed run was stopped with SIGTERM (exit 143),
+retaining its step 12000 and 14000 checkpoints. The replacement is a fresh run,
+not a resume, using `sequence_true_123m_layernorm_sigmoid_hard05_slimpajama_3b.json`.
+Its only model-config difference is `hard_prob_fixed: 0.5`. Layout remains
+`ggggggdddddd`; every mixer uses LayerNorm plus calibrated sigmoid low-rank gate.
+Planner and CUDA Graph remain enabled, with MXFP8 FFN/optimizer and BF16 CE.
+Data, seeds, batch, optimizer, LR schedule, token budget and evaluations match
+the stopped run.
+
+`hard_prob_fixed=None` retains the original annealing behavior. A finite value
+in [0,1] initializes and updates the existing probability buffer to that value,
+including step zero. It does not change sequence-row sampling, RNG counters,
+the temperature schedule, or checkpoint tensor keys. Explicit hard/soft
+validation remains unchanged. The new field participates in ModelSpec identity.
+
+The launch helper checks that the old process stopped, runs fixed-probability
+CUDA Graph/planner and resume regression tests, checks the configuration diff,
+and records a separate source snapshot and launch manifest before launching.
+The new run path is recorded in ignored
+`build/layernorm_sigmoid_hard05_training_run.txt`; the old pointer is retained.
+
+## Automatic continuation queue (2026-10-25)
+
+The user requested a serial continuation after the fixed-0.5 run finishes:
+
+1. Resume the preceding LayerNorm/sigmoid annealed experiment from its latest
+   complete checkpoint, step 14000, and finish the original 22888-step budget.
+   Model, optimizer, rank training state (RNG and dataloader) and metadata were
+   copied to a separate output directory; the original checkpoint is preserved.
+2. Start a fresh RMSNorm/sigmoid experiment with the original 0-to-0.95 hard
+   probability schedule. All 12 mixers use the calibrated sigmoid low-rank gate;
+   only output LayerNorm is replaced by RMSNorm. Per-layer gate scales, postnorm,
+   layout, planner/graph, BF16 CE, optimizer and data recipe remain unchanged.
+
+The opt-in config is
+`nanochat/configs/sequence_true_123m_rmsnorm_sigmoid_slimpajama_3b.json`.
+The `rmsnorm_sigmoid` implementation matches the earlier sigmoid-only short
+screen's explicit FP32 RMS normalization and raw calibrated gate expression.
+Default model behavior remains unchanged.
+
+`tools/run_training_queue.py` waits for exit code zero and the final step 22888
+checkpoint before advancing. It uses an exclusive queue lock and stops on
+failure rather than skipping a failed training. The durable queue directory is
+recorded in ignored `build/sigmoid_training_queue.txt`; its plan, state and log
+identify all run directories. The current training is not restarted or modified.
+Each future run has a source snapshot and launch manifest.
+
+Validation: 11 tests passed across RMSNorm/sigmoid, LayerNorm/sigmoid and fixed
+hard probability, including math, all-layer installation, planner CUDA Graph
+forward/backward and checkpoint state restoration. Log:
+`build/queued_sigmoid_tests.log`. Existing dependency warnings remain visible.
