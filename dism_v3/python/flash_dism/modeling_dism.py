@@ -74,13 +74,13 @@ class DismMLP(nn.Module):
 
 
 class DismBlock(nn.Module):
-    def __init__(self, config, layer_idx):
+    def __init__(self, config, layer_idx, *, attention_factory=None):
         super().__init__()
         self.attn_norm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
         self.mlp_norm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
         self.post_norm = getattr(config, 'post_norm', False)
         self.mxfp8 = bool(getattr(config, 'mxfp8', False))
-        attention = {
+        attention = attention_factory or {
             'dism': DismAttention,
             'hybrid_gdn': DismGdnAttention,
             'pure_gdn': PureGdnAttention,

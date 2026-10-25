@@ -439,7 +439,8 @@ def disable_fp8(model):
 # Compile the model
 
 orig_model = model # original, uncompiled model, for saving raw model state_dict and for inference/evaluation (because the shapes may change shape)
-hard_dispatch_layers = 0 if model_spec.architecture == 'fla_transformer' else dism_dispatch_layers(orig_model)
+hard_dispatch_layers = (0 if model_spec.architecture in ('fla_transformer', 'dism_v4_gdn_hybrid')
+                        else dism_dispatch_layers(orig_model))
 if args.log_hidden_rms:
     hidden_rms_handles, hidden_rms_buffer = register_residual_rms_probe(orig_model)
 else:
@@ -450,11 +451,13 @@ if getattr(orig_model, 'dynamic_compile', False):
     torch._dynamo.config.capture_dynamic_output_shape_ops = True
     torch._inductor.config.compile_threads = 1
 if args.cuda_graph:
+    if not getattr(orig_model, 'supports_cuda_graph', True):
+        raise ValueError('this model does not support --cuda-graph')
     if not getattr(orig_model, 'document_balanced_loss', False) or device_type != 'cuda':
         raise ValueError('--cuda-graph requires a packed document-balanced CUDA training model')
     if COMPUTE_DTYPE == torch.float16:
         raise ValueError('--cuda-graph requires BF16 training without GradScaler')
-else:
+elif orig_model.capabilities.compile:
     model = torch.compile(model, dynamic=getattr(orig_model, 'dynamic_compile', False))
 training_graph = None
 

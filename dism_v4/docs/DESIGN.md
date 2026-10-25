@@ -744,4 +744,56 @@ output[i] += coefficient * state
 
 建议先以“去除 SQ/SK、保留候选独立归一化”的 v4 oracle/分块原型作为简化
 基线，并将完整 SQ/SK 版本作为表达能力对照；质量结果决定最终 kernel 形态。
-本节仅为实现评估和候选设计，未修改模型、删除参数、构建 kernel 或启动训练。
+本节是设计阶段记录；第 17 节给出后续分块原型的实现与验证边界。
+
+## 16. 第一版 PyTorch reference
+
+设计第 12–15 节的更新先提交为 `069d5af`，随后新增独立包
+`dism_v4/python/flash_dism_v4`。使用方式和精确接口见 [v4 README](../README.md)。
+
+- `dism_v4_ref` 接收 BNHC 符号 logits；默认无 SQ/SK，采用原版逐候选归一化。
+- `dism_v4_from_embeddings` 提供 per-head Q/K codebook 适配，不隐式缩放 logits。
+- `hard`、`soft` 和 `jensen` 模式仅改变当前 K 读取，历史始终提交 argmax Q/K。
+  Jensen 对完整归一化系数作下界，保留动态分母，不软化历史。
+- 支持可选 SQ/SK 对照、batch/head、多段 B=1 packed 输入、独立 query reset。
+- 使用 log-domain 历史和逐候选 fallback 归一化，避免空候选 backward NaN。
+- CPU 37 项测试通过，包括独立后缀枚举与梯度、FP64 gradcheck、因果/边界、
+  one-hot/Jensen 界、长链极端动态范围、dtype 和 RNG 检查。
+
+这是小规模 correctness oracle，普通 autograd 的候选保存量可达 O(B H N^2 V)。
+不能把此 reference 的执行方式或性能当成分块 kernel 的内存/复杂度承诺。
+reference 完成时尚未接入模型或运行 GPU kernel；后续实现如下。
+
+## 17. 2K 分块训练原型
+
+实现文件为 `flash_dism_v4/history.py`、`blocked.py`、`module.py`；
+对应 nanochat 架构单独注册为 `dism_v4_gdn_hybrid@1`。具体命令、数值/恢复限制、
+benchmark 记录见 [README](../README.md)。这是训练与 loss evaluation 原型，
+不包含快速推理、planner 或 CUDA graph。
+
+- history 的前缀扫描只读取 hard Q/K 符号与文档边界，不读取 C 维概率向量。
+  利用第 14.4 节的几何和公式，同时生成 log A 和 tau 导数。
+- 当前 soft 读取采用精确的全 K 概率、候选独立分母；当前 hard 读取按 hard K
+  符号分桶。两者都混合全部 Q 候选，都只提交 argmax Q/K 历史。
+- 词表归一化位于 history kernel 外部。无 SQ/SK，value readout 是 M V。
+  默认保留原版独立分母，不采用第 13 节的无分母 RMSNorm 变体。
+- 每个 block 只保留 Bq×N 成对 scratch。反向按前向顺序重新生成 history，
+  显式累积 Q/K/V/tau 梯度，无 N² 激活或 N²/Bq 边界 checkpoint。
+- hard 逐符号 log 缩放；soft 共同缩放 GEMM 有极端 logits 的逐行 log-domain
+  fallback。fallback 保证不因丢弃弱符号桶而改变公式，但会明显降低吞吐。
+- nanochat 保留 pure GDN、后归一化、gate、value residual、FFN/CE 和训练状态
+  机制，仅替换 hybrid DISM 并移除 SQ/SK。训练 row 内多个文档共享该 row 的
+  hard flags，各文档仍单独隔离匹配历史。
+
+默认 12 层、width=768、H=12、C=512、`gggddddddggg`、无 SQ/SK 时为
+119934144 参数，MXFP8 FFN/optimizer、BF16 CE。RTX 5090 上 B=4、N=2048、
+block=64、FP32 readout 的短程合成训练测得 soft 10.42k / quadratic hard
+28.99k / 50% 混合 15.04k tok/s，峰值 allocated 不超过 12.18 GB；
+soft/hard loss eval 为 52.20k / 62.98k tok/s。没有据此推断完整预训练质量。
+
+GPU 前向/反向对 FP64 oracle、跨 block 长匹配链、packed 文档与 row 采样、
+自动混合精度、极端候选缩放均有测试。新 history kernel 的 memcheck、
+racecheck、synccheck 均通过，所测三个 block specialization 无 CALL/spill。
+这不覆盖完整 FLA/MXFP8 模型的 sanitizer。模型恢复仍有 BF16/atomic 数值
+非确定性；serialization/schema/alias 与相同梯度下的 optimizer 更新另行验证，
+不宣称 bitwise 训练轨迹一致。

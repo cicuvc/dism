@@ -230,7 +230,7 @@ class DismLM(nn.Module):
                 import copy
                 layer_config = copy.copy(c)
                 layer_config.attention_type = "pure_gdn"
-            blocks.append(DismBlock(layer_config, i))
+            blocks.append(self._make_block(layer_config, i))
         self.layers = nn.ModuleList(blocks)
         if config.mixer_output in ('layernorm_sigmoid', 'rmsnorm_sigmoid'):
             from .output_gate import install_layernorm_sigmoid
@@ -262,6 +262,9 @@ class DismLM(nn.Module):
             (), config.hard_prob_fixed if config.hard_prob_fixed is not None else 0.0,
             dtype=torch.float32))
         self.vocab_temperature = float(config.vocab_temperature)
+
+    def _make_block(self, config, index):
+        return DismBlock(config, index)
 
     def _mark_no_decay(self):
         for layer in self.layers:
