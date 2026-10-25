@@ -1,0 +1,524 @@
+# DISM v4：单一 Q 主线与全符号候选读取
+
+日期：2026-10-25。
+
+状态：**设计提案，尚无 v4 生产实现或训练结果。** 用户明确将本方案命名为
+v4，并要求先记录完整方案。本次工作仅新增设计文档；v3 算子、默认配置、已有
+checkpoint 和运行中的训练不因此改变。旧 GQA 实验仅提供多查询共享 K/V 的
+启发，本文的公式才是 v4 的语义定义。
+
+后续讨论更新：第 12 节将训练/推理均使用 hard 历史列为主方向；第 3 节的 soft
+历史保留为参考。第 13 节记录用户新提出的“候选分子混合后做 RMSNorm”变体，
+它主动修改原来的独立候选归一化，因此可移除第 6 节的动态分母瓶颈。目前尚未
+选择最终归一化变体或启动实验。
+
+## 1. 动机与已经确定的要求
+
+v3 用可微 soft 路径学习符号分配，再使用离散后缀匹配实现 hard 推理。v4
+考虑让推理承担更多工作：保留离散历史索引，但在每个位置精确枚举当前 Q 的
+所有符号候选，让概率分布直接决定实际读取结果。
+
+确定的构造：
+
+1. 每个 token/head 只提交一个 Q 符号，构成唯一的 Q 主线；K 也保留单一硬符号串。
+2. 输出时，从同一个 Q 主线前缀出发，枚举当前 Q 的全部 V 个符号。
+3. 候选共享当前 head 的 SQ、SK、V、tau 和 K 历史，不新增独立 Q/SQ 投影。
+4. 每个候选独立完成后缀匹配、读取和归一化，然后按当前 Q 的符号概率混合输出。
+5. 只有主线符号进入后续匹配状态。候选状态不延续，不组成指数数量的历史串。
+6. 枚举全部符号，不将 top-k 截断当成该构造的精确实现。
+7. 保留 numerator-only 的 signed SQ/SK readout，以及分母中的单位 fallback。
+8. 设计重点还包括大词表下的成本：避免让 dense token-pair kernel 的收缩维度
+   从 selector 宽度 D 膨胀到词表大小 V。当前 soft 参考定义尚未全面满足这一要求。
+
+输出相对于候选的混合是概率加权；每个候选内部由于 signed SQ/SK，输出本身
+不必是 value 向量的凸组合。
+
+## 2. 记号和精确 hard 定义
+
+以下省略 batch/head。N 为长度，V 为符号词表大小，D 为 selector embedding
+宽度，R 为 SQ/SK 宽度，D_v 为 value 宽度。token 下标从 1 开始。
+
+令
+
+\[
+z_i^Q(c)=q_i^\top E_Q(c),\quad p_i(c)=\operatorname{softmax}_c z_i^Q(c),
+\qquad z_j^K(c)=k_j^\top E_K(c).
+\]
+
+主线符号是 a_i = argmax_c z_i^Q(c)，K 符号是 b_j = argmax_c z_j^K(c)。
+argmax tie-breaking 必须明确定义并在 prefill/decode 中一致。令 alpha = exp(tau)。
+tau 当前按 head 固定；token-dependent tau 不属于已分析的快速算法契约。
+
+主线未归一化匹配状态：
+
+\[
+H^H_{ij}=\alpha\,\mathbf1[a_i=b_j](1+H^H_{i-1,j-1}).
+\]
+
+下标越界时 H=0；仅 j<=i 的项参与当前输出。查询 reset 清空相应匹配历史，
+序列边界、因果性和 packed-row 语义需要显式传递，不能靠拼接候选伪造 token。
+
+当前位置尝试符号 c 时：
+
+\[
+W_{ij}^{(c)}=\alpha\,\mathbf1[c=b_j](1+H^H_{i-1,j-1}),
+\quad Z_i(c)=\sum_{j\le i}W_{ij}^{(c)},
+\]
+
+\[
+o_i^{(c)}=
+\frac{\sum_{j\le i}W_{ij}^{(c)}\langle sq_i,sk_j\rangle v_j}{1+Z_i(c)},
+\qquad \boxed{o_i=\sum_{c=1}^V p_i(c)o_i^{(c)}}.
+\]
+
+下一步保留 H^H_i = W_i^(a_i)，而不是候选状态的平均。
+模型的后续层正常使用混合输出 o_i，因此混合读取仍可通过模型计算影响未来的
+Q/K；“不延续候选”专指同一 DISM 层的符号匹配状态。
+
+例：主线前缀为 ABC，当前读取尝试 ABCA、ABCB、ABCC、……，但若主线当前
+选了 D，下一步共同历史就是 ABCD。
+
+必须区分：
+
+\[
+\sum_c p_i(c)\frac{N_i(c)}{1+Z_i(c)}
+\ne \frac{\sum_c p_i(c)N_i(c)}{1+\sum_c p_i(c)Z_i(c)}.
+\]
+
+右式不是本方案。某符号没有任何因果 K 端点时其候选输出为零，可精确跳过；
+其概率质量不能重新分配给其他符号，否则改变语义。
+
+## 3. Soft 参考定义：软历史、独立候选归一化
+
+区分读取概率 p_i(c) 和历史路由分布 rho_i^Q(c)、rho_j^K(c)。例如：
+
+\[
+\rho_i^Q=\operatorname{softmax}(z_i^Q/T_Q),\qquad
+\rho_j^K=\operatorname{softmax}(z_j^K/T_K).
+\]
+
+p_i 仍使用原始读取温度，不能因历史硬化而一起退化成 argmax。
+温度趋零的表述需假设唯一最大值；精确硬端直接使用约定 tie-breaking 的 one-hot。
+另一种路径是概率与 argmax one-hot 的显式插值，它不是处处光滑的温度松弛。
+
+算术匹配的语义参考定义为：
+
+\[
+m^A_{ij}=\sum_c\rho_i^Q(c)\rho_j^K(c),\qquad
+H^A_{ij}=\alpha m^A_{ij}(1+H^A_{i-1,j-1}).
+\]
+
+在当前 Q 候选条件下：
+
+\[
+A_{ij}=\alpha(1+H^A_{i-1,j-1})\mathbf1[j\le i],\qquad
+W_{ij}^{(c)}=A_{ij}\rho_j^K(c),
+\]
+
+再按第 2 节逐候选归一化、按 p_i 混合。这里的 A 不是整个历史匹配权重 H，
+而是尚未施加当前符号兼容性的延续因子。
+
+当 rho^Q、rho^K 都取主线 one-hot 时，本节严格退化到第 2 节的 hard 算子，
+即使 p_i 仍是非退化分布。仅 rho^K 为 one-hot 时，当前候选仍是精确的 K 符号桶
+读取，但历史 Q 可以保持软化。
+
+这是未归一化历史匹配状态的均值松弛，不是全部历史符号串输出的精确边缘化。
+固定连续操作数、独立采样 Q/K 符号时，算术递推可解释为匹配状态的期望；
+最终的归一化输出不能与期望交换。该参考定义不承诺逼近误差随硬化单调下降。
+
+## 4. 梯度的新增能力和剩余缺口
+
+固定主线历史及其他操作数，令 g_i = dL/do_i，当前 Q 读取 logits 的直接梯度为：
+
+\[
+\frac{\partial L}{\partial z_i^Q(c)}\bigg|_{\text{direct readout}}
+=p_i(c)\langle g_i,o_i^{(c)}-o_i\rangle.
+\]
+
+全部候选都计算时，这个局部直接梯度无需 REINFORCE 或 STE，没有候选采样方差。
+这不是“所有训练噪声消失”的声明，也不是只看当前 token 的 LM loss：g_i 可含
+后续网络和未来 loss 的连续反传贡献。
+
+在 soft 历史下，还应加上通过 H 和 K 路由的梯度。硬化后直接读取梯度仍保留，
+但 a_i 对未来同层匹配路由的离散作用，以及 b_j 的离散选择，仍没有普通梯度。
+共享 Q/K 在 GDN 等组件中的其他梯度必须另外计入。不能把上述偏导当成完整
+共享参数更新，也不能据此宣称 K selector 已经获得可用学习信号。
+
+## 5. Jensen：历史匹配可以继续低成本计算
+
+算术匹配概率的 Jensen 下界仍成立：
+
+\[
+\log m^A_{ij}
+=\log\mathbb E_{c\sim\rho_j^K}[\rho_i^Q(c)]
+\ge \mathbb E_{c\sim\rho_j^K}[\log\rho_i^Q(c)],
+\]
+
+\[
+m^J_{ij}=\exp\!\left(\sum_c\rho_j^K(c)\log\rho_i^Q(c)\right).
+\]
+
+数学依据是 log 的凹性，见 Boyd/Vandenberghe 的
+[Jensen 不等式说明](https://see.stanford.edu/materials/lsocoee364a/03ConvexFunctions.pdf)。
+它是确定性下界／surrogate，不是无偏的匹配概率估计。
+
+由于 log rho^Q(c) = q_i^T E_Q(c)/T_Q - L_i^Q：
+
+\[
+\log m^J_{ij}
+=\frac{q_i^\top}{T_Q}\underbrace{\sum_c\rho_j^K(c)E_Q(c)}_{\bar E_j}
+-L_i^Q.
+\]
+
+这是 v3 direction=true 的同一个低维恒等式。词表工作留在 O(NVD) 的插值和
+LSE 中，pairwise score 收缩宽度保持 D，而不是 V。
+
+因此可定义另一条 soft surrogate：
+
+\[
+H^J_{ij}=\alpha m^J_{ij}(1+H^J_{i-1,j-1}),
+\]
+
+并用 H^J 代替第 3 节候选权重里的 H^A。精确 one-hot 路由下它仍对应第 2 节。
+实现必须避免 0 * log(0) 的 NaN；硬端用明确的离散定义。
+
+由非负递推可证明 H^J <= H^A，但归一化和 signed readout 破坏了简单的输出
+排序。因此这不是输出误差界，也不是 loss 下界。Jensen gap 是否可接受要测量。
+
+**历史使用 Jensen，并没有自动解决完整候选读取的词表维度成本。**
+
+## 6. 真正新增的瓶颈：每个符号自己的分母
+
+对任一选定的历史 H（算术或 Jensen），令 K_{jc}=rho_j^K(c)。候选分母是：
+
+\[
+Z=AK,\qquad Z_i(c)=\sum_j A_{ij}\rho_j^K(c).
+\]
+
+无需显式保存 N x N x V 权重。定义修正后的读取概率：
+
+\[
+u_i(c)=\frac{p_i(c)}{1+Z_i(c)},\qquad
+B_{ij}=\sum_c u_i(c)\rho_j^K(c),\qquad M=A\odot B.
+\]
+
+最终输出可写成：
+
+\[
+o_i=\sum_j M_{ij}\langle sq_i,sk_j\rangle v_j.
+\]
+
+这里不能再加一次全行归一化。候选分母已经包含 fallback，并有
+sum_j M_ij = sum_c p_i(c) Z_i(c)/(1+Z_i(c)) <= 1。
+
+这个因式分解避免了 N x N x V 张量，却仍有 Z=AK 和 B=uK^T 两次 V 相关 dense
+收缩，通用实现约 O(N^2 V)。算术历史另有 rho^Q (rho^K)^T 的同量级收缩；
+Jensen 历史可消掉历史这一次 V 收缩，不能消掉另外两次。
+
+### 6.1 对完整读取系数继续使用 Jensen
+
+仍可合法地写：
+
+\[
+B_{ij}=\mathbb E_{c\sim\rho_j^K}
+\left[\frac{p_i(c)}{1+Z_i(c)}\right]
+\ge B^J_{ij}
+=\exp\left(
+\mathbb E_{\rho_j^K}\log p_i(c)
+-\mathbb E_{\rho_j^K}\log(1+Z_i(c))\right).
+\]
+
+第一项依然等于 q_i^T bar(E)_j - LSE_i，只有 D 维。
+第二项涉及动态的 V 维向量 ell_i(c)=log(1+Z_i(c))，一般不落在原 E_Q 的仿射
+张成空间里。它不能被原来的一个 query LSE 标量吸收，也没有已知的同一低维
+恒等式；甚至得到 Z 本身已经包含上面的 dense 收缩。
+
+K 为 one-hot 时，这个读取层面的 Jensen 等号成立。这很有价值，但不意味着
+稠密 soft K 时也能便宜计算。若近似 ell_i(c) 为低维特征展开，必须单独验证
+近似误差；未经控制的拟合不保证 Jensen 的下界方向，不能当作精确实现。
+
+B^J<=B 是同一 A/Z 下逐 pair 的非负系数界。因为 readout 是 signed 的，不能
+将其解释为输出或 loss 的界，也不能据此断言更接近 v3 soft。
+
+### 6.2 为什么不能靠换归一化“免费解决”
+
+先混合权重再共用一个分母，会移除一部分候选特有结构，但违反第 2 节定义。
+省略动态分母修正也不行。例如单 token、one-hot K、readout/value=1，alpha=10，
+匹配符号的 Q 概率为 0.9：旧 hard=10/11，旧 soft=9/10，新 hard=0.9*10/11。
+三者分别约 0.9091、0.9000、0.8182。新 hard 不保证更接近旧 soft。
+
+可以构造更松的廉价界，例如用 sum_c Z_i(c)=sum_j A_ij 控制全部候选分母，
+但通常丢失所需的硬端归一化。存在廉价下界与存在合适的 v4 soft 路径不是一回事。
+本文没有证明任何通用低维算法都不可能；这里只指出原有恒等式不能直接完成任务。
+
+## 7. 兼顾大词表的候选路线
+
+| 路线 | 是否保留全 Q 候选 | 主要 pairwise 成本 | 关键限制 |
+|---|---|---|---|
+| 全 soft K，算术历史 | 是 | 通用 dense O(N^2 V) | 语义参考；不具备 v3 的低维优势 |
+| 全 soft K，Jensen 历史 | 是 | 历史 O(N^2 D)，读取仍 O(N^2 V) | 只解决历史匹配部分 |
+| hard K，soft Q 历史 | 是 | 低维匹配加符号桶归约 | K 符号选择没有直接可微路径 |
+| 每个 K 支持 s 个符号 | 是 | 候选读取约 O(N^2 s)，另计词表投影 | 改变 soft K；支持集与梯度需定义 |
+| 压缩动态分母场 ell_i(c) | 是或近似 | 取决于压缩秩和生成方法 | 尚无误差、端点或效率保证 |
+
+hard K 时，Jensen 与算术历史匹配相等：m_ij=rho_i^Q(b_j)。候选读取可直接用：
+
+\[
+Z_i(c)=\sum_{j:b_j=c}A_{ij},\qquad
+M_{ij}=A_{ij}\frac{p_i(b_j)}{1+Z_i(b_j)}.
+\]
+
+这是按符号的 segmented reduction 和查表，不需要 N^2 V 矩阵乘法。Q 的全词表
+读取仍保持原定义，但它不是同时可微训练 Q/K 的完整解决方案。
+
+稀疏 K 也可用类似的 scatter/gather；这里截断的是 soft K 的支持，不是用户要求
+枚举的 Q 候选。若采用 top-s，其概率重归一化、尾部质量、离散支持选择的梯度
+必须单独定义；不能将其等同于原始稠密 soft K。
+
+目前不将某一条性能路线默认定为生产 soft。先保留第 3 节 oracle，并验证第 5 节
+Jensen 历史版本，接着量化第 6 节的动态分母成本与可压缩性。
+
+## 8. Hard prefill 与 decode 的算法路线
+
+### 8.1 Prefill
+
+K 串的 SAM 和 payload 索引共享。对主线前缀的状态/匹配长度 (s,l)，为所有 c
+求临时转移 (s_c,l_c)，记录候选 query，最后只提交 c=a_i 的状态。
+用当前 token 的时间戳约束全部候选 j<=i，不能将 V 条候选误作 V 个时间步。
+
+完整 K 串建立的离线 SAM 可以包含未来符号，但向量聚合和分母必须过滤未来
+端点；仅有 SAM 匹配不自动保证因果性。
+
+已有 v3 centroid/event prefill 可作为结构参考：将 N 个 query 扩展到 NV 个
+候选 query，共享 N 个 key。若转移查询被加速、事件构建推广到独立的 query ID
+与时间戳，目标事件量为 O((N+NV) log N)，固定向量维度下是 O(NV log N)。
+这是算法设计推导，尚未实现或验证 wall-clock/内存常数。
+
+不能将每个候选直接回滚后再次逐条走 suffix links，并套用单一字符串扫描的
+摊销线性界。静态 SAM 可预计算 O(NV) 的完整转移表，或用沿 suffix links 继承
+的持久化映射存储最近有该符号出边的祖先。后一种方案可用 O(N log V) 级别的
+额外预处理/存储和 O(log V) 查询；需要保留出边来源以更新匹配长度。
+
+完整转移表的 NV 内存可能很贵；V=512 虽在渐近上是常数，不能因此忽略其实际
+开销。候选归一化可以先做标量阶段，然后将 p_i(c)/(1+Z_i(c)) 合入 query 事件
+系数，向原输出行累加；不必持久保存所有候选的 R x D_v 矩阵。
+
+### 8.2 Decode
+
+保留一套 K snapshot/summary、历史 SK/V、一条 Q 主线状态和主线 tail 匹配。
+候选只产生临时查询；rebuild 与 payload 存储不按 V 复制。
+
+raw tail 可一次按 b_j 分桶：对当前候选，其长度是前一条主线在 j-1 处的长度
+加一，且只有 c=b_j 的候选接收该 key。逐候选归一化的标量/向量累积必须使用
+一致的数值缩放。随后仅为主线 a_i 提交新的 tail 状态。
+
+已有 decoder 固定 b=128 的周期性全量 rebuild **本身没有渐近 subquadratic
+保证**，详见 [v3 decode 复杂度](../../dism_v3/README.md#decoding)。新增候选
+不会自动修复这个问题。需要结合候选转移索引、summary 查询界和随历史长度
+增长的 rebuild 间隔分析总成本。
+
+例如，在固定向量维度/summary 参数、已加速候选转移的设计下，保守地把普通
+步骤候选/tail 代价计作 O(Vb)，rebuild 计作 O(T log T + TV)，则 b 随 sqrt(T)
+增长给出次二次的总工作量级 O(N^(3/2)(V+log N))。这是可行路线的条件性上界，
+不是当前实现性能声明；共享 tail 分桶可进一步减少常数和重复工作。
+
+需要同时保留 rebuild 峰值延迟、主线恢复、GPU 显存、CPU/GPU 通信、graph
+失效/重捕获成本，不能只报告普通 decode step 的用时。
+
+## 9. 数值和训练契约
+
+- H/W/A 的直接概率域公式用于解释与小型 oracle。长链、正 tau 必须使用
+  log-domain 或等价缩放，候选之间混合时处理各自的 scale/fallback。
+- SQ/SK 只进入分子，不将其绝对值或正值偷偷放进分母。
+- 所有 V 个候选有贡献的项都保留。概率截断、低秩近似、稀疏 K 都是独立变体。
+- 保持 GDN、norm/gate/o_proj 的位置作为独立模型选择；v4 不是授权同时改动它们。
+- 新 checkpoint 需要显式算子版本、历史路由类型、读取温度、归一化方式等
+  model identity。不能把 v3 权重按新语义静默恢复训练。
+- 若未来采用混合 soft/hard 训练，保留 packed-row sampling、RNG replay 和
+  resume 状态完整性。历史路由温度与 hard-path 采样概率是不同参数。
+- hard Q 的直接读取梯度与 soft/Jensen 历史梯度分别统计；K selector 梯度缺口
+  必须单独诊断。历史 REINFORCE/STE 的失败不能直接推断该新算子的成败。
+
+## 10. 验证阶段与当前证据
+
+1. **语义 oracle。** 固定 hard 定义，实现独立后缀枚举、dense 主线递推、
+   全候选读取；验证 one-hot 读取概率退回旧 hard，空匹配、reset、因果性和
+   分母单位 fallback。算术历史、Jensen 历史作为两个命名清楚的 soft 版本。
+2. **梯度与极限。** 对 Q/K/codebook/SQ/SK/V/tau 做 FP64 梯度检查；区分直接
+   读取与历史梯度；检查硬端一致性、tie、尖锐分布、正负 tau 和长链缩放。
+3. **真实权重诊断。** 固定同一语料和 checkpoint，比较旧 hard、旧 soft、新
+   hard、新 soft 的输出/LM loss/长程读取；测试收益是否来自某类链长或符号桶。
+   量化 Z 和 log(1+Z) 的动态范围、可压缩性与候选概率质量，先不启动完整训练。
+4. **算法原型。** 验证全候选 SAM 转移、因果事件计划、共享候选分母；分别
+   benchmark V 和 N 的缩放。decode 必须计入 rebuild 的总成本。
+5. **训练与高性能实现。** 只有前述质量和成本成立后，再决定 soft K 路线、
+   小规模训练、CUDA kernel、planner 和 CUDA graph 适配。不得将参考公式当成
+   已完成的低维 kernel 设计。
+
+截至本记录，仅完成临时 CPU/FP64 数学检查：
+
+- 全候选 SAM 转移/LCA 后缀权重与 dense hard 主线递推：24 个小例子，包含
+  tau<0、tau=0、tau>0，混合输出最大误差约 2.22e-16。
+- soft 的候选输出枚举与 A * [p/(1+Z) K^T] 因式分解：最大误差约 2.78e-16；
+  小例子的 Q/K logits autograd 梯度有限且非零。
+- Jensen 历史下界、D 维恒等式、H^J<=H^A、读取系数下界、one-hot K 下读取
+  Jensen 等号均通过小例子；D 维恒等式误差约 1.78e-15，硬 K 等号误差约 4.16e-17。
+
+这些是会话中的小型数学核对，没有保存为正式回归测试，不构成大规模梯度、
+数值稳定性或性能验证。尚无 v4 GPU kernel、sanitizer、训练或下游评估结果。
+
+## 11. 参考与仍未解决的问题
+
+- [v3 soft/hard 与 Jensen 推导](../../dism_v3/docs/SOFT_HARD_RELAXATION.md)。
+- [v3 数学 oracle](../../dism_v3/python/flash_dism/reference/dism_v3_ref.py)。
+- [v3 prefill builder](../../dism_v3/python/flash_dism/inference/csrc/prefill.hpp)。
+- [v3 decode planner](../../dism_v3/python/flash_dism/inference/csrc/planner.hpp)。
+
+在保留原始归一化设计的前提下，关键开放问题不是 Jensen 是否仍然合法，而是：**在保留全 Q 候选、
+独立归一化和精确硬端的同时，如何让 soft K 的动态候选分母也能低成本计算。**
+历史匹配部分已有低维答案；完整读取部分尚未有兼顾上述约束的定稿方案。
+
+## 12. 后续决策：训练与推理均保留 hard 历史
+
+用户追问 soft Q 历史在推理中如何处理后，明确区分历史与当前读取：
+
+- 推理始终只保留 hard Q 主线和 hard K 符号串。
+- 当前 Q 输出仍枚举全部符号并按完整概率混合。
+- soft Q 历史不能用现有单一 SAM 查询状态表示；本文没有建立其精确快速推理。
+- 主方向改为训练/推理都保留 hard 历史，避免默认重新引入历史路由的训练/推理
+  偏差。第 3 节作为可选训练辅助和诊断 oracle，不是主方向的推理状态。
+- hard 历史在训练中仍依赖当前权重算出的 argmax；普通梯度不穿过这些符号决策。
+  当前 Q 的直接读取梯度仍可存在。K 选择与历史决策对未来的作用仍是学习缺口。
+
+“训练中使用 soft K 读取”可以只软化当前匹配端点的兼容性，而不软化存储和延续
+历史的 K 串。这两个作用必须分别命名，不能将这种 soft 读取误称为完整 soft 历史。
+
+## 13. 新候选：去除候选分母，混合分子后做 RMSNorm
+
+本节为用户提出的候选变体，主动改变第 2 节的归一化语义，尚未确认为默认方案。
+按 **每个 head 内**、在加到 GDN 之前做 RMSNorm 来分析；归一化在所有候选混合
+之后。若改成各候选先做 RMSNorm 再混合，会重新引入候选特有的非线性分母，
+不具有本节的代数化简。
+
+### 13.1 精确 hard 读取
+
+两端都使用第 12 节的 hard 历史 H^H，令
+
+\[
+A_{ij}=\alpha(1+H^H_{i-1,j-1})\mathbf1[j\le i],\qquad
+x_{ij}=\langle sq_i,sk_j\rangle v_j.
+\]
+
+先定义候选分子，不计算候选分母：
+
+\[
+N_i(c)=\sum_{j:b_j=c}A_{ij}x_{ij},\quad
+U_i=\sum_c p_i(c)N_i(c)
+=\sum_{j\le i}A_{ij}p_i(b_j)x_{ij}.
+\]
+
+\[
+\boxed{o_i=\operatorname{RMSNorm}_{\epsilon}(U_i)}.
+\]
+
+因此全部 Q 候选的混合精确折叠成每个 pair 的 p_i(b_j) 因子，不再有动态的
+Z_i(c) 或 E_K log(1+Z_i(c))。仍然只提交主线符号 a_i。
+
+这不等于旧候选独立归一化后再 RMSNorm：后者相对重加权了各符号的贡献，本节
+没有这种重加权。新算子也不承诺更接近 v3 soft。
+
+### 13.2 对当前读取使用低维 Jensen，历史始终 hard
+
+若训练时只软化当前 K 兼容性，保持同一份 hard 历史 A，则算术参考是：
+
+\[
+U_i^A=\sum_j A_{ij}
+\underbrace{\left(\sum_c p_i(c)\rho_j^K(c)\right)}_{m^A_{ij}}
+x_{ij}.
+\]
+
+可用 direction=true 的 Jensen surrogate：
+
+\[
+U_i^J=\sum_j A_{ij}m^J_{ij}x_{ij},\qquad
+m^J_{ij}=\exp\left(\mathbb E_{\rho_j^K}\log p_i(c)\right)
+=\exp(q_i^\top\bar E_j-L_i),
+\quad \bar E_j=\sum_c\rho_j^K(c)E_Q(c).
+\]
+
+最终均对 U 做同样的 RMSNorm。K 兼容性取 one-hot 时 m^J=m^A=p_i(b_j)，
+严格回到本节的 hard 读取；不要求将 Q 读取概率 p_i 一起硬化。
+
+这次 **完整读取** 的低维化成立：词表相关工作留在 O(NVD) 的投影/插值，dense
+pairwise score 宽度为 D，另计 SQ/SK/V 的向量维度和 quadratic hard 历史递推。
+不能让 m^J 进入持续历史递推，否则又变成第 3/5 节的 soft 历史。
+
+Jensen 仍是有偏的当前 K 读取 surrogate，且 RMSNorm 后不存在简单的逐分量
+输出下界。它能为当前 K 兼容性提供梯度，但不解决历史 K 符号的离散 credit。
+
+### 13.3 快速 hard 推理与数值稳定性
+
+第 8 节全候选 SAM/event 结构仍可使用，候选 query 的输出系数现在直接乘 p_i(c)，
+不再需要逐候选分母阶段。候选混合后再做每 token/head 的 RMSNorm。
+这简化计划和读取，但没有证明候选数量开销可以完全消除；decode 的 rebuild
+复杂度问题也仍然存在。
+
+RMSNorm 的尺度不变性使公共正缩放在 epsilon=0、非零输入时可以抵消，包括
+当前行的 exp(-L_i) 和当前步的 alpha。**历史 H^H 内部的 tau 仍改变各匹配链
+的相对权重，不能因此删除 tau。** 词表投影仍用于符号选择和概率/嵌入计算。
+
+有固定 epsilon 时不能随意丢弃整体尺度：若 U=s*U_tilde、s>0，则
+
+\[
+\operatorname{RMSNorm}_{\epsilon}(U)
+=\frac{U_{\rm tilde}}{\sqrt{\operatorname{mean}(U_{\rm tilde}^2)+\epsilon/s^2}}
+\]
+
+（另乘相同的 learned RMS weight）。需跟踪 log-scale 或等价处理有效 epsilon，
+不能先任意归一化 U 再套固定 epsilon 并声称等价。长链仍需要稳定的 log-domain
+系数；RMSNorm 不能修复已经发生的溢出。signed readout 的抵消和接近零的 U
+也需要单独检查，epsilon 控制该区域的输出和梯度。
+
+上述按 head 抵消只适用于独立的 head 归一化。若只依赖现有的
+RMSNorm(GDN + DISM)，DISM 的尺度会改变两条 mixer 的相对贡献，不能套用
+RMSNorm(DISM) 的化简。norm 位置、是否保留外部 gate 和 head scale 需成为
+显式模型配置。
+
+### 13.4 质量风险：归一化移除的是信息，不只是计算
+
+1. **候选之间的频率/链长平衡改变。** 原来的 1+Z_i(c) 会单独缩放每个符号的
+   读取；RMSNorm 只缩放合并向量，不能恢复候选之间的比例。例：两个候选
+   p=0.5，N_1=100 e_1、Z_1=100，N_2=e_2、Z_2=1；旧混合两方向比例约 1.98，
+   新混合为 100。之后做 RMSNorm 也不会改变方向比例。
+2. **整体匹配强度信号减弱。** 理想 RMSNorm 对公共正缩放不敏感。若某符号
+   没有因果 K 端点，其 N_i(c)=0，增加它的 logit 只会通过 softmax 的分母统一
+   缩小其他 p_i，可能让归一化输出不变。忽略 epsilon 时，该符号的直接读取
+   梯度为零；但它仍可能赢得主线 argmax，破坏未来匹配。
+3. **弱读取可能被放大。** 完全零的 U 保持零，但很小的非零读取会受到 norm
+   与 epsilon 的强烈影响。RMSNorm 本身不能表达“这次匹配很弱所以少输出”。
+
+这些是候选模型需要测量的行为，不是断言它一定失败。尺度不变性背景见
+[RMSNorm 原论文](https://arxiv.org/abs/1910.07467)；符号梯度结论由本节算子推导。
+
+一种可选对照是保留 **单个 head 标量** 的匹配强度 gate，而不是 V 个分母：
+
+\[
+M_i=\sum_j A_{ij}m_{ij},\qquad
+o_i=\frac{M_i}{1+M_i}\operatorname{RMSNorm}(U_i).
+\]
+
+m 取对应 hard 或 Jensen 版本。该 gate 放在 RMSNorm 外，计算 M 可与读取融合，
+稳定实现可用 sigmoid(log M)。它保留一部分整体匹配强度反馈，但不能恢复
+每个符号内部的独立归一化，也不保证解决离散历史 credit。已有 learned gate
+与这种基于匹配量的 gate 是两个不同选择，尚未决定采用哪一个。
+
+### 13.5 此变体的最小验证集合
+
+- 全候选分子枚举与按 pair 的 p_i(b_j) 加权逐项一致；one-hot K 的 Jensen 等号。
+- FP64 梯度检查，包括接近零的 U、epsilon、无匹配符号、概率质量移出已出现符号。
+- 与原候选归一化版本比较：符号频率偏置、不同链长贡献、长程读取、LM loss，
+  不能只用输出 cosine 或单个 norm 指标决策。
+- 原始 RMSNorm 与单标量匹配 gate 的对照；明确 norm 在 DISM/GDN 合并前后的位置。
+- 现阶段只完成临时小型 CPU 数学检查：分子枚举与折叠公式最大误差约 1.33e-15；
+  hard K Jensen 等号、soft K Jensen 下界通过；无匹配候选的理想 RMSNorm
+  直接 logit 梯度约 -2.15e-16。未进行新训练、GPU 实现或实际吞吐测试。
