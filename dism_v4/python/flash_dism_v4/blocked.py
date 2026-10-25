@@ -1,5 +1,6 @@
-"""CUDA blockwise v4 prototype: hard history, exact independent normalization.
+"""CUDA blockwise v4 prototype with hard history and candidate denominators.
 
+Soft reads support arithmetic mixing or a normalized Jensen surrogate.
 No SQ/SK, planner, cache, or CUDA graph. Pair scratch is O(BH * block_size * N).
 Backward regenerates history in forward block order and differentiates its
 geometric weight w.r.t. tau, without saving quadratic boundary checkpoints.
@@ -35,21 +36,19 @@ def _soft_weights(loga, p, k, precision):
     return a, denominator, c, b, a*b
 
 
-def _stable_rows(loga, p, logk, v):
-    """Rare extreme-logit fallback; log-domain candidate scaling, linear scratch.
+def _jensen_weights(loga, logp, k, precision):
+    """Jensen on the complete normalized coefficient, retaining candidate Z.
 
-    Used if min log pK < -40, where ordinary GEMM scaling can lose an entire
-    candidate. Deliberately slow, but does not silently clamp probabilities or
-    materialize an N*N*C tensor. No activation graph is saved.
+    The common row scale cancels because each K distribution sums to one.
+    No probability threshold, clipping, or slow log-domain fallback.
     """
-    for row in range(loga.shape[1]):
-        logw = loga[:, row, :, None] + logk
-        fallback = torch.zeros_like(logw[:, :1])
-        logden = torch.logsumexp(torch.cat((fallback, logw), 1), 1)
-        w = (logw-logden[:, None]).exp()
-        m = (w*p[:, row, None]).sum(-1)
-        out = torch.bmm(m[:, None], v).squeeze(1)
-        yield row, w, m, out
+    maximum = loga.amax(-1, keepdim=True).clamp_min(0)
+    loga_scaled = loga - maximum
+    a = loga_scaled.exp()
+    denominator = (-maximum).exp() + _mm(a, k, precision)
+    r = logp - denominator.log()
+    m = (loga_scaled + _mm(r, k.transpose(1, 2), precision)).exp()
+    return a, denominator, r, m
 
 
 class _Blocked(torch.autograd.Function):
@@ -57,21 +56,20 @@ class _Blocked(torch.autograd.Function):
     @torch.amp.custom_fwd(device_type="cuda", cast_inputs=torch.float32)
     def forward(ctx, logp, logk, v, tau, iq, ik, segments, reset, mode, block, precision):
         p, k = logp.exp(), logk.exp()
-        stable = mode == "soft" and float(logk.min()) < -40.
         out = torch.empty_like(v)
         for start, loga, _ in history_blocks(iq, ik, tau, segments, reset, block):
             end = start + loga.shape[1]
             if mode == "hard":
                 _, _, m = _hard_weights(loga, p[:, start:end], ik)
                 out[:, start:end] = _mm(m, v, precision)
-            elif stable:
-                for row, _, _, value in _stable_rows(loga, p[:, start:end], logk, v):
-                    out[:, start+row] = value
+            elif mode == "jensen":
+                *_, m = _jensen_weights(loga, logp[:, start:end], k, precision)
+                out[:, start:end] = _mm(m, v, precision)
             else:
                 *_, m = _soft_weights(loga, p[:, start:end], k, precision)
                 out[:, start:end] = _mm(m, v, precision)
         ctx.save_for_backward(logp, logk, v, tau, iq, ik, segments, reset)
-        ctx.mode, ctx.block, ctx.precision, ctx.stable = mode, block, precision, stable
+        ctx.mode, ctx.block, ctx.precision = mode, block, precision
         return out
 
     @staticmethod
@@ -92,15 +90,18 @@ class _Blocked(torch.autograd.Function):
                 dp[:, start:end] = pb*dprob
                 dlog_a = m*(e-dprob.gather(2, index))
                 dv += _mm(m.transpose(1, 2), g, precision)
-            elif ctx.stable:
-                dlog_a = torch.empty_like(loga)
-                for row, w, m, _ in _stable_rows(loga, pb, logk, v):
-                    dprob = (w*e[:, row, :, None]).sum(1)
-                    dp[:, start+row] = pb[:, row]*dprob
-                    dw = w*pb[:, row, None]*(e[:, row, :, None]-dprob[:, None])
-                    dk += dw  # gradient w.r.t. log K, not K
-                    dlog_a[:, row] = dw.sum(-1)
-                    dv += m[:, :, None]*g[:, row, None, :]
+            elif ctx.mode == "jensen":
+                a, denominator, r, m = _jensen_weights(loga, logp[:, start:end], k, precision)
+                t = e*m
+                dlogp = _mm(t, k, precision)
+                dp[:, start:end] = dlogp
+                dz = -dlogp/denominator
+                # Dropping the common log-scale from r changes dK only by a
+                # candidate-independent offset, canceled by K's log-softmax.
+                dk += (_mm(t.transpose(1, 2), r, precision)
+                       + _mm(a.transpose(1, 2), dz, precision))*k
+                dlog_a = t + a*_mm(dz, k.transpose(1, 2), precision)
+                dv += _mm(m.transpose(1, 2), g, precision)
             else:
                 a, denominator, c, b, m = _soft_weights(loga, pb, k, precision)
                 dc = _mm(e*a, k, precision)
@@ -112,13 +113,13 @@ class _Blocked(torch.autograd.Function):
                 dlog_a = a*(e*b + _mm(dz, k.transpose(1, 2), precision))
                 dv += _mm(m.transpose(1, 2), g, precision)
             dt += (dlog_a*dloga).sum((1, 2))
-        return dp, (dk if ctx.mode == "soft" else None), dv, dt, None, None, None, None, None, None, None
+        return dp, (dk if ctx.mode != "hard" else None), dv, dt, None, None, None, None, None, None, None
 
 
 @torch.compiler.disable
 def dism_v4_blocked(
     q_logits: Tensor, k_logits: Tensor, v: Tensor, tau: Tensor, *,
-    key_mode="hard", hard=None, block_size=64, precision="fp32",
+    key_mode="hard", hard=None, block_size=64, precision="fp32", soft_readout="arithmetic",
     cu_seqlens=None, segment_ids=None, query_reset=None,
 ):
     """BNHC logits -> BNHDv output; float32 CUDA, optional BF16 GEMMs.
@@ -127,6 +128,9 @@ def dism_v4_blocked(
     All modes retain hard Q/K history. `precision='bf16'` is an explicit inexact
     speed option; the default fp32 uses native PyTorch float32 GEMM settings.
     Segment IDs must be nondecreasing [B,N]; packed cu_seqlens requires B=1.
+    soft_readout='jensen' selects the normalized Jensen surrogate for soft
+    heads. key_mode='jensen' is shorthand for all-soft Jensen evaluation.
+    Both soft paths always use GEMM; extreme ranges may underflow or overflow.
     """
     if q_logits.ndim != 4 or q_logits.shape != k_logits.shape or min(q_logits.shape) <= 0:
         raise ValueError("q/k logits must have equal nonempty [B,N,H,C] shapes")
@@ -135,8 +139,10 @@ def dism_v4_blocked(
         raise ValueError("v must be [B,N,H,Dv] and tau [H]")
     if not all(x.dtype in (torch.float16, torch.bfloat16, torch.float32) for x in (q_logits,k_logits,v,tau)):
         raise ValueError("blocked prototype accepts fp16/bf16/fp32 inputs; use reference for fp64")
-    if key_mode not in ("hard", "soft") or block_size not in (32, 64, 128) or precision not in ("fp32", "bf16"):
-        raise ValueError("require hard/soft mode, block_size 32/64/128, precision fp32/bf16")
+    if key_mode not in ("hard", "soft", "jensen") or block_size not in (32, 64, 128) or precision not in ("fp32", "bf16"):
+        raise ValueError("require hard/soft/jensen mode, block_size 32/64/128, precision fp32/bf16")
+    if soft_readout not in ("arithmetic", "jensen"):
+        raise ValueError("soft_readout must be arithmetic or jensen")
     if not q_logits.is_cuda or any(x.device != q_logits.device for x in (k_logits, v, tau)):
         raise ValueError("blocked prototype requires inputs on one CUDA device")
     if torch.cuda.is_current_stream_capturing():
@@ -170,7 +176,8 @@ def dism_v4_blocked(
     reset = query_reset[:, None].expand(b, h, n).reshape(b*h, n).contiguous()
     taus = tau.float().repeat(b)
     out = torch.zeros_like(values)
-    for decision, mode in [(True, "hard"), (False, "soft")]:
+    soft_mode = "jensen" if key_mode == "jensen" or soft_readout == "jensen" else "soft"
+    for decision, mode in [(True, "hard"), (False, soft_mode)]:
         indices = (hard.flatten() == decision).nonzero().flatten()
         if indices.numel() == 0:
             continue

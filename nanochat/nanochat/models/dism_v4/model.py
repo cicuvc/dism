@@ -14,6 +14,8 @@ class DismV4LM(DismLM):
         if factory is not None:
             block.attn.block_size = self.config.block_size
             block.attn.readout_precision = self.config.readout_precision
+            block.attn.soft_readout = self.config.soft_readout
+            block.attn.hybrid_fusion = self.config.hybrid_fusion
         return block
 
     def forward(self, *args, **kwargs):
@@ -28,4 +30,8 @@ class DismV4LM(DismLM):
         c = self.config
         hybrid = sum(isinstance(layer.attn, V4DismGdnAttention) for layer in self.layers)
         pair_gemms = hybrid * c.n_head * c.sequence_len * (16*c.qk_vocab_size + 6*c.value_dim)
+        if c.soft_readout == 'rmsnorm_jensen':
+            pair_gemms = hybrid * c.n_head * c.sequence_len * (8*c.head_dim + 8*c.value_dim)
+            # Extra expected-codebook projection, forward and backward.
+            pair_gemms += hybrid * c.n_head * 6*c.qk_vocab_size*c.head_dim
         return 6*self.scaling_parameter_count() + pair_gemms

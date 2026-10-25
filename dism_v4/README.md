@@ -137,8 +137,9 @@ BF16 MMA 是有误差的加速选项，不是与 FP32 严格等价的路径。
 - `segment_ids: int[B,N]`：同 row 内非递减文档编号，与 `cu_seqlens` 二选一。
   文档隔离与 row-level hard 选择是两件独立的事。
 
-当前分块版仅支持无 SQ/SK 的 `hard` / `soft`，不支持 Jensen、二阶梯度、
-cache/decode、planner、CUDA graph 或 Dynamo compile。
+当前分块版支持无 SQ/SK 的 `hard` / `soft` / `jensen`。`soft_readout="jensen"`
+控制 mixed hard flags 中 soft heads 的读取方式，默认 arithmetic 保持旧配置身份。
+不支持二阶梯度、cache/decode、planner、CUDA graph 或 Dynamo compile。
 
 实现边界：
 
@@ -154,11 +155,10 @@ cache/decode、planner、CUDA graph 或 Dynamo compile。
 soft 计算仍是 `O(B H N² C)`，quadratic hard 为 `O(B H N² Dv)` 加 scatter；
 这解决的是 2K 下的可用性与显存，不是 subquadratic 算法。
 
-数值保护：hard 始终逐候选缩放。soft 在最小 `log pK < -40` 时切换到逐行
-log-domain 候选归一化，防止某个符号桶因共同缩放而丢失。该 fallback 很慢，
-但不截断 logits、不隐式修改概率、不物化 `N²C` 张量。若训练后出现尖锐的
-K 分布，需要重新检查这一路的触发率与吞吐；目前性能数字不能外推至该状态。
-输入应有限；只验证了文档列出的数值范围，不保证所有 FP32 极端值。
+数值范围：hard 始终逐候选缩放。按用户随后要求，算术 soft 和 Jensen soft 的
+慢速 log-domain 保护均已**无条件移除**，不再检查 `log pK < -40`，始终走 GEMM。
+不截断 logits、不添加分母 epsilon。有限输入仍可能产生下溢、上溢或 NaN，尤其
+是长匹配链与极尖锐 K 分布叠加时。FP64 reference 保留稳定计算，供诊断使用。
 
 ## Nanochat 模型与运行
 
@@ -250,3 +250,193 @@ sanitizer 范围仅为新 history kernel，不是完整 FLA/MXFP8/模型的 sani
 梯度时 optimizer 更新精确一致。一次完整模型 replay 的 Adam 更新曾出现单元素
 约 1.56e-4 差异，虽然 loss/梯度通过比较；单独重测没有复现。BF16 与 atomic
 归约不保证 bitwise replay，不能把 serialization 通过解读为训练轨迹逐 bit 相同。
+
+## MQAR 短测（2026-10-25，固定 hard probability=0.5）
+
+用户暂停长预训练后，使用本机 `~/cs/project/mad-lab` 的
+`generate_in_context_recall_instance`、`LanguageModel` 与 `SwiGLU` 做短测。
+工具为 [mqar_quick.py](tools/mqar_quick.py)，不修改 MAD 仓库。
+
+- MAD 的 LayerNorm prenorm backbone，width=128，`[v4-only, SwiGLU] × 2`；
+  每层 4 heads、D=Dv=32、符号词表 256，无 GDN、SQ/SK，direction 固定 true。
+  这是独立小模型从头训练，不是对 123M 语料预训练权重作下游评估。
+- **训练 hard_prob 固定 0.5，不调度**，按样本/head 采样；分别全 soft/hard eval。
+- 训练 12800 条、测试 1280 条，batch=128、seed=12345、AdamW lr=5e-4、
+  weight decay=0、cosine 到 1e-6。训练预测全部 next tokens；测试只计重复 key
+  的 value 查询。输入已由原生成器 shift，实际长度分别为 127、255。
+- 检查 train/test 完整序列无重叠；跨样本扰动与未来 token 扰动隔离检查通过。
+
+| 词表 / 生成长度 | 完成 epoch | 最后 soft acc | 最后 hard acc | 最后 soft CE | 最后 hard CE |
+|---|---:|---:|---:|---:|---:|
+| 16 / 128 | 10 | 100% | 99.9721% | 0.000806 | 0.002007 |
+| 128 / 256 | 10 | 42.6376% | 41.9854% | 2.141275 | 2.194077 |
+
+基础档 cosine horizon=10；较难档原定 horizon=20，因为数值 fallback 导致速度
+下降，在完成第 10 个 epoch 后结束短测，**尚未收敛**。单 seed、短预算，不能与
+历史 200-epoch/best-epoch 的 v3 表格直接比较，也未运行 2K 极限档或完整 MAD suite。
+复现停止预算时可用以下命令，保持较难档的 cosine horizon=20：
+
+```bash
+python dism_v4/tools/mqar_quick.py --epochs 10 --hard-prob .5 \
+  --output dism_v4/build/mqar/new_v16_n128
+python dism_v4/tools/mqar_quick.py --vocab 128 --length 256 --epochs 20 \
+  --stop-after-epochs 10 --hard-prob .5 --output dism_v4/build/mqar/new_v128_n256
+```
+
+结果、模型 checkpoint、执行脚本快照和数据 hash 位于忽略目录
+`dism_v4/build/mqar/{v16_n128,v128_n256}_h05_seed12345/`。
+
+### 本次发现的性能问题
+
+较难档每 epoch 从约 3.5s 升到第 9/10 epoch 的 73/83s。第 10 epoch checkpoint
+在一个测试 batch 上，两层最小 log pK 分别约 -45.04/-46.17；约 23.0%/46.1%
+的 row/head 含有低于 -40 的值。当前实现只要任一 soft group 元素低于该阈值，
+就将该层这次调用的全部 soft heads、全部 query blocks 切到逐行 log-domain
+广播归约。这个策略很保守，而且 fallback 放弃了高效 GEMM。
+
+隔离数值诊断：取同一 checkpoint 第一层一个触发条件的 head（min log pK=-42.49，
+tau=0.6045），仅在诊断进程中强制普通 FP32 GEMM 公式，对比 FP64 oracle。
+输出/Q/K/V 的相对 L2 误差均不超过 6.3e-7，tau 为 6.6e-6，全部有限。
+说明 **min log pK<-40 并不充分意味着普通路径数值失效**，不是取消保护的通用证明。
+上述诊断时生产阈值尚未修改；随后用户明确要求无条件禁用慢速保护，见下一节。
+
+常规精确 soft 读取仍有 Z=AK 与 B=CK^T 的词表维收缩，当前 dense 算法是
+O(N²C)，分块只降低存储，不消除 FLOPs。这是需要单独评估的算法成本；不能由
+当前 Python fallback 的约 24 倍减速推断 v4 方法本身无法高效实现。
+
+## 保留候选分母的 Jensen 读取与禁用慢速保护
+
+这次仅改变 soft 读取系数：
+
+```
+Z[i,c] = sum_j A[i,j] * pK[j,c]
+R[i,c] = log pQ[i,c] - log(1 + Z[i,c])
+M[i,j] = A[i,j] * exp(sum_c R[i,c] * pK[j,c])
+output = M @ values
+```
+
+hard 历史、hard 读取、单位 fallback 分母、输出 norm/gate 均不变，未采用
+去分母再 RMSNorm 的变体。这里的 **单位 fallback 是数学分母中的 1**，与被删除的
+**慢速数值保护路径**不同。Jensen 对完整归一化系数做近似，因此仍有两次词表维
+收缩；不会获得无分母 Jensen 的 O(NVD)+O(N²D) 计算结构。
+
+启用接口：`dism_v4_blocked(..., soft_readout="jensen", hard=flags)`；
+全 soft 时也可 `key_mode="jensen"`。nanochat 配置使用同名 `soft_readout` 字段，
+新预设为 [参数对齐的 Jensen 配置](../nanochat/configs/dism_v4_123m_ggggggdddddd_slimpajama_3b_jensen.json)。
+字段进入 ModelSpec 指纹，不会把原始 arithmetic checkpoint 默认为 Jensen。
+MQAR 脚本增加 `--soft-readout jensen`，`hard_prob` 仍可固定 0.5。
+
+FP32 前反向已对现有 FP64 `key_mode="jensen"` oracle 验证，包括跨 block、
+packed/reset、尖锐 K、one-hot hard 端点、非负系数下界、mixed flags、MXFP8 optimizer
+恢复。84 项测试通过，**其中两项明确记录禁用保护后极端 soft 输入会产生非有限值**：
+tau=1000、K logits=±1000 的原用例仍有有限 FP64 输出，但算术/Jensen GEMM 输出
+均非有限。没有放宽普通数值测试容差；没有 CUDA kernel 修改或新 sanitizer 声明。
+
+### 配对效率测量
+
+工具：[benchmark_readouts.py](tools/benchmark_readouts.py)。RTX 5090，FP32 readout、
+BF16 模型 autocast，TF32 关闭。同权重、同输入、同 hard flags；只测 forward+backward，
+不更新 optimizer，不启动长训练。旧保护实现从 Git `50bec9f` 加载到诊断进程，
+不恢复生产保护。预热 2 次，取 3 组计时中位数；每组 5 次，MQAR 每组 3 次。
+
+| 测试 | hard prob | 旧算术＋保护 | 算术、无保护 | Jensen、无保护 |
+|---|---:|---:|---:|---:|
+| 2K 单算子，B=1/H=12/C=512/Dv=64 | 0 | 30.36 ms | 30.04 ms | 32.78 ms |
+| 同上 | 0.5 | 28.16 ms | 28.13 ms | 28.14 ms |
+| 123.47M 完整模型，B=4/N=2048 | 0 | 743.68 ms | 744.63 ms | 740.53 ms |
+| 同上 | 0.5 | 552.68 ms | 552.23 ms | 551.70 ms |
+| MQAR epoch-10 checkpoint，B=128/N=255 | 0 | 2032.80 ms | 39.54 ms | 38.25 ms |
+| 同上 | 0.5 | 776.25 ms | 32.92 ms | 34.33 ms |
+
+当前主要收益来自禁用保护：MQAR 的 50% hard 情形算术路径加速约 23.6 倍。
+Jensen 相对无保护算术没有稳定的吞吐收益；保留分母时计算量同阶。
+以上是前反向速度，不包含 optimizer/数据加载/日志，不能直接当作完整预训练吞吐。
+结果位于 `dism_v4/build/jensen/{operator,model,mqar}.json`；显存记录区分保留的
+诊断参考梯度 buffer 与算子/模型本身。
+
+MQAR 同 checkpoint 的 50% hard 冻结权重回放中，移除保护后的 CE 差约 -1.3e-5、
+整体参数梯度 cosine≈0.999995。换成 Jensen 后 CE 差约 +0.02164、梯度 cosine≈0.315。
+这是训练 surrogate 的实际改变，不是等价优化，质量需要重新训练验证。完整模型
+BF16/atomic 回放仍存在非 bitwise 梯度差异；本轮没有宣称恢复轨迹精确一致。
+
+另测 N=2048 随机输入的 BF16 readout 对 FP32：Jensen 输出相对 L2 为
+0.00259，Q/K/V/tau 梯度为 0.00336/0.01029/0.00256/0.00513，均有限。
+这只是该输入上的精度检查，不恢复上述极端动态范围保证。
+
+## 无分母 RMSNorm 变体：效率诊断
+
+首轮使用独立诊断实现和配对测量工具
+[benchmark_rmsnorm.py](tools/benchmark_rmsnorm.py)，当时未接入生产配置。
+实现现已迁入 [rmsnorm.py](python/flash_dism_v4/rmsnorm.py)，
+[rmsnorm_probe.py](tools/rmsnorm_probe.py) 保留独立 FP64 oracle；后续 opt-in 接入见下一节。
+实现第 13 节（去掉 SQ/SK 后）的变体：hard/soft 均移除候选分母，对混合后的
+DISM 输出逐 head 做 RMSNorm，再与 GDN 合并；外部 norm/gate 不变。
+新增 RMSNorm 的 gain 固定为 1、epsilon=1e-6，不增加参数。soft 使用
+`Ebar=softmax(K logits) @ E_Q`，`log m=q @ Ebar^T-logsumexp(Q logits)`；
+hard 使用所选符号的 E_Q 向量。两者仍使用同一条 argmax 历史。
+
+该变体将两次 N²C 词表收缩替换成 NCD 插值和 N²D pair score；C=512、D=64。
+复用当前 hard-history kernel，分块重算反向，不保存 N² 激活。
+行缩放后同步调整 epsilon，未利用 RMSNorm 近似尺度不变性丢弃有限 epsilon。
+4 组独立 FP64 dense oracle 前向/反向检查通过，覆盖 mixed flags、packed 边界、
+跨块同符号长链，以及 epsilon=1e-6/0.1。所有计时输入的输出和参数梯度均有限；
+这不是任意极端输入的数值保证，也未验证训练质量。
+
+RTX 5090，FP32 readout、TF32 关闭；整模型沿用 BF16 autocast 和 MXFP8 FFN。
+同输入、同初始化权重、同 hard flags，预热 2 次，每组 5 步，取 3 组中位数。
+只测前向＋反向，不含 optimizer 更新、数据加载和日志。模型为 123,473,088 参数、
+ggggggdddddd、N=2048、B=4。基线全部已禁用慢速保护。
+
+| 整模型 hard prob | 算术＋候选分母 | Jensen＋候选分母 | 无分母 Jensen＋RMSNorm | 相对有分母 Jensen 加速 |
+|---|---:|---:|---:|---:|
+| 0 | 755.3 ms | 743.3 ms | 227.9 ms | 3.26× |
+| 0.5 | 551.2 ms | 544.8 ms | 227.6 ms | 2.39× |
+| 1 | 288.5 ms | 282.6 ms | 211.0 ms | 1.34× |
+
+50% hard 下整模型耗时下降约 58.2%，峰值 allocated 显存由 10.83 GiB 降至
+8.20 GiB（均未分配 optimizer state）。单算子计时包含 Q/K 词表投影和反向：
+同为 N=2048/H=12/C=512/D=Dv=64，B=1 的 Jensen 基线 32.16 ms、变体
+19.75 ms（1.63×）；B=4 分别为 81.28 ms、28.82 ms（2.82×）。收益随 batch
+明显变化，不能把 B=1 算子比例直接外推整模型。此原型也合并了 hard/soft 的
+pair readout 调度，结果包含这部分实现差别；没有单独剥离每项贡献。
+B=1 全 hard 时本原型为 19.48 ms、旧 hard 为 16.62 ms，尚不能断言所有形状
+或专用 hard 推理 kernel 都会加速。
+
+结果位于 `dism_v4/build/rmsnorm/{operator,operator_b4,model}.json`。
+这是不同归一化语义的模型候选，不是与原输出等价的优化；最终是否采用仍取决于
+训练效果。未启动或恢复长训练。
+
+## 分支各自归一化的融合及 3B 训练时长
+
+用户选择无分母 RMSNorm 变体后，将 hybrid 融合改为
+`(RMSNorm(gdn_raw) + RMSNorm(dism_raw)) * SiLU(gate)`，之后做原来的输出投影。
+每个 head 分别沿 Dv 归一化，epsilon 均为 1e-6；DISM 的 RMSNorm 已包含在
+readout 中，不重复归一化。相加后不再做 norm。两路共享原有 `norm.weight`
+可学习尺度，所以参数量仍为 123,473,088；pure GDN 层保持原样。
+
+新增显式配置 `soft_readout="rmsnorm_jensen"`、`hybrid_fusion="separate_rmsnorm"`，
+默认仍为旧 arithmetic/sum。新预设
+[dism_v4_123m_ggggggdddddd_slimpajama_3b_rmsnorm_h05.json](../nanochat/configs/dism_v4_123m_ggggggdddddd_slimpajama_3b_rmsnorm_h05.json)
+使用旧布局 ggggggdddddd、固定 hard_prob=0.5、MXFP8 FFN/optimizer 开启、MXFP8 CE
+关闭。该 opt-in 目前只支持 FP32 readout 和旧 SiLU gate；planner/CUDA graph 仍不支持。
+不修改旧 checkpoint，不将旧 checkpoint 自动迁移到新融合。
+
+86 项 pytest 通过，包括融合公式的逐项检查（禁止相加后的 norm）、新变体的
+2K 训练、MXFP8 optimizer/schema、共享参数别名及 RNG/annealing 状态恢复。
+RMSNorm 算子的 4 组独立 FP64 前反向对照另外由 `rmsnorm_probe.py` 执行。
+此前保留的两个极端 soft 非有限值反例仍然存在。
+
+完整更新步测量工具：[benchmark_training_step.py](tools/benchmark_training_step.py)。
+使用新初始化模型和固定合成输入，单卡 RTX 5090、N=2048、B=8、累积 8 次，
+每步 131,072 token；每 1024 token 设置 document 边界。与旧长训练一致采用
+`float32_matmul_precision="high"`（允许 TF32）、document-loss 累积归一化、
+grad clip=1、MXFP8 AdamW、hidden/update RMS 诊断。没有语料加载、W&B 网络日志、
+定期验证或 checkpoint 写盘。运行 2 个预热更新和 5 个计时更新，无后台长训练。
+
+- 完整步中位数：3.3286 s；范围 3.3181–3.4087 s。
+- 吞吐：39,378 token/s；峰值 allocated 约 17.68 GiB，包含 optimizer/诊断。
+- 原预算 22,888 步、2,999,975,936 token，纯训练约 21.16 小时。
+- 加上数据、500 步验证/8K NIAH、2000 步存盘等未实测开销，建议预留 22–24 小时。
+
+这是短合成测试的时间外推，非完整语料训练实测；不据其 loss 推断训练质量。
+结果保存在 `dism_v4/build/rmsnorm/training_step.json`。长训练保持停止。

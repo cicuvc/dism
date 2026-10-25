@@ -14,6 +14,7 @@ def main():
     p.add_argument('--batch', type=int, default=1)
     p.add_argument('--steps', type=int, default=5)
     p.add_argument('--precision', choices=['fp32', 'bf16'])
+    p.add_argument('--soft-readout', choices=['arithmetic', 'jensen'])
     p.add_argument('--output')
     args = p.parse_args()
     torch.set_num_threads(2)
@@ -21,6 +22,8 @@ def main():
     spec_data = json.loads(Path(args.config).read_text())
     if args.precision:
         spec_data['config']['readout_precision'] = args.precision
+    if args.soft_readout:
+        spec_data['config']['soft_readout'] = args.soft_readout
     spec = ModelSpec.from_dict(spec_data)
     model = build_model(spec).cuda()
     model.init_weights()

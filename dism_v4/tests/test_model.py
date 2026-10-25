@@ -8,19 +8,20 @@ from nanochat.models import ModelSpec, PretrainOptimizerConfig, build_model, opt
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA model')
 
 
-def _spec(mxfp8=False):
+def _spec(mxfp8=False, soft_readout="arithmetic"):
     return ModelSpec('dism_v4_gdn_hybrid', 1, dict(
         sequence_len=2048, vocab_size=128, n_layer=2, layer_layout='gd',
         n_head=4 if mxfp8 else 2, n_embd=128 if mxfp8 else 64,
         intermediate_size=256 if mxfp8 else 128, head_dim=32, value_dim=32,
         readout_dim=32, qk_vocab_size=32, anneal_steps=101,
-        mxfp8=mxfp8, mxfp8_optimizer=mxfp8))
+        mxfp8=mxfp8, mxfp8_optimizer=mxfp8, soft_readout=soft_readout,
+        hybrid_fusion='separate_rmsnorm' if soft_readout=='rmsnorm_jensen' else 'sum'))
 
 
-@pytest.mark.parametrize('mxfp8',[False,True])
-def test_2k_training_eval_resume_and_packed_rows(mxfp8):
+@pytest.mark.parametrize('mxfp8,soft_readout',[(False,'arithmetic'),(True,'arithmetic'),(True,'jensen'),(True,'rmsnorm_jensen')])
+def test_2k_training_eval_resume_and_packed_rows(mxfp8,soft_readout):
     torch.manual_seed(103)
-    model = build_model(_spec(mxfp8)).cuda()
+    model = build_model(_spec(mxfp8,soft_readout)).cuda()
     model.init_weights()
     attn = model.layers[1].attn
     assert not hasattr(attn, 'sq_proj') and not hasattr(attn, 'sk_proj')
@@ -56,7 +57,7 @@ def test_2k_training_eval_resume_and_packed_rows(mxfp8):
     loss.backward()
     grads = {name: None if p.grad is None else p.grad.clone() for name,p in model.named_parameters()}
     opt.step(); opt.zero_grad(set_to_none=True)
-    restored = build_model(_spec(mxfp8)).cuda()
+    restored = build_model(_spec(mxfp8,soft_readout)).cuda()
     restored.load_state_dict(snapshot['model'])
     opt2 = restored.setup_pretraining_optimizer(config)
     opt2.load_state_dict(snapshot['optimizer'])
@@ -114,3 +115,40 @@ def test_model_flags_stay_per_row(monkeypatch):
     assert shape == (2,256,2,32) and flags == (2,2)
     assert segments[0].unique().numel() == segments[1].unique().numel() == 1
     assert segments[0,0] != segments[1,0]
+
+
+def test_separate_norm_fusion_formula(monkeypatch):
+    from flash_dism_v4 import module
+    model=build_model(_spec(True,'rmsnorm_jensen')).cuda()
+    model.init_weights()
+    attn=model.layers[1].attn
+    captured={}
+    original_readout=module.rms_readout
+    original_gdn=attn.gdn_raw
+    def readout(*args,**kwargs):
+        value=original_readout(*args,**kwargs)
+        captured['dism']=value
+        return value
+    def gdn(*args,**kwargs):
+        value=original_gdn(*args,**kwargs)
+        captured['gdn']=value
+        return value
+    monkeypatch.setattr(module,'rms_readout',readout)
+    monkeypatch.setattr(attn,'gdn_raw',gdn)
+    def forbidden(*args,**kwargs):
+        raise AssertionError('must not normalize the combined output')
+    monkeypatch.setattr(attn.norm,'forward',forbidden)
+    hooks=[attn.g_proj_up.register_forward_hook(lambda m,i,o:captured.update(gate=o)),
+           attn.o_proj.register_forward_pre_hook(lambda m,i:captured.update(projected=i[0]))]
+    x=torch.randint(128,(2,256),device='cuda')
+    cu=torch.tensor([0,256,512],device='cuda',dtype=torch.int32)
+    try:
+        with torch.no_grad():model(x,x,cu_seqlens=cu)
+    finally:
+        for hook in hooks:hook.remove()
+    g=captured['gdn'].float()
+    g=g*torch.rsqrt(g.square().mean(-1,keepdim=True)+1e-6)
+    d=captured['dism'].reshape_as(g).to(captured['gdn'].dtype).float()
+    gate=captured['gate'].reshape_as(g).float()
+    expected=((g+d)*attn.norm.weight.float()*torch.nn.functional.silu(gate)).flatten(2)
+    torch.testing.assert_close(captured['projected'],expected.to(captured['projected'].dtype),atol=0,rtol=0)

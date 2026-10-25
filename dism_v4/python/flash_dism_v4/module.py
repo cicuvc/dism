@@ -5,6 +5,7 @@ from torch.nn import functional as F
 from flash_dism.hybrid_gdn import DismGdnAttention
 from flash_dism.module import value_residual_mix
 from .blocked import dism_v4_blocked_from_embeddings
+from .rmsnorm import rms_readout
 
 
 class V4DismGdnAttention(DismGdnAttention):
@@ -15,6 +16,8 @@ class V4DismGdnAttention(DismGdnAttention):
         del self.sq_proj, self.sk_proj
         self.block_size = 64
         self.readout_precision = "fp32"
+        self.soft_readout = "arithmetic"
+        self.hybrid_fusion = "sum"
 
     @torch.compiler.disable
     def forward(self, hidden_states, attention_mask=None, past_key_values=None,
@@ -63,17 +66,31 @@ class V4DismGdnAttention(DismGdnAttention):
         tau = tau * self.tau_scale
         beta = self.vocab_temperature if vocab_temperature is None else vocab_temperature
         # Sampling stays per training row; documents only reset the history.
-        output = dism_v4_blocked_from_embeddings(
+        readout = rms_readout if getattr(self, 'soft_readout', 'arithmetic') == 'rmsnorm_jensen' else dism_v4_blocked_from_embeddings
+        output = readout(
             q.reshape(rows, length, heads, self.head_dim) * beta,
             k.reshape(rows, length, heads, self.head_dim) * beta,
             self.q_vocab, self.k_vocab,
             v.reshape(rows, length, heads, self.value_dim), tau,
             hard=hard, segment_ids=conv_seq_idx.reshape(rows, length),
             block_size=self.block_size, precision=self.readout_precision,
+            soft_readout=getattr(self, 'soft_readout', 'arithmetic'),
         ).reshape(1, total, heads, self.value_dim).to(v.dtype)
-        output = self._combine_cuda(
-            output, x, v, cu_seqlens, max_seqlen, v_first,
-            linear_q, linear_k, conv_seq_idx)
         gate = self.g_proj_up(self.g_proj_down(x)).unflatten(-1, (heads, self.value_dim))
-        output = self.o_proj(self.norm(output, gate).flatten(2))
+        if getattr(self, 'hybrid_fusion', 'sum') == 'separate_rmsnorm':
+            # DISM is already normalized in original numerator coordinates by
+            # rms_readout. Do not normalize it again or normalize the sum.
+            gdn = self.gdn_raw(x, cu_seqlens, max_seqlen, v_first,
+                               linear_q, linear_k, conv_seq_idx).float()
+            gdn = gdn * torch.rsqrt(gdn.square().mean(-1, keepdim=True) + 1e-6)
+            # Share the existing learned per-channel scale across the two
+            # norms, preserving parameter aliases/count and optimizer groups.
+            output = ((output.float() + gdn) * self.norm.weight.float()
+                      * F.silu(gate.float())).to(v.dtype)
+            output = self.o_proj(output.flatten(2))
+        else:
+            output = self._combine_cuda(
+                output, x, v, cu_seqlens, max_seqlen, v_first,
+                linear_q, linear_k, conv_seq_idx)
+            output = self.o_proj(self.norm(output, gate).flatten(2))
         return output, None, None

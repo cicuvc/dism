@@ -28,7 +28,7 @@ def main():
     tau = torch.linspace(0, 2, args.heads, device='cuda', requires_grad=True)
     cot = torch.randn_like(v)
     results = []
-    for mode in ('soft', 'hard'):
+    for mode in ('soft', 'jensen', 'hard'):
         for precision in ('fp32', 'bf16'):
             def step(backward):
                 if backward:
@@ -59,7 +59,7 @@ def main():
                 results.append(row)
     accuracy = []
     if args.check_bf16:
-        for mode in ('soft', 'hard'):
+        for mode in ('soft', 'jensen', 'hard'):
             exact = dism_v4_blocked(q,k,v,tau,key_mode=mode,precision='fp32',block_size=args.block)
             approx = dism_v4_blocked(q,k,v,tau,key_mode=mode,precision='bf16',block_size=args.block)
             ge = torch.autograd.grad((exact*cot).sum(),(q,k,v,tau),allow_unused=True)
