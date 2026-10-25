@@ -1,0 +1,33 @@
+{
+  "architecture": "dism_v4_gdn_hybrid",
+  "architecture_version": 1,
+  "config": {
+    "anneal_steps": 22888,
+    "hard_prob_max": 0.95,
+    "head_dim": 64,
+    "intermediate_size": 1280,
+    "mxfp8": true,
+    "mxfp8_optimizer": true,
+    "mxfp8_projections": false,
+    "n_embd": 768,
+    "n_head": 12,
+    "n_layer": 12,
+    "post_norm": true,
+    "qk_vocab_size": 512,
+    "readout_dim": 32,
+    "rng_seed": 1729,
+    "sequence_len": 2048,
+    "softcap": 30.0,
+    "tau_schedule_floor": 0.0,
+    "tau_schedule_fraction": 0.0,
+    "value_dim": 64,
+    "value_residual": true,
+    "value_residual_gate_bias": 2.0,
+    "vocab_size": 32000,
+    "vocab_temperature": 1.0,
+    "layer_layout": "ggggggdddddd",
+    "block_size": 64,
+    "readout_precision": "fp32",
+    "mxfp8_ce": false
+  }
+}
