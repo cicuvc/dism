@@ -12,6 +12,12 @@ checkpoint 和运行中的训练不因此改变。旧 GQA 实验仅提供多查�
 它主动修改原来的独立候选归一化，因此可移除第 6 节的动态分母瓶颈。目前尚未
 选择最终归一化变体或启动实验。
 
+第 14 节进一步澄清工程约束：允许词表相关计算位于独立 GEMM/kernel，只要求
+复杂的对角递推/readout 前向和反向不承担 V 维收缩。原版独立候选归一化可以
+用分阶段、分 query block 的精确算法实现，**无需落地完整 N x N 中间张量**。
+因此，第 6 节的动态分母是计算依赖和总成本问题，并不构成采用 RMSNorm 的
+必要理由；两种归一化应作为不同的模型语义比较。
+
 ## 1. 动机与已经确定的要求
 
 v3 用可微 soft 路径学习符号分配，再使用离散后缀匹配实现 hard 推理。v4
@@ -27,8 +33,9 @@ v3 用可微 soft 路径学习符号分配，再使用离散后缀匹配实现 h
 5. 只有主线符号进入后续匹配状态。候选状态不延续，不组成指数数量的历史串。
 6. 枚举全部符号，不将 top-k 截断当成该构造的精确实现。
 7. 保留 numerator-only 的 signed SQ/SK readout，以及分母中的单位 fallback。
-8. 设计重点还包括大词表下的成本：避免让 dense token-pair kernel 的收缩维度
-   从 selector 宽度 D 膨胀到词表大小 V。当前 soft 参考定义尚未全面满足这一要求。
+8. 设计重点还包括大词表下的成本：避免让复杂对角递推/readout kernel 的
+   收缩维度膨胀到词表大小 V。**允许独立的词表相关 GEMM/kernel 承担 V 维运算**，
+   不要求全程序完全没有 O(N^2 V) 计算。分阶段实现见第 14 节。
 
 输出相对于候选的混合是概率加权；每个候选内部由于 signed SQ/SK，输出本身
 不必是 value 向量的凸组合。
@@ -374,9 +381,10 @@ raw tail 可一次按 b_j 分桶：对当前候选，其长度是前一条主线
 - [v3 prefill builder](../../dism_v3/python/flash_dism/inference/csrc/prefill.hpp)。
 - [v3 decode planner](../../dism_v3/python/flash_dism/inference/csrc/planner.hpp)。
 
-在保留原始归一化设计的前提下，关键开放问题不是 Jensen 是否仍然合法，而是：**在保留全 Q 候选、
-独立归一化和精确硬端的同时，如何让 soft K 的动态候选分母也能低成本计算。**
-历史匹配部分已有低维答案；完整读取部分尚未有兼顾上述约束的定稿方案。
+在保留原始归一化设计的前提下，动态候选分母的计算量和数据流需要专门设计。
+第 14 节给出满足澄清后的核心 kernel 约束的精确分阶段方案；其实际速度、稳定
+缩放和 GPU 调度尚未验证。不能将“仍存在 V 相关计算”误写成“无法保持核心 kernel
+低维”，也不能将它作为必须修改归一化语义的证明。
 
 ## 12. 后续决策：训练与推理均保留 hard 历史
 
@@ -522,3 +530,218 @@ m 取对应 hard 或 Jensen 版本。该 gate 放在 RMSNorm 外，计算 M 可�
 - 现阶段只完成临时小型 CPU 数学检查：分子枚举与折叠公式最大误差约 1.33e-15；
   hard K Jensen 等号、soft K Jensen 下界通过；无匹配候选的理想 RMSNorm
   直接 logit 梯度约 -2.15e-16。未进行新训练、GPU 实现或实际吞吐测试。
+
+## 14. 工程约束澄清：独立归一化可以精确分阶段、分块处理
+
+用户指出，目标不是排除全部 V 维计算，而是将其移出复杂的对角递推/readout
+前向与反向。按这个约束，原版候选独立归一化不存在之前暗示的架构障碍。
+甚至可以先采用精确的算术读取，不必为了核心 kernel 的宽度而引入读取层面的
+Jensen 近似。总 FLOPs、访存和调度是否合算是接下来要测量的问题。
+
+### 14.1 前向依赖和独立 kernel 边界
+
+保持 hard 历史，令 K_{jc}=rho_j^K(c)，P_{ic}=p_i(c)。K 可以是当前读取使用的
+soft 分布；历史仍由固定 argmax Q/K 串决定。对 query block I：
+
+1. 匹配阶段生成 A_I = alpha * (1+H^H_shift)，并施加因果 mask。
+2. 独立词表 GEMM：Z_I = A_I K。
+3. 逐元素计算 C_I = P_I / (1+Z_I)。
+4. 独立词表 GEMM：B_I = C_I K^T。
+5. readout 核心：O_i = sum_j A_ij B_ij <sq_i,sk_j> v_j。
+
+步骤 2–4 承担词表维度；步骤 1 和 5 不需要 V 维向量。A/B 是传给核心的
+标量 pair 系数，readout 可在内部形成 A*B，不必额外保存 M=A*B。
+
+归一化依赖历史 A，因此不能全部放到递推之前。若已经把所有候选合成单个
+D_v 维未归一化输出，候选分子的信息就丢失了，不能靠一个简单后处理恢复
+逐候选分母。把归一化放到 readout 之后也可以，但那要求保留 N_i(c) 等候选
+输出，代价可达 N V D_v；以上“递推后、最终 readout 前”分阶段更节省中间量。
+
+现有融合的递推/readout 需要重新划分边界；本设计不是一个无需改 kernel 的
+外部 wrapper。
+
+### 14.2 无需完整 N x N 张量
+
+令 query block 大小为 B_q。最直接的实现仅保留：
+
+- A_I、B_I：各 B_q x N，可分配复用 scratch。
+- Z_I、C_I：各 B_q x V。
+- 输出块：B_q x D_v。
+- K/P 概率及可选择保存的 Z：N x V，属于词表侧数据，不是 N x N pair 张量。
+- hard 路由元数据、原始 SQ/SK/V 及必要的梯度累积。
+
+因此 pair scratch 是 O(B_q N)，固定 B_q 时对 N 线性，而不是 O(N^2)。
+例：B=1、H=12、N=8192、B_q=64，FP32 的一个 A_I 或 B_I buffer 为 24 MiB；
+同条件完整 N x N buffer 则为 3 GiB。全序列 Z 在 V=512 时为 192 MiB，可
+选择保存或重算。上述数字不包括模型、梯度、其他层和 kernel workspace。
+
+还可以进一步做 key tiling：先遍历 key tiles 累计 Z_I，得到 C_I 后，再遍历
+key tiles 重算 A 的 tile、计算 B 的 tile 并累计输出。这样 pair scratch 可降到
+O(B_q B_k)，代价是重算和更多调度。不能声称因此去掉了全历史概率/元数据存储。
+
+关键依赖是**完整的候选分母尚未累计完之前，不能最终确定该 query 的读取
+系数**。它要求多阶段/多遍处理或缓存当前 query block，但不要求保存整张矩阵。
+
+### 14.3 反向也可以保持相同边界
+
+令 S_ij=<sq_i,sk_j>，E_ij=<g_i,v_j>，M=A*B，T=S*E。对 block I，readout
+反向先给出：
+
+\[
+dA_{\rm read}=T\odot B,\qquad dB=T\odot A,
+\]
+
+以及 SQ/SK/V 的普通梯度。词表阶段的反向为：
+
+\[
+dC=dB K,\quad dK_B=dB^T C,\quad
+dP=\frac{dC}{1+Z},\quad dZ=-\frac{dC\odot P}{(1+Z)^2},
+\]
+
+\[
+dA=dA_{\rm read}+dZ K^T,\qquad dK=dK_B+A^T dZ.
+\]
+
+所有 V 维收缩仍是独立 GEMM。核心的 reverse recurrence 若被采用，只接收
+标量 dA，不接收 V 维梯度向量。词表投影和 softmax 的反向同样放在独立阶段。
+
+每个 query block 可重算 A/Z/C/B，消费该 block 后释放 scratch，向全局 dK、
+dSK、dV 累加。更细 key tiling 时，先累计 dC，得到完整 dZ 后再遍历 key tiles
+计算分母对 dA/dK 的贡献；dA_read 可重算，不必为所有 query 留存。
+
+普通 autograd 若自动保存每个 block 的所有 pair 张量，总量仍可能回到 N^2。
+生产实现必须明确 custom backward/checkpoint/recompute 策略，不能仅凭前向
+写了 block 循环就宣称训练显存线性。同理，保存每个 query block 的 N 长度
+递推边界，总量也有 O(N^2/B_q)；这不是严格的线性存储方案。
+
+### 14.4 Hard 历史允许更直接的重算和 tau 梯度
+
+本方案主方向是 hard 历史，tau 按 head 固定。令 ell 为 Q 主线前缀 i-1 与
+K 前缀 j-1 的最长公共后缀长度，则：
+
+\[
+A_{ij}=\sum_{t=1}^{\ell+1}e^{t\tau},\qquad
+\frac{\partial A_{ij}}{\partial\tau}
+=\sum_{t=1}^{\ell+1}t e^{t\tau},\qquad j\le i.
+\]
+
+所以 A 不必依赖保存的 dense 递推轨迹：可从 hard 后缀元数据按块重建，用
+dA*dA/dtau 累加 tau 梯度，无需为 Q/K 硬标签反传。SAM query 状态、匹配长度、
+K endpoint 和 suffix-link-tree LCA 可支持这种重建；binary lifting 等方案的
+元数据可为 O(N log N)，不会落地 N^2 状态。
+
+这是数学上的重算入口，不是已实现的高效 GPU pair 查询。随机树访问、LCA
+成本、重算调度与原对角扫描的性能需要比较。若将来重新采用 soft 历史，这个
+硬后缀闭式不能沿用，需要真正的 reverse recurrence 和检查点策略。
+
+### 14.5 数值边界与验证状态
+
+分块解决存储，不自动解决指数动态范围。各候选独立归一化时，不同符号的
+匹配量可能相差极大，却在归一化后都有重要贡献。不能以同一个全行最大值
+缩放 A 后，允许弱符号桶下溢为零，再声称归一化会恢复它。应设计符号/块尺度、
+稳定累计或 log-domain 处理，并验证 fallback=1 的绝对尺度。
+
+本节公式是在实数域的精确分解；尚未选择最终的 BF16/FP32 稳定表示。中间
+词表运算也不能仅因从核心 kernel 移出，就忽略 FLOPs、访存、kernel 启动或
+CUDA graph 编排成本。
+
+临时 CPU/FP64 检查已经验证：
+
+- 全候选独立归一化与分阶段前向误差约 2.22e-16。
+- 分阶段 autograd，以及显式 readout -> 词表运算 -> reverse recurrence 的
+  Q/K/codebook/SQ/SK/V/tau 梯度，与候选 oracle 的最大误差约 8.88e-16。
+- query-block 前向及显式反向（用独立后缀枚举重建 A 和 tau 导数），最大
+  前向误差约 2.22e-16，梯度误差约 1.11e-15；block pair workspace 为 4 x 13，
+  未在被检验算法中分配 13 x 13 pair 状态。参考/验证代码不作为生产存储承诺。
+
+这些检查不包含 GPU 实现或吞吐测量。本节恢复了原版独立归一化作为可行的
+工程候选；RMSNorm 变体仍值得比较，但不再以“无法隔离 V 维计算”作为其必要性。
+
+## 15. 基于 v3 的改动范围与去除 SQ/SK 的候选
+
+### 15.1 已检查的 v3 结构
+
+对照 `dism_v3/src/forward.cu`、`include/forward/readout.cuh` 和
+`python/flash_dism/compiler.py`：当前前向在一次流式遍历内完成 score MMA、
+对角扫描、SQ/SK MMA、在线单行归一化和 value MMA。backward 则依赖保存的
+row normalizer、delta、扫描边界，再接 vocabulary interpolation backward。
+
+因此第 14 节不是在现有 fused kernel 后面加一个除法就能完成的修改。单行
+normalizer/delta 不能直接替代 v4 的逐候选 dZ；需要重新划分前后向和保存契约。
+
+| 部分 | 可复用基础 | v4 必须处理的变化 |
+|---|---|---|
+| 词表投影/插值 | 投影、LSE/argmax、tile 和精度经验 | 分块概率的导出/重算、直接概率梯度；旧接口主要返回插值向量而非完整概率 |
+| hard 匹配 | label/reset 处理、扫描原语、SAM/后缀元数据 | 按 block 提供历史延续 A，或从后缀长度重建；不把当前软读取写回历史 |
+| dense readout | value MMA、TMA/调度基础 | 接收外部 pair 系数，不再执行旧的单行归一化；有/无 SQSK 分开评估 |
+| backward | 局部向量梯度的数学和基础代码 | 词表 dZ/dC 路径、block 重算、tau 与路由梯度边界、custom autograd |
+| hard prefill/decode | K 索引、SAM 拓扑、历史缓存框架 | 每位置多候选 query、共用时间戳、候选混合与分母、主线提交接口 |
+| planner/graph | 已验证的同步协议和缓冲管理经验 | 新任务与 buffer 形状、候选统计、capture/replay 和生命周期验证 |
+
+范围判断：小规模分块正确性/质量原型可复用现有基础，用普通 GEMM 实现词表侧，
+无需先重写所有低层流水线；达到当前 v3 水平的性能、完整反向、varlen、planner
+和 CUDA graph 支持则属于较大改动。没有实测之前不提供工期或性能倍数承诺。
+v4 应单独实现/验证，不能通过修改 v3 默认数学来“兼容”两种语义。
+
+### 15.2 去除 SQ/SK 的数学含义
+
+对于原版候选独立归一化，去掉 SQ/SK 等价于将 <sq_i,sk_j> 固定为 1：
+
+\[
+\mu_i(c)=\frac{\sum_{j:b_j=c}A_{ij}v_j}{1+Z_i(c)},\qquad
+o_i=\sum_c p_i(c)\mu_i(c).
+\]
+
+这成为对“当前 hard 后缀历史条件下，各符号的 value 聚合”的概率读取。Q 的
+全候选分布已经提供当前 token 的连续选择能力，所以 SQ/SK 不再是让当前读取
+具有连续选择能力的唯一通路；去除它们是有实质依据的候选，不是只为省参数。
+
+但两者不完全重复。对 hard K 中同属符号 c 的位置 j、l，固定历史时：
+
+\[
+\frac{M_{ij}}{M_{il}}=\frac{A_{ij}}{A_{il}},
+\qquad b_j=b_l=c.
+\]
+
+当前 p_i(c) 在比例中消去。SQ/SK 能额外根据当前连续内容区分同一符号内的
+key，且允许 signed token 权重。移除后仍有后缀链长的区分，但没有这项额外
+的当前内容细分能力。大词表减少碰撞、多 head、GDN 的连续混合都可能补偿，
+需要实际验证，不能由 soft Q 的存在推出完全等价。
+
+原版归一化下无 SQ/SK 的有效 token 权重非负、总和不超过 1，因此输出是 values
+与零 fallback 的凸组合；value 和后续输出投影本身仍可以带符号。这种有界读取
+与第 13 节的 RMSNorm 输出是不同模型选择，应分别做对照。
+
+### 15.3 去除 SQ/SK 对实现的影响
+
+dense 路径变为 O=M V，反向主要是 dM=dO V^T、dV=M^T dO，删除 SQ/SK MMA、
+dSQ/dSK 和相应投影/激活/缓存。词表归一化分阶段和 dZ 的链路仍然需要，不能
+因为 readout 简化就沿用 v3 的旧 delta 公式。
+
+hard event 路径的收益更大。v3 的状态更新为：
+
+```
+state[R,Dv] = decay * state + weight * outer(SK[j], V[j])
+output[i] += coefficient * SQ[i] @ state
+```
+
+无 SQ/SK 时变为：
+
+```
+state[Dv] = decay * state + weight * V[j]
+output[i] += coefficient * state
+```
+
+反向也从矩阵外积状态变成向量状态。R=32 时，每个聚合状态的元素数下降 32 倍，
+大量 outer-product/MMA 工作、寄存器/summary 存储随之消失。这不是端到端 32 倍
+提速：候选数、词表工作、scalar planning、访存、其他模型层和调度仍有成本；
+向量执行器也需要新 specialization，不能直接把现有只支持 R16/32 的 kernel
+参数改成 R=1。
+
+以 width=768、12 heads、R=32、无 bias 的独立 SQ/SK 投影为例，可去掉每层
+589824 个参数；6 个 hybrid 层共 3538944 个。这个数字不包括其他可能的 readout
+前端结构，也不授权自动将节省参数补到 FFN 中。
+
+建议先以“去除 SQ/SK、保留候选独立归一化”的 v4 oracle/分块原型作为简化
+基线，并将完整 SQ/SK 版本作为表达能力对照；质量结果决定最终 kernel 形态。
+本节仅为实现评估和候选设计，未修改模型、删除参数、构建 kernel 或启动训练。
