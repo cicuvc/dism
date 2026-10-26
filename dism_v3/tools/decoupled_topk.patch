@@ -1,0 +1,401 @@
+--- topk_prefill.hpp
++++ topk_prefill.hpp
+@@ -8,8 +8,10 @@
+ #include <limits>
+ #include <numeric>
+ #include <queue>
+-
+-namespace dism_prefill {
++#include <unordered_map>
++
++namespace topk_prefill {
++using dism_prefill::PrefillMatcher;
+ using Ids = std::vector<int>;
+ constexpr double neg_inf = -std::numeric_limits<double>::infinity();
+
+@@ -24,7 +26,7 @@
+ // row<0:  O[-row-1] += weight * sq[-row-1]^T M.
+ // Independent streams overlap output rows; GPU execution needs FP32 reduction.
+ struct Program {
+-    int n = 0, states = 0;
++    int n = 0, states = 0, topk = 1;
+     std::vector<int64_t> offsets{0};
+     Ids rows;
+     std::vector<double> decay, weight, logden;
+@@ -104,7 +106,10 @@
+         return scratch[depth];
+     }
+     PrefillMatcher sam;
+-    int n=0;
++    int n=0, topk=1, nq=0;
++    int time(int query) const { return query/topk; }
++    Ids before_state,before_length,request_head,request_next,dfs,restore;
++    std::unordered_map<int,int> nearest;
+     double tau=0.;
+     double cached_tau=std::numeric_limits<double>::quiet_NaN();
+     int cached_length=0;
+@@ -139,17 +144,15 @@
+
+     std::vector<double> forward_weights;
+     double forward_tau=std::numeric_limits<double>::quiet_NaN();
+-
+-    // Many read events reuse the same match length. Forward needs only that
+-    // scalar; backward needs its derivative prefix, but rarely all n entries.
+-    // Keep the original formulas and recurrence order exactly unchanged.
+-    double cached_logweight(int length) {
+-        if (!gradients) {
+-            auto &value=forward_weights[length];
+-            if (std::isnan(value)) value=logweight(length);
+-            return value;
+-        }
+-        if (length>cached_length) {
++    double forward_logweight(int length) {
++        if (!cache_forward_weights) return logweight(length);
++        auto &value=forward_weights[length];
++        if (std::isnan(value)) value=logweight(length);
++        return value;
++    }
++
++    double gradient_logweight(int length) {
++        if (lazy_gradient_weights && length>cached_length) {
+             logweights.resize(length+1); derivatives.resize(length+1);
+             for (int l=cached_length+1;l<=length;++l) {
+                 logweights[l]=logweight(l);
+@@ -228,13 +231,13 @@
+     // mode 0: downward/downward; 1: parent/downward; 2: downward/parent;
+     // 3: centroid singleton. Prune zero weights before building event streams.
+     void emit(const Ids &qs, Range qr, const Ids &ks, Range kr, int c, int mode) {
+-        if (qr.b==qr.e || kr.b==kr.e || ks[kr.b]>qs[qr.e-1]) return;
++        if (qr.b==qr.e || kr.b==kr.e || ks[kr.b]>time(qs[qr.e-1])) return;
+         Stream s{stream_q.size(),0,stream_k.size(),0};
+         for (int t=qr.b;t<qr.e;++t) {
+             int i=qs[t];
+             int length = mode==3 ? matched[i] : std::min(matched[i],sam.nodes[c].length);
+             if (mode==1) length=std::min(matched[i],lca_len(qnode[i],c));
+-            double a = mode==2 ? 0. : cached_logweight(length);
++            double a = mode==2 ? 0. : (gradients ? gradient_logweight(length) : forward_logweight(length));
+             if (a!=neg_inf) {
+                 stream_q.push_back(i); stream_a.push_back(a);
+                 if (gradients) stream_da.push_back(mode==2 ? 0. : derivatives[length]);
+@@ -244,9 +247,9 @@
+         if (s.qb==s.qe) return;
+         for (int t=kr.b;t<kr.e;++t) {
+             int j=ks[t];
+-            if (j>stream_q.back()) break;
++            if (j>time(stream_q.back())) break;
+             int length = mode==2 ? lca_len(endpoint[j],c) : 0;
+-            double b = mode==2 ? cached_logweight(length) : 0.;
++            double b = mode==2 ? (gradients ? gradient_logweight(length) : forward_logweight(length)) : 0.;
+             if (b!=neg_inf) {
+                 stream_k.push_back(j); stream_b.push_back(b);
+                 if (gradients) stream_db.push_back(mode==2 ? derivatives[length] : 0.);
+@@ -266,7 +269,7 @@
+     // Only that side needs partitioning; the other side is entirely downward.
+     void cross(const Ids &aq, Range aqr, const Ids &bk, Range bkr, int c, int pg,
+                bool parent_a, bool parent_b, Scratch &S) {
+-        if (aqr.b==aqr.e || bkr.b==bkr.e || bk[bkr.b]>aq[aqr.e-1]) return;
++        if (aqr.b==aqr.e || bkr.b==bkr.e || bk[bkr.b]>time(aq[aqr.e-1])) return;
+         if (!parent_a && !parent_b) { emit(aq,aqr,bk,bkr,c,0); return; }
+         if (parent_a && parent_b) throw std::logic_error("split parent component");
+         if (parent_a) {
+@@ -293,11 +296,11 @@
+         // Removing only the root isolates branches without changing suffix links.
+         removed[0]=true;
+         for (size_t g=0;g<sam.branch_roots.size();++g) {
+-            int first_key=sam.key_head[g],last_query=forest_qtail[g];
++            int first_key=sam.key_head[g],last_query=forest_qtail[g]<0 ? -1 : time(forest_qtail[g]);
+             if (last_query<first_key || last_query<0) continue;
+             forest_queries.clear();forest_keys.clear();
+             for (int i=forest_qhead[g];i>=0;i=forest_qnext[i])
+-                if (i>=first_key) forest_queries.push_back(i);
++                if (time(i)>=first_key) forest_queries.push_back(i);
+             for (int j=first_key;j>=0 && j<=last_query;j=sam.key_next[j])
+                 forest_keys.push_back(j);
+             decompose(sam.branch_roots[g],forest_queries,{0,int(forest_queries.size())},
+@@ -307,7 +310,7 @@
+
+     void decompose(int root, const Ids &qs, Range qr, const Ids &ks, Range kr, int depth,
+                    const Ids *known_nodes=nullptr, Range known_range={0,0}) {
+-        if (qr.b==qr.e || kr.b==kr.e || ks[kr.b]>qs[qr.e-1]) return;
++        if (qr.b==qr.e || kr.b==kr.e || ks[kr.b]>time(qs[qr.e-1])) return;
+         Scratch &S=scratch_at(depth);
+         // Parent partitioning already produced this component's BFS order,
+         // orientation and subtree sizes. Each forest root needs one initial BFS.
+@@ -422,6 +425,8 @@
+     }
+
+   public:
++    bool cache_forward_weights=false;
++    bool lazy_gradient_weights=false;
+     Builder() = default;
+     Builder(const Ids &q, const Ids &k, const Ids &reset, double tau_, bool reference_lca_=false, bool gradients_=false) {
+         if (q.size()!=k.size() || reset.size()!=k.size())
+@@ -431,10 +436,13 @@
+     // Inputs are borrowed only until build returns. A null reset means no
+     // interior resets (the training job already represents one document).
+     void build(const int *q, const int *k, const int *reset, size_t count_,
+-               double tau_, bool reference_lca_=false, bool gradients_=false) {
++               double tau_, bool reference_lca_=false, bool gradients_=false,
++               const int *candidates=nullptr,int topk_=1) {
++        if (topk_<1 || topk_>512 || (topk_>1 && !candidates) || count_>size_t(std::numeric_limits<int>::max()/topk_/8))
++            throw std::invalid_argument("invalid candidate count or virtual query index overflow");
+         if (!q || !k || !count_ || count_>size_t(std::numeric_limits<int>::max()/8) || !std::isfinite(tau_))
+             throw std::invalid_argument("nonempty bounded label lengths and finite tau required");
+-        n=int(count_); tau=tau_; reference_lca=reference_lca_; gradients=gradients_;
++        n=int(count_); topk=topk_; nq=n*topk; tau=tau_; reference_lca=reference_lca_; gradients=gradients_;
+         endpoint.clear(); qnode.clear(); matched.clear(); up.clear();
+         streams.clear(); stream_q.clear(); stream_k.clear();
+         stream_a.clear(); stream_b.clear(); stream_da.clear(); stream_db.clear();
+@@ -445,8 +453,18 @@
+                 cached_tau=std::numeric_limits<double>::quiet_NaN(); cached_length=0;
+                 logweights.assign(1,neg_inf); derivatives.assign(1,0.);
+             }
+-            cached_tau=tau;
+-        } else {
++            if (!lazy_gradient_weights) {
++            int first=cached_length+1;
++            if (first<=n) { logweights.resize(n+1); derivatives.resize(n+1); }
++            for (int l=first;l<=n;++l) {
++                logweights[l]=logweight(l);
++                derivatives[l]=std::exp(logweights[l-1]-logweights[l])*derivatives[l-1]
++                    + std::exp(l*tau-logweights[l])*l;
++            }
++            cached_tau=tau; cached_length=std::max(cached_length,n);
++            } else cached_tau=tau;
++        }
++        if (!gradients && cache_forward_weights) {
+             if (forward_tau!=tau) {
+                 forward_weights.assign(n+1,std::numeric_limits<double>::quiet_NaN());
+                 forward_tau=tau;
+@@ -491,33 +509,74 @@
+             }
+         }
+         int state=0, length=0;
+-        qnode.reserve(n); matched.reserve(n);
+-        forest_qhead.assign(sam.branch_roots.size(),-1);
+-        forest_qtail.assign(sam.branch_roots.size(),-1);forest_qnext.resize(n);
++        qnode.assign(nq,0); matched.assign(nq,0);
++        before_state.resize(n);before_length.resize(n);
++        request_head.assign(count,-1);request_next.assign(nq,-1);
+         for (int i=0;i<n;++i) {
+             if (reset && reset[i]) state=length=0;
++            before_state[i]=state;before_length[i]=length;
++            if (candidates && candidates[i*topk]!=q[i])
++                throw std::invalid_argument("candidate zero must be the committed query label");
++            for(int a=0;a<topk;++a)for(int b=0;b<a;++b)
++                if(candidates && candidates[i*topk+a]==candidates[i*topk+b])
++                    throw std::invalid_argument("duplicate candidates");
++            for(int c=1;c<topk;++c) {
++                int query=i*topk+c;
++                request_next[query]=request_head[state];request_head[state]=query;
++            }
+             int edge=sam.find(state,q[i]);
+             while (state && edge<0) {
+-                state=sam.nodes[state].link; length=std::min(length,sam.nodes[state].length);
++                state=sam.nodes[state].link;length=std::min(length,sam.nodes[state].length);
+                 edge=sam.find(state,q[i]);
+             }
+-            if (edge<0) state=length=0;
+-            else { state=sam.edges[edge].target; ++length; }
+-            qnode.push_back(state); matched.push_back(length);
+-            if (length) {
+-                int group=sam.branch[state];forest_qnext[i]=-1;
+-                if (forest_qtail[group]>=0) forest_qnext[forest_qtail[group]]=i;
+-                else forest_qhead[group]=i;
+-                forest_qtail[group]=i;
+-            }
++            if(edge<0)state=length=0;
++            else {state=sam.edges[edge].target;++length;}
++            qnode[i*topk]=state;matched[i*topk]=length;
++        }
++        if(topk>1) {
++            // Offline nearest ancestor with an outgoing edge for each symbol.
++            // Every transition is installed/restored once. Alternative probes
++            // never walk (or mutate) the committed query's suffix-link chain.
++            nearest.clear();nearest.reserve(sam.branch_roots.size()*2+1);
++            restore.resize(sam.edges.size());dfs.clear();dfs.push_back(0);
++            while(!dfs.empty()) {
++                int action=dfs.back();dfs.pop_back();
++                if(action<0) {
++                    int v=-action-1;
++                    for(int e=sam.nodes[v].first;e>=0;e=sam.edges[e].next)
++                        nearest[sam.edges[e].symbol]=restore[e];
++                    continue;
++                }
++                int v=action;dfs.push_back(-v-1);
++                for(int e=sam.nodes[v].first;e>=0;e=sam.edges[e].next) {
++                    auto insertion=nearest.emplace(sam.edges[e].symbol,-1);
++                    auto &old=insertion.first->second;restore[e]=old;old=e;
++                }
++                for(int query=request_head[v];query>=0;query=request_next[query]) {
++                    auto found=nearest.find(candidates[query]);
++                    if(found==nearest.end() || found->second<0)continue;
++                    const auto &e=sam.edges[found->second];
++                    qnode[query]=e.target;
++                    matched[query]=std::min(before_length[time(query)],sam.nodes[e.node].length)+1;
++                }
++                for(int w:neighbors(v))if(sam.nodes[w].link==v)dfs.push_back(w);
++            }
++        }
++        forest_qhead.assign(sam.branch_roots.size(),-1);
++        forest_qtail.assign(sam.branch_roots.size(),-1);forest_qnext.resize(nq);
++        for(int query=0;query<nq;++query)if(matched[query]) {
++            int group=sam.branch[qnode[query]];forest_qnext[query]=-1;
++            if(forest_qtail[group]>=0)forest_qnext[forest_qtail[group]]=query;
++            else forest_qhead[group]=query;
++            forest_qtail[group]=query;
+         }
+         build_root_forest();
+     }
+
+     Program finish() const {
+         if (!n) throw std::logic_error("build must precede finish");
+-        Program out; out.n=n; out.states=int(sam.nodes.size()); out.logden.assign(n,0.);
+-        if (gradients) out.dlogden.assign(n,0.);
++        Program out; out.n=n; out.topk=topk; out.states=int(sam.nodes.size()); out.logden.assign(nq,0.);
++        if (gradients) out.dlogden.assign(nq,0.);
+         // Per-query scaled denominator: den = exp(P)*Z, dlogden = D/Z.
+         // A stream contributes exp(a+pivot)*mass and its unnormalized tau
+         // derivative exp(a+pivot)*(da*mass+dmass). Treat pivots as numerical
+@@ -526,8 +585,8 @@
+         // per query, instead of logadd and derivative exps at every event.
+         // P=0, Z=1, D=0 preserves the constant unit denominator contribution.
+         static thread_local std::vector<double> norm_pivot, norm_mass, norm_derivative;
+-        norm_pivot.assign(n,0.); norm_mass.assign(n,1.);
+-        if (gradients) norm_derivative.assign(n,0.);
++        norm_pivot.assign(nq,0.); norm_mass.assign(nq,1.);
++        if (gradients) norm_derivative.assign(nq,0.);
+         // Scalar pass. Only causal keys participate in each stream's pivot.
+         // The exponential pair (decay, weight) for a key depends only on the
+         // running pivot, so the two passes walk the identical key sequence and
+@@ -540,7 +599,7 @@
+             size_t cursor=s.kb; double pivot=neg_inf, mass=0., dmass=0.;
+             for (size_t qi=s.qb;qi<s.qe;++qi) {
+                 int i=stream_q[qi];
+-                while (cursor<s.ke && stream_k[cursor]<=i) {
++                while (cursor<s.ke && stream_k[cursor]<=time(i)) {
+                     double b=stream_b[cursor], next=std::max(pivot,b);
+                     double decay=std::exp(pivot-next), weight=std::exp(b-next);
+                     if (gradients) dmass=dmass*decay+weight*stream_db[cursor];
+@@ -564,7 +623,7 @@
+                 }
+             }
+         }
+-        for (int i=0;i<n;++i) {
++        for (int i=0;i<nq;++i) {
+             out.logden[i]=norm_pivot[i]+std::log(norm_mass[i]);
+             if (gradients) out.dlogden[i]=norm_derivative[i]/norm_mass[i];
+         }
+@@ -578,7 +637,7 @@
+             size_t cursor=s.kb; double pivot=neg_inf;
+             for (size_t qi=s.qb;qi<s.qe;++qi) {
+                 int i=stream_q[qi];
+-                while (cursor<s.ke && stream_k[cursor]<=i) {
++                while (cursor<s.ke && stream_k[cursor]<=time(i)) {
+                     double b=stream_b[cursor];
+                     if (gradients) out.dlogweight.push_back(stream_db[cursor]);
+                     out.rows.push_back(stream_k[cursor]);
+@@ -602,7 +661,7 @@
+ // CPU stand-in for the future device backend: deliberately uses only Program.
+ template<class T>
+ void execute(const Program &p, const T *sq, const T *sk, const T *v, int r, int dv, T *out) {
+-    std::fill(out,out+int64_t(p.n)*dv,T(0));
++    std::fill(out,out+int64_t(p.n)*p.topk*dv,T(0));
+     std::vector<T> matrix(int64_t(r)*dv);
+     for (size_t s=1;s<p.offsets.size();++s) {
+         std::fill(matrix.begin(),matrix.end(),T(0));
+@@ -616,7 +675,7 @@
+                 row=-row-1;
+                 for (int b=0;b<dv;++b) {
+                     T sum=0;
+-                    for (int a=0;a<r;++a) sum+=sq[int64_t(row)*r+a]*matrix[a*dv+b];
++                    for (int a=0;a<r;++a) sum+=sq[int64_t(row/p.topk)*r+a]*matrix[a*dv+b];
+                     out[int64_t(row)*dv+b]+=w*sum;
+                 }
+             }
+--- topk_prefill_training.hpp
++++ topk_prefill_training.hpp
+@@ -1,6 +1,6 @@
+ #pragma once
+ // Native, bounded, reusable CPU batch planner. No Torch or CUDA dependency.
+-#include "prefill.hpp"
++#include "topk_prefill.hpp"
+ #include "planning_workers.hpp"
+ #include <array>
+ #include <atomic>
+@@ -11,7 +11,9 @@
+ #include <memory>
+ #include <chrono>
+
+-namespace dism_prefill {
++namespace topk_prefill {
++inline bool cache_forward_switch=false;
++using dism_prefill::PlanningWorkers;
+
+ struct TrainingJob {
+     int batch, head, start, end;
+@@ -51,7 +53,8 @@
+     for (int k=0;k<length;++k) {
+         int row=p.rows[start+k];
+         int64_t local=row>=0 ? row : -int64_t(row)-1;
+-        int absolute=int((token_base+local)*heads+head);
++        int absolute=row>=0 ? int((token_base+local)*heads+head)
++            : int(((token_base+local/p.topk)*heads+head)*p.topk+local%p.topk);
+         rows[k]=row>=0 ? absolute : -absolute-1;
+         weights[k]=float(p.weight[start+k]);
+     }
+@@ -91,11 +94,12 @@
+     TrainingBatchProgram(std::shared_ptr<PlanningWorkers> pool,const int *labels,
+                          int b,int h,int tokens,const double *tau,int tau_rows,
+                          const int64_t *documents,int64_t docs,const uint8_t *hard,int c,
+-                         bool compact_mode=false, bool gradients=true, const int *query_reset=nullptr)
++                         bool compact_mode=false, bool gradients=true, const int *query_reset=nullptr,
++                         const int *candidates=nullptr,int topk=1)
+         : workers(std::move(pool)),compact(compact_mode),batch(b),heads(h),n(tokens),width(c),
+           tau_rows(tau_rows) {
+         if (width!=16 && width!=32 && width!=64) throw std::invalid_argument("chunk width must be 16,32,64");
+-        if (int64_t(b)*h*tokens>std::numeric_limits<int>::max())
++        if (topk<1 || topk>512 || int64_t(b)*h*tokens>std::numeric_limits<int>::max()/topk)
+             throw std::invalid_argument("flattened vector rows exceed int32");
+         std::vector<int64_t> covered(b,0);
+         for (int64_t d=0;d<docs;++d) {
+@@ -123,8 +127,11 @@
+             // largest document handled by this worker. Program output owns its
+             // arrays independently and remains valid through pack completion.
+             static thread_local Builder builder;
++            builder.cache_forward_weights=cache_forward_switch;
++            builder.lazy_gradient_weights=cache_forward_switch;
+             builder.build(labels+base,labels+int64_t(b)*h*n+base,
+-                          query_reset ? query_reset+base : nullptr,count,job.tau,false,gradients);
++                          query_reset ? query_reset+base : nullptr,count,job.tau,false,gradients,
++                          candidates ? candidates+base*topk : nullptr,topk);
+             auto p=builder.finish();
+             event_counts[i]=p.rows.size();
+             // Discover chunk boundaries once; slot arrays are built by pack_into*.
+@@ -210,7 +217,7 @@
+                             if (p.rows[e]>=0 && !(reset && k==0)) prefix+=std::log(p.decay[e]);
+                             int row=p.rows[e];
+                             int64_t local=row>=0 ? row : -int64_t(row)-1;
+-                            int absolute=int((token_base+local)*heads+job.head);
++                            int absolute=row>=0 ? int((token_base+local)*heads+job.head) : int(((token_base+local/p.topk)*heads+job.head)*p.topk+local%p.topk);
+                             rows[k]=row>=0 ? absolute : -absolute-1;
+                             prefixes[k]=float(prefix);
+                             weights[k]=float(p.weight[e]);
+@@ -274,7 +281,7 @@
+                             if (p.rows[e]>=0 && !(reset && k==0)) prefix+=std::log(p.decay[e]);
+                             const int row=p.rows[e];
+                             const int64_t local=row>=0 ? row : -int64_t(row)-1;
+-                            const int absolute=int((token_base+local)*heads+job.head);
++                            const int absolute=row>=0 ? int((token_base+local)*heads+job.head) : int(((token_base+local/p.topk)*heads+job.head)*p.topk+local%p.topk);
+                             rows[k]=row>=0 ? absolute : -absolute-1;
+                             prefixes[k]=float(prefix); weights[k]=float(p.weight[e]);
+                             if (dlog) dlog[k]=float(p.dlogweight[e]);
+@@ -307,7 +314,7 @@
+                             if (p.rows[e]>=0 && !(reset && k==0)) prefix+=std::log(p.decay[e]);
+                             const int row=p.rows[e];
+                             const int64_t local=row>=0 ? row : -int64_t(row)-1;
+-                            const int absolute=int((token_base+local)*heads+job.head);
++                            const int absolute=row>=0 ? int((token_base+local)*heads+job.head) : int(((token_base+local/p.topk)*heads+job.head)*p.topk+local%p.topk);
+                             rows[k]=row>=0 ? absolute : -absolute-1;
+                             prefixes[k]=float(prefix); weights[k]=float(p.weight[e]);
+                             if (dlog) dlog[k]=float(p.dlogweight[e]);
