@@ -19,12 +19,25 @@ class SigmoidInputLinear(nn.Linear):
 
 class LayerNormRawGate(nn.Module):
     explicit_output_gate = True
+    center_output = True
 
     def __init__(self, original, scale):
         super().__init__()
         self.weight = original.weight
         self.eps = original.eps
         self.scale = float(scale)
+        # Runtime-only switch for diagnostics; no checkpoint/config state.
+        self.enable_fused_output = True
+
+    def fused_output(self, raw, x, down, up):
+        if self.enable_fused_output and not torch.compiler.is_compiling():
+            from flash_dism.kernels.mixer_output import fused_mixer_output, supported
+            if supported(x, raw, down.weight, down.bias, up.weight, up.bias, self.weight):
+                return fused_mixer_output(x, raw, down.weight, down.bias,
+                                          up.weight, up.bias, self.weight,
+                                          self.scale, self.eps, self.center_output)
+        gate = up(down(x)).unflatten(-1, raw.shape[-2:])
+        return self(raw, gate)
 
     def forward(self, x, gate):
         centered = x.float() - x.float().mean(-1, keepdim=True)
@@ -33,6 +46,8 @@ class LayerNormRawGate(nn.Module):
 
 
 class RMSNormRawGate(LayerNormRawGate):
+    center_output = False
+
     def forward(self, x, gate):
         value = x.float()
         normalized = value * torch.rsqrt(value.square().mean(-1, keepdim=True) + self.eps)

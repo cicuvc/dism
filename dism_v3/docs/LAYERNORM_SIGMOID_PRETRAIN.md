@@ -17,9 +17,10 @@ Each mixer normalizes its64-dimensional per-head output with LayerNorm (same
 weight and eps1e-5, no extra bias), then multiplies by
 `c * W2(sigmoid(W1(x)))`, then applies the existing output projection/bias.
 The sigmoid-input projection retains the original weight/bias names and draw
-order. LayerNorm uses the exact explicit FP32 centered expression from the
-selected screen, followed by BF16 cast; no new CUDA kernel was added. Both
-eager and Dynamo dispatch use the opt-in explicit output module. Residual
+order. The initial implementation used the explicit FP32 centered expression
+from the selected screen, followed by BF16 cast. The fused implementation
+described below now serves supported BF16 eager/CUDA Graph calls; Dynamo and
+unsupported inputs retain the explicit expression. Residual
 postnorms, final norm, SQ scaling1, value residual and original hard sampling
 semantics remain unchanged.
 
@@ -130,3 +131,168 @@ Validation: 11 tests passed across RMSNorm/sigmoid, LayerNorm/sigmoid and fixed
 hard probability, including math, all-layer installation, planner CUDA Graph
 forward/backward and checkpoint state restoration. Log:
 `build/queued_sigmoid_tests.log`. Existing dependency warnings remain visible.
+
+## Output implementation cost (2026-10-27)
+
+Measured on RTX 5090 after `44b21bd`. Both paired models retain K4, old layout
+`ggggggdddddd`, 123,473,088 parameters, hard probability .5, CUDA Graph,
+MXFP8 FFN/optimizer and BF16 CE/projections. Only `mixer_output` and its
+associated scale metadata differ. Synthetic changing-document batches use
+8×2048 rows and eight accumulation microbatches (131,072 tokens/step), as in
+the [top-k full-step benchmark](TOPK_HARD_TRAINING.md). Four warmup and ten
+measured optimizer steps per model alternate order, from identical initial
+parameter values. No checkpoint or dataset is accessed; these are compute-step
+timings, excluding corpus loading, evaluation and checkpoint I/O. All losses
+and gradient norms remained finite; losses are not expected to match because
+the two output formulas differ.
+
+| Planner | Original RMSNorm/SiLU step | LayerNorm/sigmoid step | Extra time | Original token/s | New token/s | Throughput change |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Off | 931.1 ms | 1060.2 ms | +129.0 ms (+13.86%) | 140,765 | 123,634 | -12.17% |
+| On | 960.4 ms | 1092.3 ms | +132.0 ms (+13.74%) | 136,482 | 119,992 | -12.08% |
+
+Both planner-on models selected event for all 480 measured layer/microbatch
+decisions. The slowdown is present with planner off and is not explained by
+readiness misses. Production kernel math, defaults and models were not changed.
+
+`tools/bench_mixer_output.py` isolates the same dimensions: 16,384 tokens,
+12 heads × 64 values, low-rank gate 768→96→768, FP32 gate/norm parameters,
+BF16 output projection and BF16 autocast. All inputs require gradients.
+Forward, backward and combined forward/backward have separate CUDA Graphs;
+the table uses median GPU time over ten alternating rounds of 20 replays.
+The isolated backward reuses saved forward tensors. Separate timings need
+not sum to joint timing due to cache state and scheduling; use joint timing
+for the per-step extrapolation.
+
+| Output tail variant | Forward | Backward | Joint |
+| --- | ---: | ---: | ---: |
+| Original fused RMSNorm/SiLU | .164 ms | .469 ms | .626 ms |
+| Original formula, explicit PyTorch diagnostic | .447 ms | 1.335 ms | 1.781 ms |
+| Explicit RMSNorm/sigmoid | .452 ms | 1.301 ms | 1.759 ms |
+| Current explicit LayerNorm/sigmoid | .544 ms | 1.423 ms | 1.966 ms |
+
+The output tail includes both gate projections, norm/gate and output projection;
+it excludes the mixers and their sum. LayerNorm/sigmoid adds 1.340 ms per layer
+and microbatch. Multiplying by 12 layers × eight microbatches gives 128.7 ms,
+close to the measured 129.0 ms planner-off whole-step difference.
+
+The gate projections alone cost .200 ms originally versus .204 ms with the
+bottleneck sigmoid (joint). Norm/gate alone rises from .200 ms to 1.523 ms.
+Even preserving the original formula but spelling it out as FP32 PyTorch
+operations adds 1.156 ms to the output tail, about 86% of the observed 1.340 ms
+delta. This diagnostic preserves the expression, not a bitwise numerical
+equivalence claim. Removing fusion and repeatedly traversing full-size FP32
+intermediates is the main implementation cost; the bottleneck sigmoid itself
+is small. A fused LayerNorm/raw-gate forward and backward is therefore a
+useful next optimization, but its achievable speedup is not measured here.
+CUDA Graph removes launch submission work without fusing these tensor kernels.
+
+Reproduction: run `tools/bench_topk_model.py` with the maintained top-four spec,
+`--compare-output --disable-output-fusion --topk 4 --probability .5 --rounds 10`, and add
+`--output-planner` for the on pair. Use a fresh `--output` under `dism_v3/build`.
+Run `tools/bench_mixer_output.py --output <fresh-build-path>` for the isolated
+screen. Both tools use only this worktree's modules on PYTHONPATH. Ignored raw
+records are `build/topk_event_training/output_compare_k4_p50_{off,on}.json`
+and `build/topk_event_training/mixer_output_micro.json`.
+
+## Fused output follow-up (2026-10-27)
+
+The user requested two forward kernels and confirmed that the formula remains
+`norm(raw) * linear(g)`. `kernels/mixer_output.py` implements:
+
+1. Down projection plus sigmoid, with rank at most 128.
+2. Up projection plus per-head LayerNorm (or RMSNorm) and calibrated raw gate,
+   with the complete norm dimension, at most 128, in one program.
+
+Output projection remains the existing linear layer. Both pure GDN and hybrid
+GDN+DISM use the new path; the explicit SAM inference output path also calls
+the same dispatcher. Supported calls require contiguous CUDA BF16 activations
+and BF16 projection semantics (BF16 autocast for FP32 projection parameters).
+Unsupported dimensions, dtypes, layouts, empty inputs and Dynamo use the
+original explicit expression. `norm.enable_fused_output=False` is a runtime
+diagnostic switch; it is absent from model metadata and state_dict. Default
+RMSNorm/SiLU models are untouched. Parameter objects, names, initialization,
+optimizer groups and checkpoint schema are unchanged.
+
+The down/up operands, biases, projection results and sigmoid result retain
+their BF16 boundaries. Statistics, affine products and norm-weight reduction
+use FP32. Backward fuses norm/raw-gate differentiation, reduces norm-weight
+partials, and uses BF16 matrix multiplications plus sigmoid differentiation
+for both projections. It supports first derivatives only. It does not promise
+bitwise gradients: the old explicit LayerNorm expression has two separate
+`raw.float()` autograd edges with intermediate BF16 gradient rounding, whereas
+the fused norm derivative combines in FP32 before casting. GEMM/reduction
+orders can also differ. Numerical tests compare every input/parameter gradient
+against both the original expression and an FP64 reference with BF16 boundaries.
+
+Bounded autotune covers down projection (five BM/BK/warp/stage candidates),
+up/norm/gate (four BM/warp/stage candidates) and norm/gate backward (two warp
+counts). Backward keeps BM32 and the partial-gradient layout fixed. Every
+trial completely overwrites its outputs. Keys include relevant shape, bias,
+norm type and operand dtypes; Triton persists winners in its user cache.
+Normal warmup tunes before graph capture. Capture uses a cached winner
+directly; a cold tuning key uses the original fixed configuration without
+benchmarking or pretending that it was tuned. The cold-cache regression clears
+all three tuner caches and replaces benchmarking with a throwing function to
+verify this behavior. Tuning uses approximately 20 ms of graph replay per
+candidate, outside steady-state timing.
+
+The final autotuned isolated output-tail measurement at 16,384 tokens gives:
+
+| Variant | Forward | Backward | Joint |
+| --- | ---: | ---: | ---: |
+| Original fused RMSNorm/SiLU | .165 ms | .470 ms | .627 ms |
+| Explicit LayerNorm/sigmoid | .545 ms | 1.425 ms | 1.968 ms |
+| New fused LayerNorm/sigmoid | .168 ms | .524 ms | .697 ms |
+| Explicit RMSNorm/sigmoid | .453 ms | 1.303 ms | 1.761 ms |
+| New fused RMSNorm/sigmoid | .166 ms | .521 ms | .696 ms |
+
+The LN output tail saves 1.271 ms (64.6%) per layer/microbatch, approximately
+122.0 ms across 12 layers and eight microbatches. This is a microbenchmark
+extrapolation, not an end-to-end measurement by itself. Raw record:
+`build/topk_event_training/mixer_output_autotuned_micro.json`. The pre-autotune
+fixed-config implementation measured .725 ms joint for LN and .717 ms for RMS,
+recorded separately in `mixer_output_fused_micro.json`.
+
+25 distinct numerical/integration tests passed after autotune: all inputs and
+parameter gradients, FP64 reference with BF16 boundaries, tail rows and odd
+dimensions, contiguous/non-contiguous upstream gradients, no bias, BF16
+parameters without autocast, no-grad dispatch, shape/dtype fallback, warm/cold
+graph replay, exact zero gradients, all-layer initialization and state identity,
+planner graph and checkpoint/optimizer/RNG resume, fixed hard probability and
+SAM state/rebuild regressions. No existing acceptance threshold was relaxed.
+
+`tools/audit_mixer_output.py` checks eight LN/RMS graph cases with changing
+inputs and exact zero upstream gradients, including partial token tiles,
+rank17/norm33 and the rank128/norm128 limits. Compute Sanitizer memcheck and
+synccheck report zero errors; racecheck reports zero hazards/errors/warnings.
+The final autotuned SASS inspection covers 76 generated specializations,
+including every tuning candidate: zero CALLs and zero spill slots. Maximum
+registers are 121 for down/sigmoid, 194 for up/norm/gate and 160
+for norm/gate backward; the register pressure remains an optimization target.
+This is bounded shape coverage, not an exhaustive claim. Artifacts are ignored
+under `build/topk_event_training/mixer_autotuned_{memcheck,synccheck,racecheck}`.
+Each tool uses a fresh isolated Triton cache so all candidates execute under
+instrumentation and instrumented timings do not pollute normal tuning winners.
+The earlier fixed-config audit remains in `mixer_fused_*`.
+
+Full optimizer-step comparison uses `--compare-fusion --topk 4 --probability .5
+--rounds 10` with the same top-four training spec and changing-document packing
+as above. The two scratch models have identical LayerNorm/sigmoid formulas,
+initial parameter values and model metadata; only the runtime fusion switch
+differs. Four warmup steps per model include tuning, followed by ten timed
+steps in alternating order. The on pair adds `--output-planner`.
+
+| Planner | Explicit step | Fused step | Saved per step | Explicit token/s | Fused token/s | Throughput gain |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Off | 1061.9 ms | 935.9 ms | 126.0 ms | 123,429 | 140,049 | +13.46% |
+| On | 1093.8 ms | 969.4 ms | 124.4 ms | 119,836 | 135,213 | +12.83% |
+
+Both planner-on models again selected event for 480/480 measured decisions.
+All losses and gradient norms stayed finite. The planner-off paired loss
+difference stayed below 2.1e-4 across the ten measured optimizer steps; this
+short synthetic check is not a long-run convergence guarantee. The roughly
+124–126 ms saving accounts for almost all of the earlier 129–132 ms output
+implementation penalty. This is compute-step throughput with synthetic input,
+not a dataset-loading/evaluation/checkpointing benchmark. Raw results:
+`build/topk_event_training/output_fusion_k4_p50_{off,on}.json`.

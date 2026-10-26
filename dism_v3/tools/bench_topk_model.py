@@ -1,7 +1,8 @@
 """Interleaved scratch-model top-k graph optimizer throughput.
 
 No datasets or checkpoints are accessed. Compare candidate counts, sampled
-readout, or planner off/on at the same K. Timings include planner draining.
+readout, mixer output variants, or planner off/on at the same K.
+Timings include planner draining.
 Both models use the same initialization and inputs.
 """
 import argparse
@@ -27,6 +28,10 @@ def main():
     parser.add_argument('--packing',choices=['full','changing'],default='changing')
     parser.add_argument('--top1-planner',action='store_true')
     parser.add_argument('--compare-planner',action='store_true',help='Compare planner off/on at the same K')
+    parser.add_argument('--compare-output',action='store_true',help='Compare original RMSNorm/SiLU with LayerNorm/sigmoid at the same K')
+    parser.add_argument('--compare-fusion',action='store_true',help='Compare explicit/fused implementation of the same sigmoid mixer output')
+    parser.add_argument('--disable-output-fusion',action='store_true',help='Use the earlier explicit sigmoid output implementation')
+    parser.add_argument('--output-planner',action='store_true',help='Enable planner for both output/fusion comparison models')
     parser.add_argument('--topk',type=int,choices=(1,2,4),default=4)
     parser.add_argument('--planner-workers',type=int,default=16)
     parser.add_argument('--layer-layout',help='Explicit scratch-model layout override')
@@ -35,8 +40,16 @@ def main():
     parser.add_argument('--rows',type=int,default=8)
     parser.add_argument('--accum',type=int,default=8)
     args=parser.parse_args()
-    if args.compare_planner and (args.compare_sampled or args.single_mode or args.top1_planner):
+    if args.compare_planner and (args.compare_output or args.compare_fusion or args.compare_sampled or args.single_mode or args.top1_planner):
         parser.error('--compare-planner is a separate paired comparison')
+    if args.compare_output and (args.compare_fusion or args.compare_sampled or args.single_mode or args.top1_planner):
+        parser.error('--compare-output is a separate paired comparison')
+    if args.compare_fusion and (args.compare_sampled or args.single_mode or args.top1_planner):
+        parser.error('--compare-fusion is a separate paired comparison')
+    if args.compare_fusion and args.disable_output_fusion:
+        parser.error('--compare-fusion sets fusion separately for each model')
+    if args.output_planner and not (args.compare_output or args.compare_fusion):
+        parser.error('--output-planner requires --compare-output or --compare-fusion')
     if args.compare_sampled and args.top1_planner:parser.error('sampled comparison does not use top-one/planner')
     if args.rows<1 or args.accum<1:parser.error('rows and accum must be positive')
     root=Path(__file__).resolve().parents[1]/'build'
@@ -47,6 +60,10 @@ def main():
     torch.manual_seed(921)
     spec=ModelSpec.from_dict(json.loads(Path(args.model_spec).read_text()))
     spec.config['hard_prob_fixed']=args.probability
+    if args.compare_output and spec.config.get('mixer_gate_scales') is None:
+        parser.error('--compare-output requires a spec with calibrated mixer_gate_scales')
+    if args.compare_fusion and spec.config.get('mixer_output') not in ('layernorm_sigmoid','rmsnorm_sigmoid'):
+        parser.error('--compare-fusion requires a sigmoid mixer spec')
     if args.layer_layout:spec.config['layer_layout']=args.layer_layout
     rows,length,accum=args.rows,spec.config['sequence_len'],args.accum
     batches=[]
@@ -72,17 +89,30 @@ def main():
         return cu
 
     runners={}
-    modes=(('planner_off','planner_on') if args.compare_planner else
+    modes=(('explicit','fused') if args.compare_fusion else
+           ('rmsnorm_silu','layernorm_sigmoid') if args.compare_output else
+           ('planner_off','planner_on') if args.compare_planner else
            (args.single_mode,) if args.single_mode else (('top4','sampled') if args.compare_sampled else ('top1','top4')))
     for mode in modes:
         torch.manual_seed(1741)
-        selected=ModelSpec(spec.architecture,spec.architecture_version,
-                           {**spec.config,'hard_query_topk':args.topk if args.compare_planner else 1 if mode=='top1' else 4,'hard_query_sampled':mode=='sampled'})
+        selected_config={**spec.config,'hard_query_topk':args.topk if (args.compare_planner or args.compare_output or args.compare_fusion) else 1 if mode=='top1' else 4,'hard_query_sampled':mode=='sampled'}
+        if args.compare_output:
+            selected_config['mixer_output']=mode
+            if mode=='rmsnorm_silu':selected_config['mixer_gate_scales']=None
+        selected=ModelSpec(spec.architecture,spec.architecture_version,selected_config)
         model=build_model(selected).cuda().train()
         model.init_weights()
+        if args.compare_fusion:
+            for layer in model.layers:
+                if not hasattr(layer.attn.norm,'fused_output'):
+                    raise RuntimeError('sigmoid mixer fusion is not installed')
+                layer.attn.norm.enable_fused_output=(mode=='fused')
+        elif args.disable_output_fusion:
+            for layer in model.layers:
+                layer.attn.norm.enable_fused_output=False
         model.set_training_step(11444)
         opt=model.setup_pretraining_optimizer(PretrainOptimizerConfig(.0008,.0008,.0008,.0008,.01))
-        graph=PackedTrainingGraph(model,ids_gpu,labels_gpu,stage(batches[0]),microbatches=accum,planner=(mode=='planner_on' or (mode=='top1' and args.top1_planner)),
+        graph=PackedTrainingGraph(model,ids_gpu,labels_gpu,stage(batches[0]),microbatches=accum,planner=(args.output_planner or mode=='planner_on' or (mode=='top1' and args.top1_planner)),
                                   planner_workers=args.planner_workers)
         runners[mode]=(model,opt,graph)
         print(json.dumps(dict(mode=mode,parameters=sum(p.numel() for p in model.parameters()),model_spec=selected.to_dict())),flush=True)
@@ -134,7 +164,10 @@ def main():
         layer_event_fraction[mode]=[group.count('e')/len(group) for group in groups]
     report=dict(model_spec=args.model_spec,effective_config=spec.config,
                 runner_specs={mode:model.model_spec.to_dict() for mode,(model,_,_) in runners.items()},
-                topk=args.topk if args.compare_planner else None,
+                topk=args.topk if (args.compare_planner or args.compare_output or args.compare_fusion) else None,
+                compare_fusion=args.compare_fusion,
+                disable_output_fusion=args.disable_output_fusion,
+                compare_output=args.compare_output,output_planner=args.output_planner,
                 compare_planner=args.compare_planner,planner_workers=args.planner_workers,
                 peak_allocated_mib=torch.cuda.max_memory_allocated()/2**20,
                 routes={k:dict(event=v.count('e'),quadratic=v.count('q')) for k,v in routes.items()},
@@ -148,7 +181,7 @@ def main():
         first,second=runners
         report.update(throughput_gain=statistics.mean(times[first])/statistics.mean(times[second])-1,
                       paired_time_ratios=[b/a for a,b in zip(times[first],times[second])])
-    if not args.compare_planner and not args.compare_sampled and not args.single_mode:
+    if not args.compare_fusion and not args.compare_output and not args.compare_planner and not args.compare_sampled and not args.single_mode:
         report.update(top4_throughput_drop=1-statistics.mean(times['top1'])/statistics.mean(times['top4']),
                       paired_top4_time_ratios=report['paired_time_ratios'])
     args.output.parent.mkdir(parents=True,exist_ok=True)

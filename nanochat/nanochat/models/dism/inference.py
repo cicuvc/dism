@@ -124,6 +124,9 @@ class SamDecodeSession:
                     hard = state['dism'].append(iq, ik, sq, sk, v).to(v.dtype)
             output = hard + output
         with self._scope('decode/gate_norm_output'):
+            if hasattr(attn.norm, 'fused_output'):
+                output = attn.norm.fused_output(output, x, attn.g_proj_down, attn.g_proj_up)
+                return attn.o_proj(output.flatten(2)), v_first
             gate = attn.g_proj_up(attn.g_proj_down(x)).unflatten(-1, (attn.heads, attn.value_dim))
             return attn.o_proj(attn.norm(output, gate).flatten(2)), v_first
 

@@ -423,6 +423,9 @@ class DismAttention(nn.Module):
                                     max_seqlen, v_first=v_first,
                                     linear_q=linear_q, linear_k=linear_k, conv_seq_idx=conv_seq_idx,
                                     gdn_chunk_indices=gdn_chunk_indices)
+        if hasattr(self.norm, 'fused_output'):
+            output = self.norm.fused_output(output, x, self.g_proj_down, self.g_proj_up)
+            return self.o_proj(output.flatten(2))
         gate = self.g_proj_up(self.g_proj_down(x)).unflatten(
             -1, (self.heads, self.value_dim)
         )
