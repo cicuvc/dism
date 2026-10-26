@@ -1,10 +1,16 @@
 # K 状态块与 Q 读取块解耦原型（2026-10-26）
 
+2026-10-27 更新：解耦反向和直接打包已经接入 top-k 训练及 planner CUDA Graph，
+模型支持 K=1/2/4（K1 保留原生路径）。已加入 packed 文档、原始行 hard mask、
+selector 梯度和异步 ready/fallback 协议，见
+[当前训练支持及验证](TOPK_HARD_TRAINING.md)。模型 hard forward/prefill 尚未接入。
+以下保留 2026-10-26 隔离原型的实现与测量记录。
+
 已实现独立 CPU planner、GPU prefill 和解析反向，并用真实 checkpoint 的
 q/k 序列完成性能测试。首版8K top4六层GPU prefill/反向耗时分别降低42%/39%。
 后续直接打包版已消除额外CPU转换开销；即使旧格式也应用相同打包优化，
 8K top4完整串行算子流程仍改善约3.0%/2.2%。这不是整模型训练吞吐测试。
-所有实现均位于tools，未接入生产dispatch、planner graph协议或训练配置。
+该阶段实现均位于tools，当时未接入生产dispatch、planner graph协议或训练配置。
 
 ## 后续：直接计数和写入最终 arena
 

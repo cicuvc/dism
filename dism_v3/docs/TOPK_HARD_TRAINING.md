@@ -1,69 +1,162 @@
-# Opt-in top-four hard training
+# Opt-in top-k hard training
 
 2026-10-25. Implementation follow-up to [the checkpoint readout screen](TOPK_HARD_READOUT.md).
 This is a training baseline, not evidence of trained quality. No long training
 or checkpoint modification was performed during implementation.
 
-## Current support boundary (2026-10-26)
+## Current support boundary (2026-10-27)
 
-There are two different execution levels. The model's top-four path is the
-quadratic training/evaluation implementation below. The separately committed
-[decoupled planner](PLANNER_DECOUPLED_READOUT.md) implements subquadratic
-prefill and analytic backward on prepared symbols, but is not yet a model
-training backend. Committing the prototype did not enable planner dispatch.
+Model configuration accepts `hard_query_topk=1`, `2` or `4`. K1 retains the
+native path. K2/4 use the same committed Q/K argmax history and mix the selected
+local Q reads. The existing K4 selector arithmetic and tie order are preserved.
+K2 now uses two-slot kernels; `tools/eval_top2_from_top4.py` remains a separate
+inference-only ablation of four-slot checkpoints.
 
-| Capability | Native top-one | Model top-four / sampled-CV |
+| Capability | Native top-one | Model top-two / top-four |
 | --- | --- | --- |
-| CUDA BF16 forward/backward, D32/64, R16/32, DV32/64 | Supported | Supported |
-| Native soft path and sequence-row hard/soft scheduling | Supported | Supported; alternative Q reads are local, history stays argmax |
-| Packed 256-aligned documents within equal training rows | Supported | Supported, including changing graph metadata |
-| Eager autograd and nanochat packed CUDA Graph training | Supported | Supported with planner off |
-| Checkpoint parameter/optimizer schema, RNG and annealing state | Supported | Preserved; sampled mode reuses the counter with a separate seed domain |
-| Hard-path Q selector / Q-codebook gradient | No argmax derivative | Supported through selected-logit output weights; sampled mode has a CV surrogate VJP |
-| CPU planner and event backward in model dispatch | Supported | Not connected; model explicitly rejects planner |
-| Planner-ready flag, event/fallback graph arbitration | Supported by the dedicated native training graph | Not connected for top-four |
-| Explicit SAM prefill and incremental/graph decode sessions | Available for native top-one with their documented restrictions | Unsupported; session entry points reject top-four |
-| DISM operator/packed Dynamo compilation | Available through native custom-op integration; GDN still has graph breaks | Explicitly unsupported |
-| Standalone module Torch fallback, CPU or unaligned evaluation | Available on the native module's applicable paths | Explicitly unsupported |
-| Direction false / mixed-direction operator dispatch | Available in native operators | Fixed true only |
+| CUDA BF16 quadratic forward/backward, D32/64, R16/32, DV32/64 | Supported | Supported |
+| Native soft path and original-row hard/soft scheduling | Supported | Preserved |
+| Packed 256-aligned documents within equal training rows | Supported | Supported, including mutable graph metadata |
+| Eager autograd and planner-off CUDA Graph training | Supported | Supported |
+| CPU planner + event backward in training | Supported | Connected to the direct decoupled planner; R32/DV64 |
+| Live planner CUDA Graph, ready/fallback arbitration | Supported | Supported; R32/DV64, D32/64, one rank |
+| Hard-path Q selector / Q-codebook gradient | No argmax derivative | Preserved through candidate output weights on both routes |
+| Hard K selector gradient | No argmax derivative | Unchanged, no estimator added |
+| Checkpoint schema, RNG counters, annealing, consumed data position | Preserved | Preserved |
+| Explicit SAM prefill/incremental decode sessions | Available with their documented restrictions | Not connected; entry points reject top-k |
+| DISM Dynamo compilation / standalone Torch fallback | Available on their native supported paths | Explicitly unsupported |
+| Direction false / mixed directions | Available in native operators | Fixed true only |
 
-The explicit native SAM sessions are separate from generic hybrid `use_cache`;
-this table does not claim general cached hybrid decoding is implemented.
-CUDA Graph support also does not imply Dynamo/Inductor support. There is no
-top-four-specific DDP validation here, so multi-GPU correctness/performance is
-not inferred from single-GPU graph tests.
+These changes connect **training backward**. Model hard forward still uses the
+quadratic implementation and its N²/32 history storage. They do not connect
+subquadratic model prefill or incremental top-k decode. Generic hybrid
+`use_cache` is not implemented by the explicit native SAM APIs either.
 
-Model configuration accepts `hard_query_topk=1` or `4`, not arbitrary K.
-`tools/eval_top2_from_top4.py` is an inference-only quality ablation: it zeros
-slots 2/3, renormalizes slots 0/1, and still uses four-slot kernels. It is not a
-top-two training or performance backend. The standalone planner accepts K1–4,
-with performance measurements at K1/4; that does not broaden model dispatch.
+Eager event planning uses `DISM_HARD_PLANNER=1` and the existing
+`DISM_HARD_BACKWARD=ready|event|quadratic` policies. The model graph entrypoint is
+`PackedTrainingGraph(..., planner=True)`; the training CLI is
+`--cuda-graph --cuda-graph-planner`. Graph policy remains compact/ready and
+single-rank, with the same explicit drain before optimizer/checkpoint boundaries.
+There is no top-k DDP validation or automatic planner enablement.
 
 With `hard_query_topk=4, hard_query_sampled=true`, the
-[sampled-CV backend](SAMPLED_HARD_TRAINING.md) samples one current Q read from
-the four-slot support and adds a zero-history control. Its fixed-cotangent
-expectation checks do not establish an unbiased full LM gradient. Evaluation
-retains sampled semantics with a frozen counter. Both full top-four and
-sampled-CV still use quadratic pair traversal and quadratic/32 history storage.
+[sampled-CV backend](SAMPLED_HARD_TRAINING.md) retains its existing semantics and
+counter/seed domain. It still requires planner off. This integration does not
+change its estimator, sampling distribution or evaluation behavior.
 
-Hard K labels and K-codebook logits remain nondifferentiable, as in native
-top-one. The [single-K replacement diagnostic](SINGLE_K_TOKEN_REPLACEMENT.md)
-does not implement a trainable K estimator. SQ/SK/V/tau remain differentiable.
-Global FP32 gradient atomics, BF16 rounding and long-chain tau cancellation
-limitations are shared concerns, not capabilities lost only by top-four.
+## Training event integration
 
-The event prototype currently assumes independent full rows, all-hard flags
-and head-level tau. It returns candidate outputs and SQ/SK/V/tau gradients;
-candidate probability mixing/router VJP, packed-document splitting and dynamic
-hard-row selection are not integrated with model autograd. Its offline GPU
-execution can be captured, but live planner replay/readiness is a separate gap.
+The production CPU extension is built by
+`python/flash_dism/inference/build.py --component topk-training`; wheel builds
+include `_dism_topk_training`. Checkout builds use the worktree sources and a
+user-cache extension. The port removes runtime source patching: its direct
+count/pack pass builds only hard row/head/document jobs, maps Q reads to virtual
+candidate rows, and keeps K/V rows physical. The threshold and 64×64 decoupled
+block sizes match the validated backward prototype. Short streams reuse compact
+16/32/64 event kernels. Planner metadata is packed directly into one pinned
+arena and uploaded once.
 
-For the next training-throughput iteration, connect those semantics first,
-then port ready/fallback graph arbitration and validate mixed packed batches.
-Keep native soft contributions, RNG state and fallback behavior unchanged.
-Only then can the measured planner savings enter real training. Selection
-fusion into the vocabulary projection, arbitrary K and incremental top-k
-decode remain distinct later work.
+Graph snapshots include argmax Q/K, candidate IDs, original-row hard flags and
+head tau. A replay coordinator waits for that slot's external D2H event, then
+builds and uploads its plan and publishes the epoch with `cuStreamWriteValue32`.
+One GPU sample freezes the route for the entire hard backward. Event kernels
+acquire that choice before reading any descriptor; quadratic kernels exit when
+it selects event. Both branches own zeroed outputs. Late plans, cancellation and
+budget rejection take quadratic; unexpected planner/upload errors surface at
+drain. Payloads, upload work and graph work retire before slot reuse. Mutable
+packed document tables retain the binding's existing capture/replay checks.
+
+Router probabilities stay on device. After readiness is acquired, a small
+kernel scales only Q-event coefficients by `pi`; immutable source coefficients
+allow repeated execution without accumulating the scale. K summaries remain
+shared. SQ and dO are replicated exactly along the candidate axis, avoiding a
+BF16 pre-multiplication of dO by pi. After event backward, candidate dSQ values
+sum to the physical SQ gradient. Since each candidate output is linear in SQ:
+
+```
+u_c = dot(SQ, dSQ_c) = pi_c * dot(dO, O_c)
+dz_c = u_c - pi_c * sum_j u_j
+```
+
+The existing router backward maps `dz` to Q and its codebook. This avoids a
+second candidate forward solely for router gradients. BF16 dot-product rounding
+means this recovered moment need not be bitwise identical to the quadratic
+pairwise moment; validation compares direction, norm and bias. Global FP32
+atomics and the existing long-chain tau limitations remain visible. This is not
+a batch-invariance or deterministic-gradient change.
+
+Validation (2026-10-27):
+
+- 164 regression tests passed under `dism_v3/pytest.ini`, including K2/4 eager
+  event autograd, planner graphs with MXFP8, forced ready/late routes, mutable
+  document boundaries and hard masks, empty ready plans, budget/cancel/error
+  handling, bounded replay, capture failure, no-grad evaluation, checkpoint RNG,
+  optimizer schema and prefetched/consumed dataloader state.
+- K1/2/4 event SQ/SK/V/tau/router gradients passed the independent FP64 recurrence
+  at the existing top-k thresholds (relative L2 < .025, cosine > .999, with exact
+  structural-zero checks). Random and repeated-chain cases also compare against
+  the quadratic kernels. No acceptance thresholds were changed.
+- CPU direct packing: 972 coefficient/derivative cases, including nonzero
+  batch/head/document offsets and all tile sizes, passed ASAN/UBSAN. Maximum
+  coefficient/derivative errors were 2.75e-7 / 1.30e-6. The direct count/pack
+  subcases also compare byte-for-byte with the earlier converter.
+- GPU memcheck, synccheck and racecheck passed for the K1/2/4 R32/DV64 consumer,
+  route gates, quadratic kernels and selector/router kernels in the bounded
+  diagnostic. A full two-DISM-layer K4 model graph also passed memcheck with
+  both forced event and late/fallback routes (zero errors). This is not
+  exhaustive sanitizer coverage of every shape.
+- That full-model check exposed a host-side GIL/driver-lock deadlock under
+  Compute Sanitizer 13.1: `torch.tensor(words, pin_memory=True)` held the GIL in
+  `cudaHostAlloc`, while a concurrent H2D sanitizer callback held the driver lock
+  and tried `PyGILState_Ensure`. Both legacy and top-k descriptor builders now
+  allocate with `torch.empty(..., pin_memory=True)` before copying CPU words.
+  The factory releases the GIL during allocation. The same full-model memcheck
+  then completed in 24 seconds with zero errors; descriptor contents, ownership
+  and publication order are unchanged.
+- The first racecheck run found a K4 normalizer WAW at shared `STS.128`, not an
+  ARRIVES exception. Its separate 2D DLOG load was being broadcast through a
+  redundant shared-layout conversion. Candidate-masked LOG/DLOG loads now use
+  the candidate layout directly, preserving the formula and launch geometry;
+  racecheck then reported zero hazards. This fix is retained as a synchronization
+  correction, not dismissed as a tool warning.
+- SASS audit found zero CALLs in the audited kernels. Spills remain: the K4
+  normalizer reports 48 slots after the layout correction; persistent split
+  stages report 32/10, and reused compact variants up to 50. These are visible
+  optimization targets, not a zero-spill claim.
+- Five pre-existing `strict_gradient` diagnostics remain separately selectable.
+  An all-tests diagnostic reproduced the native event `boundary` pointwise BF16
+  mismatch (1/16384 elements; absolute error .01526 against atol .008), while the
+  old/new event consumers agreed at their existing 1e-4 comparison. The standard
+  suite uses the repository's existing default exclusion; this change neither
+  suppresses that diagnostic nor relaxes its thresholds.
+
+Reproduce the numerical/resource microbenchmark with
+`tools/check_topk_event_training.py`; optional `--input` accepts the saved
+`top4_event_probe` binary symbols. Its result JSON and cubins belong under
+`build/topk_event_training`, never Git. `--check-only` is the sanitizer entrypoint.
+CPU sanitizer compilation of `tools/check_decoupled_readout.cpp` uses
+`-DDISM_PRODUCTION_TOPK` and the production `inference/csrc` include directory.
+GPU kernel timings exclude CPU overlap and are not LM throughput guarantees.
+
+### Bounded microbenchmark
+
+On RTX 5090, saved `n2048_layer0.bin` Q/K symbols (B4/H12/N2048/R32/DV64),
+synthetic BF16 vectors and router weights, captured GPU-only backward medians:
+
+| K | Plain quadratic | Ready event + gated fallback + merge | Late event + quadratic + merge |
+| --- | ---: | ---: | ---: |
+| 2 | 1.097 ms | 0.387 ms | 1.273 ms |
+| 4 | 1.224 ms | 0.489 ms | 1.402 ms |
+
+This includes candidate expansion, probability-weighted metadata, SQ/selector
+moment reduction and route merging; it excludes forward, Q/codebook router
+matrix gradients common to both paths, D2H/H2D and CPU overlap. Four-worker CPU
+plan measurements for this one layer were approximately 10.5/13.0 ms for K2/4;
+these are not six-layer scheduling or end-to-end training throughput numbers.
+The late route still costs about 0.18 ms over plain quadratic. More work remains
+on fallback overhead and persistent register pressure. Candidate expansion and
+collapse already use the frozen route to skip unnecessary copying/reduction
+when the plan is late. Raw records: `build/topk_event_training/final_real2k`.
 
 ## Definition and shared work
 
@@ -111,16 +204,19 @@ are added normally; codebook and input-projection sharing are unchanged.
 - [topk_training.py](../python/flash_dism/topk_training.py): autograd integration
   reusing native soft/interpolation forward and backward. The default native
   dispatch is unchanged.
-- `hard_query_topk=4` in the nanochat model spec opts in. Omitted/1 preserves
-  existing behavior and legacy spec identity. Only 1 and 4 are supported.
+- `hard_query_topk=2|4` in the nanochat model spec opts in. Omitted/1 preserves
+  existing behavior and legacy spec identity. Only 1, 2 and 4 are supported.
   No parameters, state_dict keys, RNG counters, schedules or optimizer groups
   are added. `hard_prob_fixed=0.5` is a separate, explicit experiment choice.
 - Supported: aligned CUDA BF16 training/eval, fixed true direction, D32/64,
   R16/32, DV32/64, validated 256-aligned documents inside equal training rows,
-  eager autograd and the existing `PackedTrainingGraph` with planner disabled.
-- Unsupported paths reject explicitly: planner, Dynamo, Torch/cache fallback,
-  SAM prefill/decode. Set `DISM_HARD_PLANNER=0` and do not pass
-  `--cuda-graph-planner`. This baseline does not provide subquadratic execution.
+  eager autograd and `PackedTrainingGraph`. Planner/event support uses R32/DV64
+  as described above; planner-off quadratic paths retain the wider dimensions.
+- [topk_planner.py](../python/flash_dism/topk_planner.py) and
+  [topk_event.py](../python/flash_dism/kernels/topk_event.py) implement the new
+  invocation-owned CPU plans and fixed-grid event consumers.
+- Unsupported paths reject explicitly: Dynamo, Torch/cache fallback and SAM
+  prefill/decode. Sampled-CV also rejects planner bindings.
 
 History checkpoints occupy `B*H*floor((N-1)/32)*N` int32 elements, where N is
 training-row length. No dense N-by-N weight matrix or N-by-N-by-top-k tensor is
@@ -130,13 +226,14 @@ moments occupy O(B*H*N*4). Router vocabulary backward uses a tiled reduction
 without contended per-token codebook atomics.
 
 The hard vector pass uses query tiles of 32 and key tiles of 64; normalization
-and backward use 32-by-32 tiles. This keeps their register spills at zero on the
-measured shapes. Segment handling relies on the validated 256-alignment:
+and backward use 32-by-32 tiles. The initial quadratic audit had zero spills
+for these passes; the current K4 normalizer's race correction and event consumer
+spill counts are reported above. Segment handling relies on the validated 256-alignment:
 32/64-wide tiles contain no interior document boundary. No shared FP32 atomicAdd
 is introduced. Global FP32 gradient atomics remain, so this is not a new claim
 of bitwise/batch-invariant gradients.
 
-## Validation
+## Initial quadratic validation (2026-10-25)
 
 `check_topk_training.py` compares forward, dSQ/dSK/dV/dtau and selected-logit
 gradients against an independent FP64 sequential oracle, at N256/512/1024,
@@ -173,7 +270,7 @@ subtracting nearby FP32 tau moments can lose relative accuracy when the true
 gradient is tiny. The native BF16/relaxed-gradient limitations are unchanged.
 No convergence/quality claim follows from the finite synthetic training steps.
 
-## Throughput
+## Initial quadratic throughput (2026-10-25)
 
 RTX 5090, 123,473,088 parameters, `gggddddddggg`, 2K context, 8 rows x 8
 microbatches, MXFP8 FFN/optimizer, BF16 CE, graph on. Final measurements use
@@ -182,7 +279,7 @@ and ten measured optimizer steps for each of two resident models. Measurement
 order alternates each round. Timings include metadata/H2D, forward/backward,
 document normalization, clipping, planner draining where enabled, and optimizer;
 exclude data loading, training instrumentation, evaluation and checkpoint I/O.
-Top-four always uses its GPU quadratic path, with planner disabled.
+In these earlier measurements, top-four used its GPU quadratic path with planner disabled.
 
 | Hard probability | Packing | Top-1 planner | Top-1 step | Top-4 step | Top-1 token/s | Top-4 token/s | Throughput drop |
 |---|---|---|---:|---:|---:|---:|---:|
@@ -221,13 +318,12 @@ checkpoint or dataset.
 
 ## Further work
 
-The largest remaining structural opportunities are to fuse top-four selection
-into the existing Q vocabulary projection, and
-extend the event/planner route to local alternative symbols. The latter needs
-weighted candidate denominators and router moments; it cannot reuse top-one
-plans unchanged. It should retain one committed history rather than a beam of
-four growing histories. These are not requirements to use this quadratic
-training baseline, and are not implemented here.
+Remaining opportunities include fusing candidate selection into the existing
+Q vocabulary projection, reducing late-route overhead/register pressure, and
+connecting subquadratic hard forward/prefill. Backward planner integration is
+now implemented above. Incremental top-k decode and sampled-CV event planning
+remain separate work; all alternatives must preserve the single committed
+history rather than creating a growing beam.
 
 ## Fresh LayerNorm/sigmoid run (2026-10-25)
 
@@ -243,8 +339,7 @@ Layout `ggggggdddddd`, all-mixer LayerNorm/calibrated sigmoid gate, postnorm,
 MXFP8 FFN/optimizer, BF16 projections/CE, data/shuffle seeds, LR8e-4, warmup500,
 warmdown.25, weight decay.01, clip1, 8x2048 with 8 accumulation microbatches,
 and 2,999,975,936-token budget retain the original recipe. CUDA Graph is on;
-planner is explicitly off because this top-four implementation does not support
-it. Validation and dual hard/soft loss, 8K NIAH and Q/K histograms remain every
+planner was explicitly off because top-four had no planner support at launch. Validation and dual hard/soft loss, 8K NIAH and Q/K histograms remain every
 500 steps; saves remain every 2000. No source checkpoint is loaded or modified.
 
 The exact old-layout LayerNorm/top-four configuration passed a full-size graph

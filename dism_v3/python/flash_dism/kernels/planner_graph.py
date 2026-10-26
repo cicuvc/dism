@@ -103,14 +103,14 @@ def tau_stage(D, Choice, OUT, ZERO: tl.constexpr, BLOCK: tl.constexpr):
 
 @tr.jit
 def clear_gradients(D, Choice, DQ, DK, DV, DT,
-                    N: tl.constexpr, HEADS: tl.constexpr, BLOCK: tl.constexpr):
+                    N: tl.constexpr, HEADS: tl.constexpr, BLOCK: tl.constexpr, NK: tl.constexpr):
     # Private outputs must be zero even when the frozen choice is quadratic.
     lane = tl.arange(0, BLOCK)
     for start in range(tl.program_id(0)*BLOCK, N*64, tl.num_programs(0)*BLOCK):
         i = start+lane
         tl.store(DQ+i, 0., i < N*32)
-        tl.store(DK+i, 0., i < N*32)
-        tl.store(DV+i, 0., i < N*64)
+        tl.store(DK+i, 0., i < NK*32)
+        tl.store(DV+i, 0., i < NK*64)
     for start in range(tl.program_id(0)*BLOCK, HEADS, tl.num_programs(0)*BLOCK):
         i = start+lane
         tl.store(DT+i, 0., i < HEADS)
@@ -132,20 +132,24 @@ def reduce_all_tau(D, Choice, OUT, BLOCK: tl.constexpr):
 
 class GraphCompactBackward:
     """Explicit P3 API, C64/BF16 R32/DV64 only; no model dispatch changes."""
-    def __init__(self, descriptor, choice, *, ctas=512, prefix_tasks=True):
+    def __init__(self, descriptor, choice, *, ctas=512, prefix_tasks=True, virtual_queries=False):
         if (descriptor.dtype != torch.int64 or descriptor.shape != (64,)
                 or not descriptor.is_cuda or not descriptor.is_contiguous()
                 or choice.device != descriptor.device or choice.dtype != torch.int32
                 or choice.numel() != 1 or not choice.is_contiguous() or ctas < 1):
             raise ValueError('CUDA int64[64] descriptor, int32 choice, positive grid required')
         self.descriptor, self.choice, self.ctas = descriptor, choice, ctas
+        self.virtual_queries = virtual_queries
         self.prefix_tasks = prefix_tasks
         self.last_kernels = []
 
     @torch.no_grad()
     def backward(self, sq, sk, value, dout, *, heads):
-        if (sq.ndim != 2 or sq.shape[1] != 32 or sk.shape != sq.shape
-                or value.shape != (sq.shape[0], 64) or dout.shape != value.shape
+        if (sq.ndim != 2 or sq.shape[1] != 32 or sk.ndim != 2 or sk.shape[1] != 32
+                or sk.shape[0] < 1 or sq.shape[0] < 1
+                or (self.virtual_queries and (sq.shape[0] % sk.shape[0] or sq.shape[0]//sk.shape[0] not in (1,2,4)))
+                or (not self.virtual_queries and sk.shape != sq.shape)
+                or value.shape != (sk.shape[0], 64) or dout.shape != (sq.shape[0],64)
                 or heads < 1 or any(x.device != self.descriptor.device or
                     x.dtype != torch.bfloat16 or not x.is_contiguous()
                     for x in (sq, sk, value, dout))):
@@ -154,7 +158,7 @@ class GraphCompactBackward:
         dt = torch.empty(heads, dtype=torch.float32, device=sq.device)
         args = (self.choice, sq, sk, value, dout, dq, dk, dv, 32, 64)
         self.last_kernels = [clear_gradients[(max(32, min(512, tr.cdiv(sq.shape[0]*64, 1024))),)](
-            self.descriptor, self.choice, dq, dk, dv, dt, sq.shape[0], heads, 1024)]
+            self.descriptor, self.choice, dq, dk, dv, dt, sq.shape[0], heads, 1024, sk.shape[0])]
         for i, width in enumerate((16, 32, 64, 64)):
             desc = self.descriptor[i*16:]
             for stage in ((0,) if i < 3 else (1, 2, 3)):

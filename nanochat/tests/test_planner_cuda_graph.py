@@ -53,32 +53,39 @@ def test_middle_dism_layout_replay(monkeypatch):
         assert sum(graph.route_counts.values())==6
 
 
-def test_model_routes_and_snapshots(monkeypatch):
+@pytest.mark.parametrize('topk',[1,2,4])
+def test_model_routes_and_snapshots(monkeypatch,topk):
     from flash_dism.planner_graph import upload_plan
     from flash_dism.hard_training import take_route_log
     monkeypatch.setenv('DISM_HARD_PLANNER','0')
-    model,reference = model_pair(False,True,layers=4)
+    model,reference = model_pair(False,True,layers=4,hard_query_topk=topk)
     model.set_training_step(5)
     reference.set_training_step(5)
     data = batch()
     with PackedTrainingGraph(model,*data,planner=True,planner_workers=2,warmup=1) as graph:
-        original = graph.runtime.native.prepare
+        native = graph.runtime.native if topk==1 else graph.runtime.topk_native
+        original = native.prepare
         launch = graph.runtime.replay
         gate = threading.Event()
         def delayed(*args,**kwargs):
             if not gate.wait(60):
                 raise TimeoutError('test producer gate')
             return original(*args,**kwargs)
-        graph.runtime.native.prepare = delayed
+        native.prepare = delayed
         owners = []
         def ready_replay(cuda_graph):
             # Second invocation repeats exactly the first invocation's inputs,
             # weights and selector counter, so these are its real plans.
             for slot in graph.runtime.slots:
-                labels,hard,tau = slot.hosts
-                host = original(labels,tau,hard=hard,documents=slot.documents,
-                                chunk_size=64,compact=True)
-                payload = upload_plan(host,device=slot.device,stream=slot.upload,budget_bytes=slot.budget)
+                labels,hard,tau = slot.hosts[:3]
+                if topk==1:
+                    host = original(labels,tau,hard=hard,documents=slot.documents,
+                                    chunk_size=64,compact=True)
+                    payload = upload_plan(host,device=slot.device,stream=slot.upload,budget_bytes=slot.budget)
+                else:
+                    from flash_dism.topk_planner import upload_topk
+                    host = original(labels,tau,slot.hosts[3],hard,slot.documents,slot.budget//2)
+                    payload = upload_topk(host,device=slot.device,stream=slot.upload,budget=slot.budget)
                 owners.append(payload)
                 with torch.cuda.stream(slot.upload):
                     slot.descriptor.copy_(payload.descriptor,non_blocking=True)
@@ -114,19 +121,23 @@ def test_model_routes_and_snapshots(monkeypatch):
 
 
 @pytest.mark.parametrize('failure',['planner','upload','submit'])
-def test_model_errors_retire_before_update(monkeypatch,failure):
+@pytest.mark.parametrize('topk',[1,2,4])
+def test_model_errors_retire_before_update(monkeypatch,failure,topk):
     import flash_dism.planner_graph as pg
     monkeypatch.setenv('DISM_HARD_PLANNER','0')
-    model,_ = model_pair(False,True)
+    model,_ = model_pair(False,True,hard_query_topk=topk)
     data = batch()
     graph = PackedTrainingGraph(model,*data,planner=True,planner_workers=2,warmup=1)
     before = {n:p.detach().clone() for n,p in model.named_parameters()}
     def fail(*a,**kw):
         raise ValueError(f'injected {failure} failure')
     if failure=='planner':
-        monkeypatch.setattr(graph.runtime.native,'prepare',fail)
+        monkeypatch.setattr(graph.runtime.native if topk==1 else graph.runtime.topk_native,'prepare',fail)
     elif failure=='upload':
-        monkeypatch.setattr(pg,'upload_plan',fail)
+        if topk==1:monkeypatch.setattr(pg,'upload_plan',fail)
+        else:
+            import flash_dism.topk_planner as tp
+            monkeypatch.setattr(tp,'upload_topk',fail)
     else:
         monkeypatch.setattr(graph.runtime.pool,'submit',fail)
     try:
@@ -150,11 +161,12 @@ def test_model_errors_retire_before_update(monkeypatch,failure):
     assert graph.runtime.closed
 
 
-def test_capture_failure_restores_state(monkeypatch):
+@pytest.mark.parametrize('topk',[1,2,4])
+def test_capture_failure_restores_state(monkeypatch,topk):
     from flash_dism.graph_binding import GraphPlannerBinding
     from flash_dism.planner_graph import GraphPlannerRuntime
     monkeypatch.setenv('DISM_HARD_PLANNER','0')
-    model,_ = model_pair(False,True)
+    model,_ = model_pair(False,True,hard_query_topk=topk)
     data = batch()
     model.set_training_step(4)
     model(*data[:2],cu_seqlens=data[2]).backward()
@@ -163,7 +175,9 @@ def test_capture_failure_restores_state(monkeypatch):
     rng,cuda_rng = torch.get_rng_state(),torch.cuda.get_rng_state()
     runtimes=[]
     original_init=GraphPlannerRuntime.__init__
-    original_call=GraphPlannerBinding.vocabulary
+    import flash_dism.topk_training as topk_training
+    target=GraphPlannerBinding if topk==1 else topk_training
+    original_call=target.vocabulary
     def remember(self,**kw):
         original_init(self,**kw)
         runtimes.append(self)
@@ -173,7 +187,7 @@ def test_capture_failure_restores_state(monkeypatch):
             raise ValueError('injected capture failure after D2H')
         return out
     monkeypatch.setattr(GraphPlannerRuntime,'__init__',remember)
-    monkeypatch.setattr(GraphPlannerBinding,'vocabulary',fail)
+    monkeypatch.setattr(target,'vocabulary',fail)
     with pytest.raises(ValueError,match='injected capture'):
         PackedTrainingGraph(model,*data,planner=True,planner_workers=2,warmup=1)
     assert runtimes[0].closed
@@ -185,14 +199,15 @@ def test_capture_failure_restores_state(monkeypatch):
 
 
 @pytest.mark.parametrize('reason',['budget','cancel'])
-def test_model_resource_fallback(monkeypatch,reason):
+@pytest.mark.parametrize('topk',[1,2,4])
+def test_model_resource_fallback(monkeypatch,reason,topk):
     monkeypatch.setenv('DISM_HARD_PLANNER','0')
-    model,reference=model_pair(False,True)
+    model,reference=model_pair(False,True,hard_query_topk=topk)
     model.set_training_step(9)
     reference.set_training_step(9)
     data=batch()
     with PackedTrainingGraph(model,*data,planner=True,planner_workers=2,warmup=1,
-                             planner_max_bytes=20_000 if reason=='budget' else 2**30) as graph:
+                             planner_max_bytes=(20_000+(2*4*256*topk*4+256 if topk>1 else 0)) if reason=='budget' else 2**30) as graph:
         if reason=='cancel':
             launch=graph.runtime.replay
             def cancel_before_launch(cuda_graph):
@@ -214,9 +229,10 @@ def test_model_resource_fallback(monkeypatch,reason):
             torch.testing.assert_close(p.grad,q.grad,atol=.001,rtol=.03)
 
 
-def test_bounded_model_replay(monkeypatch):
+@pytest.mark.parametrize('topk',[1,2,4])
+def test_bounded_model_replay(monkeypatch,topk):
     monkeypatch.setenv('DISM_HARD_PLANNER','0')
-    model,_ = model_pair(False,True)
+    model,_ = model_pair(False,True,hard_query_topk=topk)
     data = batch(rows=2,n=512)
     table_storage = torch.empty(6,device='cuda',dtype=torch.int32)
     gc.collect()
@@ -280,7 +296,8 @@ def test_rebound_storage_rejected(monkeypatch,case):
             graph.forward_backward(*data)
 
 
-def test_serialized_resume_with_prefetched_batch(monkeypatch):
+@pytest.mark.parametrize('topk',[1,2,4])
+def test_serialized_resume_with_prefetched_batch(monkeypatch,topk):
     from contextlib import ExitStack
     from nanochat.data_prefetch import StatefulPrefetchLoader
     # Both graphs explicitly opt in, including when eager planner mode is set.
@@ -313,7 +330,7 @@ def test_serialized_resume_with_prefetched_batch(monkeypatch):
         return result
 
     config=PretrainOptimizerConfig(.001,.001,.001,.001,.01)
-    model,restored=model_pair(True,True)
+    model,restored=model_pair(True,True,hard_query_topk=topk)
     with ExitStack() as stack:
         original_loader=loader()
         stack.callback(original_loader.close)

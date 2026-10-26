@@ -48,10 +48,10 @@ class DismConfig:
     def __post_init__(self):
         if type(self.hard_query_sampled) is not bool or (self.hard_query_sampled and self.hard_query_topk != 4):
             raise ValueError('hard_query_sampled requires bool and hard_query_topk=4')
-        if type(self.hard_query_topk) is not int or self.hard_query_topk not in (1,4):
-            raise ValueError('hard_query_topk must be 1 or 4')
-        if self.hard_query_topk == 4 and self.qk_vocab_size < 4:
-            raise ValueError('top-four requires at least four vocabulary symbols')
+        if type(self.hard_query_topk) is not int or self.hard_query_topk not in (1,2,4):
+            raise ValueError('hard_query_topk must be 1, 2 or 4')
+        if self.hard_query_topk != 1 and self.qk_vocab_size < self.hard_query_topk:
+            raise ValueError('hard_query_topk cannot exceed the vocabulary size')
         if self.hard_prob_fixed is not None:
             self.hard_prob_fixed = float(self.hard_prob_fixed)
             if not math.isfinite(self.hard_prob_fixed) or not 0 <= self.hard_prob_fixed <= 1:

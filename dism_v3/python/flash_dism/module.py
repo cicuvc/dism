@@ -209,7 +209,7 @@ class DismAttention(nn.Module):
             mask = None
         if torch_path:
             if getattr(self, 'hard_query_topk', 1) != 1:
-                raise NotImplementedError('top-four currently supports aligned CUDA training/eval only')
+                raise NotImplementedError('top-k currently supports aligned CUDA training/eval only')
             if v_first is not None:
                 raise NotImplementedError("value residual is only implemented for packed CUDA training/eval")
             if cu_seqlens is not None or (mask is not None and not bool(mask.all())):
@@ -383,20 +383,21 @@ class DismAttention(nn.Module):
         dism_v = v
         beta = self.vocab_temperature if vocab_temperature is None else vocab_temperature
         sam_prefill = getattr(self, '_sam_prefill_engine', None)
-        if getattr(self, 'hard_query_topk', 1) == 4:
+        if getattr(self, 'hard_query_topk', 1) != 1:
             if compiling:
-                raise NotImplementedError('top-four supports eager/CUDA Graph; Dynamo is not yet supported')
-            if graph_binding is not None or sam_prefill is not None:
-                raise ValueError('top-four currently requires GPU quadratic execution, without planner binding/cache')
+                raise NotImplementedError('top-k supports eager/CUDA Graph; Dynamo is not yet supported')
+            if sam_prefill is not None:
+                raise ValueError('top-k does not support a SAM inference cache')
             if not direction_true or conv_seq_idx is None:
-                raise ValueError('top-four requires fixed true direction and document segment IDs')
+                raise ValueError('top-k requires fixed true direction and document segment IDs')
             from .topk_training import vocabulary
             if layout is not None:
                 compiled_layout = layout.table.flatten()
             output = vocabulary(q,k,sq,sk,dism_v,eq,ek,tau,direction=direction,hard=hard,
-                                segments=conv_seq_idx,boundaries=cu_seqlens,layout=compiled_layout,beta=beta,
+                                segments=conv_seq_idx,boundaries=None if compiled_layout is not None else cu_seqlens,layout=compiled_layout,beta=beta,
                                 sampled=getattr(self,'hard_query_sampled',False),
-                                counter=sampling_counter,seed=0 if sampling_seed is None else sampling_seed)
+                                counter=sampling_counter,seed=0 if sampling_seed is None else sampling_seed,
+                                topk=self.hard_query_topk,graph_binding=graph_binding)
         elif sam_prefill is not None:
             if graph_binding is not None:
                 raise ValueError('SAM prefill cannot use a training graph binding')

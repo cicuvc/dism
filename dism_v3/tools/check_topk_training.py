@@ -20,7 +20,7 @@ def oracle(sq,sk,v,iq,ik,ids,z,tau,segments):
         a=a*valid
         similarity=(s[:,:,i,None,:]*k).sum(-1)
         o=torch.zeros_like(value[:,:,0])
-        for slot in range(4):
+        for slot in range(ids.shape[-1]):
             w=a*(ik==ids[:,:,i,slot,None])
             o=o+pi[:,:,i,slot,None]*((w*similarity)[...,None]*value).sum(-2)/(1+w.sum(-1,keepdim=True))
         rows.append(o)

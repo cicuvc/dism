@@ -251,6 +251,8 @@ class GraphPlannerBinding:
 
     def vocabulary(self, q, k, sq, sk, value, eq, ek, tau, *, direction, hard, beta=1.0):
         """Vocabulary interpolation + full DISM, host beta and fixed true direction."""
+        if hasattr(_state(self.handle,'vocabulary').slot,'topk'):
+            raise ValueError('topk slots require the topk vocabulary entrypoint')
         raw = (q,k,sq,sk,value,eq,ek,tau)
         self._training(raw)
         if isinstance(beta, torch.Tensor) or not math.isfinite(beta) or beta <= 0:

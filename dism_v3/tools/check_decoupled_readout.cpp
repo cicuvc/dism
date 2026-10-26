@@ -1,5 +1,9 @@
 #include "decoupled_readout_plan.hpp"
+#ifdef DISM_PRODUCTION_TOPK
+#include "../python/flash_dism/inference/csrc/decoupled_readout_direct.hpp"
+#else
 #include "decoupled_readout_direct.hpp"
+#endif
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -10,18 +14,19 @@ template<class T>void identical(const std::vector<T>&a,const T*b) {
 }
 void direct_check(const topk_prefill::Program&p,int bk,int bq,int width,int threshold,bool compact) {
     auto chunks=topk_prefill::chunk_program(p,width);
-    topk_prefill::TrainingJob job{1,2,0,p.n,0.}; // nonzero B/H offsets
+    topk_prefill::TrainingJob job{1,2,256,256+p.n,0.}; // nonzero B/H/document offsets
+    int physical_n=p.n+512;
     decoupled::Plan ref(width,bk,bq,p.topk);
     for(size_t s=1;s<p.offsets.size();++s) {
-        if(threshold>=0&&chunks.offsets[s]-chunks.offsets[s-1]>threshold)ref.route(p,job,p.n,3,1,p.offsets[s-1],p.offsets[s]);
-        else ref.legacy(p,job,p.n,3,1,p.offsets[s-1],p.offsets[s],compact);
+        if(threshold>=0&&chunks.offsets[s]-chunks.offsets[s-1]>threshold)ref.route(p,job,physical_n,3,1,p.offsets[s-1],p.offsets[s]);
+        else ref.legacy(p,job,physical_n,3,1,p.offsets[s-1],p.offsets[s],compact);
     }
     auto size=decoupled::direct_count(p,width,bk,bq,threshold,compact);decoupled::DirectLayout layout;
     layout.layout(size,width,bk,bq);auto allocation=std::make_unique<unsigned char[]>(layout.bytes);
     std::memset(allocation.get(),0xa5,layout.bytes); // catch missing initialization, including padding slots
     layout.data=allocation.get();layout.bytes=0;auto view=layout.layout(size,width,bk,bq);
     view.offsets[0]=view.qoffsets[0]=0;for(auto&a:view.old)a.offsets[0]=0;
-    decoupled::direct_pack(p,job,p.n,3,width,bk,bq,threshold,compact,{},view);
+    decoupled::direct_pack(p,job,physical_n,3,width,bk,bq,threshold,compact,{},view);
     assert(size.blocks==int64_t(ref.kl.size())&&size.tiles==int64_t(ref.ql.size())&&size.streams+1==int64_t(ref.offsets.size()));
 #define SAME(name) identical(ref.name,view.name)
     SAME(kr);SAME(kp);SAME(kw);SAME(kd);SAME(kl);SAME(kreset);SAME(ktau);

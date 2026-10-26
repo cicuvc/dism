@@ -38,6 +38,11 @@ def load_prefill():
 
 
 @lru_cache(None)
+def load_topk_training():
+    return _load("_dism_topk_training", ["topk_training_bind.cpp"])
+
+
+@lru_cache(None)
 def load_cuda():
     fp64 = os.environ.get('DISM_DECODE_FP64_PREFIX', '0') == '1'
     timing = os.environ.get('DISM_DECODE_TIMING', '0') == '1'
@@ -85,11 +90,12 @@ if __name__ == '__main__':
     import argparse
     import shutil
     parser = argparse.ArgumentParser()
-    parser.add_argument('--component', choices=('prefill', 'decode', 'summary-probe', 'summary-runtime'), required=True)
+    parser.add_argument('--component', choices=('prefill', 'topk-training', 'decode', 'summary-probe', 'summary-runtime'), required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     module = (_load('_dism_prefill', ['prefill_bind.cpp'], force=True)
               if args.component == 'prefill' else
+              _load('_dism_topk_training', ['topk_training_bind.cpp'], force=True) if args.component == 'topk-training' else
               load_summary_probe() if args.component == 'summary-probe' else
               build_summary_runtime(force=True) if args.component == 'summary-runtime' else build_decoder(force=True))
     args.output.parent.mkdir(parents=True, exist_ok=True)

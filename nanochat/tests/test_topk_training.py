@@ -18,7 +18,7 @@ def test_top4_identity_preserves_parameter_schema():
     assert [(n,p.shape,p.dtype,getattr(p,'_no_weight_decay',False)) for n,p in a.named_parameters()]==[
         (n,p.shape,p.dtype,getattr(p,'_no_weight_decay',False)) for n,p in b.named_parameters()]
     assert b.layers[1].attn.q_conv.weight is b.layers[1].attn.gdn_q_conv.weight
-    for value in (0,2,True,4.0):
+    for value in (0,3,True,4.0):
         with pytest.raises(ValueError,match='hard_query_topk'):DismConfig(**config,hard_query_topk=value)
 
 
@@ -83,3 +83,54 @@ def test_sampled_rng_replay_and_distribution():
     expected=sample(p,counter,1729)
     graph.replay();torch.testing.assert_close(out,expected,rtol=0,atol=0)
     assert counter.item()==39 and not torch.equal(out,a)
+
+
+@pytest.mark.parametrize('topk',[2,4])
+@pytest.mark.parametrize('mxfp8',[False,True])
+@pytest.mark.skipif(not torch.cuda.is_available(),reason='CUDA')
+def test_topk_planner_packed_graph(monkeypatch,topk,mxfp8):
+    from test_cuda_graph import test_packed_replay_matches_training
+    test_packed_replay_matches_training(monkeypatch,mxfp8,False,True,hard_query_topk=topk)
+
+
+@pytest.mark.parametrize('topk',[2,4])
+@pytest.mark.skipif(not torch.cuda.is_available(),reason='CUDA')
+def test_topk_eager_event_autograd(monkeypatch,topk):
+    from test_cuda_graph import model_pair
+    from flash_dism.topk_planner import shutdown_topk_planners
+    from flash_dism.hard_training import take_route_log
+    shutdown_topk_planners()
+    monkeypatch.setenv('DISM_HARD_PLANNER','1')
+    monkeypatch.setenv('DISM_HARD_BACKWARD','event')
+    monkeypatch.setenv('DISM_PLANNER_WORKERS','2')
+    model,reference=model_pair(False,True,hard_query_topk=topk)
+    model.set_training_step(9);reference.set_training_step(9)
+    ids=torch.randint(128,(2,512),device='cuda');targets=torch.randint(128,ids.shape,device='cuda')
+    bounds=torch.tensor([0,256,512,1024],dtype=torch.int32,device='cuda')
+    try:
+        take_route_log()
+        loss=model(ids,targets,cu_seqlens=bounds);loss.backward()
+        assert take_route_log()==['e']
+        monkeypatch.setenv('DISM_HARD_PLANNER','0')
+        want=reference(ids,targets,cu_seqlens=bounds);want.backward()
+        torch.testing.assert_close(loss,want,atol=0,rtol=0)
+        for (name,p),(_,q) in zip(model.named_parameters(),reference.named_parameters()):
+            torch.testing.assert_close(p.grad,q.grad,atol=.001,rtol=.03,msg=name)
+        assert model.rng_counter.item()==reference.rng_counter.item()==1
+    finally:shutdown_topk_planners()
+
+
+@pytest.mark.parametrize('topk',[2,4])
+@pytest.mark.skipif(not torch.cuda.is_available(),reason='CUDA')
+def test_topk_no_grad_does_not_submit_training_plan(monkeypatch,topk):
+    from test_cuda_graph import model_pair
+    import flash_dism.topk_planner as planner
+    monkeypatch.setenv('DISM_HARD_PLANNER','1')
+    def unexpected(*args,**kwargs):raise AssertionError('no-grad evaluation submitted a backward plan')
+    monkeypatch.setattr(planner,'default_topk_planner',unexpected)
+    model,_=model_pair(False,True,hard_query_topk=topk)
+    model.eval()
+    ids=torch.randint(128,(1,256),device='cuda')
+    bounds=torch.tensor([0,256],device='cuda',dtype=torch.int32)
+    with torch.no_grad():loss=model(ids,ids,cu_seqlens=bounds)
+    assert torch.isfinite(loss) and not loss.requires_grad

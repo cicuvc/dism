@@ -58,8 +58,8 @@ class PackedTrainingGraph:
         if input_ids.ndim != 2 or input_ids.shape != targets.shape:
             raise ValueError('expected matching [training rows, row length] inputs/targets')
         if planner:
-            if getattr(model.config, 'hard_query_topk', 1) != 1:
-                raise ValueError('top-four CUDA Graph currently requires planner=False')
+            if getattr(model.config, 'hard_query_sampled', False):
+                raise ValueError('sampled-CV CUDA Graph requires planner=False')
             if torch.distributed.is_initialized() and torch.distributed.get_world_size() != 1:
                 raise ValueError('planner CUDA Graph currently supports one training rank')
             if (os.environ.get('DISM_HARD_BACKWARD', 'ready') != 'ready' or
@@ -119,7 +119,7 @@ class PackedTrainingGraph:
                     self.runtime = GraphPlannerRuntime(device=self.device, workers=workers,
                         max_slots=self.hard_layers, max_bytes=planner_max_bytes)
                     self.bindings = tuple(None if getattr(layer.attn, 'is_pure_mixer', False) else
-                        self.runtime.slot(rows=self.shape[0], heads=layer.attn.heads, row_tokens=self.shape[1])
+                        self.runtime.slot(rows=self.shape[0], heads=layer.attn.heads, row_tokens=self.shape[1], topk=getattr(model.config, "hard_query_topk", 1))
                             .bind('vocabulary', layout=self.layout) for layer in model.layers)
                 for _ in range(warmup):
                     model.zero_grad(set_to_none=True)

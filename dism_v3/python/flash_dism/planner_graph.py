@@ -103,7 +103,12 @@ def _upload_plan(host, *, device, stream, budget_bytes, owners):
                            empty((chunks, 32, 64)).data_ptr(), empty((chunks, 32, 64)).data_ptr(), empty(chunks).data_ptr()]
             record.append(empty(record[1]).data_ptr())
             words.extend(record)
-        desc = torch.tensor(words, dtype=torch.int64, pin_memory=True)
+        # torch.tensor(Python-list, pin_memory=True) holds the GIL during
+        # cudaHostAlloc. A concurrent CUDA callback acquiring the GIL can then
+        # deadlock against the driver lock (observed under Compute Sanitizer).
+        # The empty factory releases the GIL; copy only CPU data afterwards.
+        desc = torch.empty(len(words), dtype=torch.int64, pin_memory=True)
+        desc.copy_(torch.from_numpy(np.asarray(words, dtype=np.int64)))
     return GraphPlanPayload(host, gpu, owners, desc, size)
 
 
@@ -121,16 +126,21 @@ class GraphPlannerRuntime:
             raise ValueError('CUDA runtime required')
         if self.device.index is None:
             self.device = torch.device('cuda', torch.cuda.current_device())
+        self.workers = workers
         self.native = NativeTrainingPlanner(workers)
         self.writer = StreamWriter()
         self.pool = ThreadPoolExecutor(max_workers=max_slots, thread_name_prefix='dism-graph-plan')
         self.max_slots, self.slot_budget = max_slots, max_bytes//max_slots
         self.slots, self.closed = [], False
 
-    def slot(self, *, rows, heads, row_tokens):
+    def slot(self, *, rows, heads, row_tokens, topk=1):
         if self.closed or len(self.slots) >= self.max_slots:
             raise RuntimeError('graph planner closed or slot limit reached')
-        result = GraphPlannerSlot(self, rows, heads, row_tokens)
+        if type(topk) is not int or topk not in (1,2,4):raise ValueError('topk must be 1, 2 or 4')
+        if topk==1:result = GraphPlannerSlot(self, rows, heads, row_tokens)
+        else:
+            from .topk_planner import TopkGraphPlannerSlot
+            result = TopkGraphPlannerSlot(self, rows, heads, row_tokens, topk)
         self.slots.append(result)
         return result
 
