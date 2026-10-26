@@ -1,5 +1,122 @@
 # CPU planner 与线程池优化（2026-10-23）
 
+## 2026-10-26：真实符号上的读取复用与系数缓存
+
+本轮从 top4 最终 step22888 checkpoint 捕获 PG19 前四篇文档的真实符号，
+B4/H12，N2048/8192，六个 DISM 层。模型前向保持 top4；top1 planner 对照
+只取捕获候选的第一项，并非另一个独立训练的 top1 checkpoint。
+
+### 事件探测与解耦方案的验证状态
+
+8K 输入六层合计的事件数如下；K 是矩阵状态更新，Q 是读取事件，不是 token 数。
+
+| 候选数 | K 更新 | Q 读取 | 合计 |
+| --- | ---: | ---: | ---: |
+| top1 | 2,868,193 | 3,056,555 | 5,924,748 |
+| top2 | 3,050,619 | 4,929,430 | 7,980,049 |
+| top4 | 3,210,369 | 7,399,672 | 10,610,041 |
+
+top4 的 K 更新仅比 top1 增加11.9%。每条 stream 的 K 末位符号与所有 Q 候选
+末位符号一致，同一 token 在同一 stream 至多出现一次；全部72个探测 case
+均检查了这两个不变量。因此同 token 的四个候选不能直接共用非零 K 聚合状态，
+剩余复用主要跨 token，或来自不同分解 stream 中相同的 K 前缀。
+
+| 8K 指标 | top1 | top4 |
+| --- | ---: | ---: |
+| 单 K stream 承担的 Q 读取 | 9.7% | 12.0% |
+| 至多4个 K 的 stream 承担的 Q 读取 | 20.7% | 24.6% |
+| 反向多 chunk 路径中的纯 Q chunk | 5.2% | 10.7% |
+| prefill 长 stream 路径中的纯 Q chunk | 4.9% | 21.1% |
+| 严格重复的反向 K 前缀更新 | 21.0% | 22.1% |
+
+重复前缀按相同物理 K 行、更新系数、前驱状态及反向 dlogweight 逐位判定，
+不跨文档/head 合并。prefill 长路径指超过64个 C16 chunk 的 stream。
+一个真实 top4 stream 只有一次 K 更新、随后7165次 Q 读取，却形成112个
+C64反向块或448个 C16 prefill 块。也不能用这个极端例子代替整体分布：
+top4 连续 Q 段长度的中位数为2、P99为28。
+
+若改为按 K 更新数量划分状态块，保留独立 Q 读取块，结构计数给出：
+
+| 8K 路径 | 原混合事件块 | 假设的 K 状态块 | 数量降低 |
+| --- | ---: | ---: | ---: |
+| top1 反向多块，64 K/块 | 68,255 | 35,452 | 48.1% |
+| top4 反向多块，64 K/块 | 128,130 | 46,451 | 63.7% |
+| top1 prefill 长路径，16 K/块 | 87,337 | 43,369 | 50.3% |
+| top4 prefill 长路径，16 K/块 | 186,131 | 53,392 | 71.3% |
+
+**这些只是反事实计数，没有实现这一解耦格式的 GPU 前向/反向原型，也没有
+确认其实际收益。** Q 读出仍需计算，并且要处理块内因果读取、状态引用、
+反向 adjoint 归并及额外调度。不能将表中的降幅解释为耗时降低。
+此前 key-only 虚树/时间 CDQ 原型仅实现了另一种 CPU 计划格式，CPU 总耗时
+更慢，未实现 GPU 执行；它也不是这里的 K 状态块/Q tile 解耦验证。
+
+### 本轮实现、结果和保留范围
+
+先验证了两种更改事件拓扑的方案：对仅含 1 或至多 4 个 K 更新的长 stream，
+每个独立 Q tile 重放少量 K 前缀，使用原有 compact 读出；另加单 K、多 Q 的
+直接反向实验。FP64 输出、向量梯度、tau、归一化均验证通过，但两个 8K 层的
+GPU 微测只有约 0～3% 的反向收益，prefill 基本不变，CPU 重组/复制又增加
+开销，因此没有接入生产默认路径。它们不是完整的 K 状态块/Q tile 解耦实现。
+
+实际保留的生产改动位于 `inference/csrc/prefill.hpp`：
+
+- prefill 对每个实际请求的匹配长度缓存原 `logweight(length)` 值，避免大量
+  Q 事件重复调用 log/expm1。tau 改变时失效；同 tau 的长度增长保留已有项。
+- 反向的权重/导数递推仅延长到实际请求的长度，取消每个 job 无条件填满 N
+  项。每个前缀仍按原顺序、原公式计算，tau 改变和模式切换保持独立缓存。
+
+没有更改事件顺序、归一化、打包字节、worker 数、CUDA kernel 或 graph 协议。
+top1 生产 planner 已使用这两项；top4 的同类改动只在原隔离 CPU 原型中验证，
+没有因此接通 top4 GPU event 后端。
+
+以下为 8 workers、两次 warmup、11 轮随机 A/B 顺序，逐层中位数再对六层求和。
+包含 native plan、普通 CPU 内存分配、pack 和释放，不含 Python、pinned 分配、
+PCIe、GPU 或与训练的重叠；不能当作训练步耗时。基线为本轮修改前 a7ee16f
+的 planner，候选采用相同的系数缓存策略。48 个输入/阶段/候选数 case 的
+Program 数组逐项完全一致，classic/compact packing 通过独立 oracle 检查。
+
+| N | 候选数 | 阶段 | 原 CPU ms | 优化 CPU ms | 降低 |
+| --- | --- | --- | ---: | ---: | ---: |
+| 2048 | 1 | 反向 | 30.11 | 27.17 | 9.8% |
+| 2048 | 1 | prefill | 28.09 | 24.58 | 12.5% |
+| 2048 | 4 | 反向 | 49.47 | 46.77 | 5.5% |
+| 2048 | 4 | prefill | 49.28 | 42.13 | 14.5% |
+| 8192 | 1 | 反向 | 129.34 | 116.69 | 9.8% |
+| 8192 | 1 | prefill | 123.02 | 107.03 | 13.0% |
+| 8192 | 4 | 反向 | 199.98 | 194.20 | 2.9% |
+| 8192 | 4 | prefill | 204.09 | 170.13 | 16.6% |
+
+另一次 top1 Python/pinned 完整 prepare 测量，8K 六层合计反向为
+120.28→109.08 ms，prefill 为119.41→104.56 ms。随机 BF16 payload 的 GPU
+图重放合计时间分别为8.008→7.982 ms、5.398→5.396 ms，属于基本不变；
+这种变化不能归因为 CPU 缓存提高了 GPU 性能。GPU 微测在上传完成后移除了
+eager consumer 的上传事件依赖，完整生产 graph 生命周期由回归测试单独验证。
+
+验证结果：
+
+- 生产回归：284 passed，5 个原有 `strict_gradient` 标记项按仓库默认配置
+  deselected；未修改容差或额外排除测试。
+- 缓存专项：588 组 tau、长度增长/缩短、forward/backward 切换和 reset 组合，
+  与旧 Builder 的完整 Program 逐项一致，ASAN/UBSAN 通过。
+- 隔离事件重组：972 组 C++ 标量前向/反向/tau 检查（ASAN/UBSAN），216 组
+  Python FP64 检查；GPU 共16组 BF16/TF32x3 dense-oracle 对照及 memcheck 通过。
+- 未启用的单 K GPU 实验检查了 PTX/SASS：无 CALL，已测 BF16 配置无 spill；
+  TF32x3 fallback 的部分配置仍有 register spill，最大716，未将其掩盖或推广。
+
+源码入口为 `tools/build_sparse_planner_experiment.py`、
+`tools/bench_sparse_planner.py` 和 `tools/planner_sparse_reads.hpp`。
+构建实验需要 `--source-dir` 指向修改前的 inference 快照，避免把新生产源码
+再次打补丁；本轮快照位于
+`build/sparse_readout_planner_lazy/baseline/inference`。原始结果、实验源码副本、
+输入哈希、sanitizer 日志和 cubin 在 `build/sparse_readout_planner{,_lut,_lazy}`
+及 `build/top4_event_probe`，均为忽略的隔离产物。根分区空间不足造成的一次
+原生测试编译失败和不完整 CPU 结果已保留；转移本轮产物到数据盘后重跑完成。
+
+后续 K 状态块/Q tile 解耦仍需新的执行端和完整的 CPU/GPU 联合基准。
+不把状态块数量的下降当作已经实现的加速。
+
+## 原线程池优化
+
 实现最初在 `opt/planner-cpu-20261023` / `dism-core-planner-opt` 隔离验证，
 随后合入主开发分支 `core/mxfp8-training`，基线为 `54e67e3`。
 没有修改运行中的评估、训练或 checkpoint。

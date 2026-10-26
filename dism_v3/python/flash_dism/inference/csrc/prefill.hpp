@@ -137,6 +137,30 @@ class Builder {
             + std::log(-std::expm1(-length*t)) - std::log(-std::expm1(-t));
     }
 
+    std::vector<double> forward_weights;
+    double forward_tau=std::numeric_limits<double>::quiet_NaN();
+
+    // Many read events reuse the same match length. Forward needs only that
+    // scalar; backward needs its derivative prefix, but rarely all n entries.
+    // Keep the original formulas and recurrence order exactly unchanged.
+    double cached_logweight(int length) {
+        if (!gradients) {
+            auto &value=forward_weights[length];
+            if (std::isnan(value)) value=logweight(length);
+            return value;
+        }
+        if (length>cached_length) {
+            logweights.resize(length+1); derivatives.resize(length+1);
+            for (int l=cached_length+1;l<=length;++l) {
+                logweights[l]=logweight(l);
+                derivatives[l]=std::exp(logweights[l-1]-logweights[l])*derivatives[l-1]
+                    + std::exp(l*tau-logweights[l])*l;
+            }
+            cached_length=length;
+        }
+        return logweights[length];
+    }
+
     int lca(int a, int b) const {
         if (depth[a] < depth[b]) std::swap(a,b);
         int gap = depth[a]-depth[b];
@@ -210,7 +234,7 @@ class Builder {
             int i=qs[t];
             int length = mode==3 ? matched[i] : std::min(matched[i],sam.nodes[c].length);
             if (mode==1) length=std::min(matched[i],lca_len(qnode[i],c));
-            double a = mode==2 ? 0. : (gradients ? logweights[length] : logweight(length));
+            double a = mode==2 ? 0. : cached_logweight(length);
             if (a!=neg_inf) {
                 stream_q.push_back(i); stream_a.push_back(a);
                 if (gradients) stream_da.push_back(mode==2 ? 0. : derivatives[length]);
@@ -222,7 +246,7 @@ class Builder {
             int j=ks[t];
             if (j>stream_q.back()) break;
             int length = mode==2 ? lca_len(endpoint[j],c) : 0;
-            double b = mode==2 ? (gradients ? logweights[length] : logweight(length)) : 0.;
+            double b = mode==2 ? cached_logweight(length) : 0.;
             if (b!=neg_inf) {
                 stream_k.push_back(j); stream_b.push_back(b);
                 if (gradients) stream_db.push_back(mode==2 ? derivatives[length] : 0.);
@@ -421,14 +445,14 @@ class Builder {
                 cached_tau=std::numeric_limits<double>::quiet_NaN(); cached_length=0;
                 logweights.assign(1,neg_inf); derivatives.assign(1,0.);
             }
-            int first=cached_length+1;
-            if (first<=n) { logweights.resize(n+1); derivatives.resize(n+1); }
-            for (int l=first;l<=n;++l) {
-                logweights[l]=logweight(l);
-                derivatives[l]=std::exp(logweights[l-1]-logweights[l])*derivatives[l-1]
-                    + std::exp(l*tau-logweights[l])*l;
+            cached_tau=tau;
+        } else {
+            if (forward_tau!=tau) {
+                forward_weights.assign(n+1,std::numeric_limits<double>::quiet_NaN());
+                forward_tau=tau;
+            } else if (forward_weights.size()<size_t(n+1)) {
+                forward_weights.resize(n+1,std::numeric_limits<double>::quiet_NaN());
             }
-            cached_tau=tau; cached_length=std::max(cached_length,n);
         }
         // Build the offline SAM with the same node/link order as online decode.
         int last=0;
