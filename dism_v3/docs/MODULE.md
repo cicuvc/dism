@@ -60,7 +60,7 @@ same BNHD q/k and codebook buffers as the core.
 ## Removed module interfaces
 
 No SWA, SDN, PaTH, GQA, TransVQ, PQ, quantile-balance, selector-normalization,
-cross-head/layer vocabulary sharing, categorical REINFORCE, or alternate
+cross-head/layer vocabulary sharing, generic categorical REINFORCE, or alternate
 readout interfaces remain in this branch.
 
 ## MXFP8 boundary
@@ -77,3 +77,10 @@ query alternatives on the hard path, while retaining native v3 soft and a single
 committed argmax history. The default remains 1. This baseline supports aligned
 CUDA eager/graph training with planner disabled; cached/SAM inference and
 Dynamo are not supported. See [implementation and measured limits](TOPK_HARD_TRAINING.md).
+
+With top-four enabled, `hard_query_sampled=true` explicitly selects a sampled
+local Q read with a zero-history control and surrogate router VJP. It retains
+the same argmax history and uses the existing model RNG counter. This is the
+narrow opt-in interface described in [sampled hard training](SAMPLED_HARD_TRAINING.md),
+not the removed generic sequence-level REINFORCE interface. The separate
+[event planner prototype](PLANNER_DECOUPLED_READOUT.md) is not model dispatch.

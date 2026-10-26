@@ -12,7 +12,7 @@ from flash_dism.kernels import topk_hard as k
 
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--output',type=Path,required=True)
+    p=argparse.ArgumentParser();p.add_argument('--output',type=Path,required=True);p.add_argument('--sampled',action='store_true')
     p.add_argument('--cuobjdump',default='/usr/local/cuda/bin/cuobjdump');a=p.parse_args()
     torch.set_num_threads(2);torch.manual_seed(91)
     b,n,h,d,r,dv,c=2,512,2,64,32,64,512
@@ -23,10 +23,14 @@ def main():
     v=torch.randn(b,n,h,dv,device='cuda',dtype=torch.bfloat16);do=torch.randn_like(v)
     tau=torch.tensor([0.,.4],device='cuda');hard=torch.ones(b,h,device='cuda',dtype=torch.bool)
     seg=torch.zeros(b,n,device='cuda',dtype=torch.int32)
+    counter=torch.tensor(37,device='cuda',dtype=torch.int64)
+    from flash_dism.kernels import sampled_hard
+    backend=sampled_hard if a.sampled else k
     def step():
         ids,pi=k.select(q,eq,iq,hard,1.)
-        out,state=k.forward(sq,sk,v,iq,ik,ids,pi,tau,hard,seg)
-        grads=k.backward(sq,sk,v,do,iq,ik,ids,pi,hard,seg,state)
+        extra=(sampled_hard.sample(pi,counter,1729),) if a.sampled else ()
+        out,state=backend.forward(sq,sk,v,iq,ik,ids,pi,tau,hard,seg,*extra)
+        grads=backend.backward(sq,sk,v,do,iq,ik,ids,pi,hard,seg,state,*extra)
         router=k.router_backward(q,eq,ids,grads[-1],hard,1.)
         return out,grads,router
     stream=torch.cuda.Stream();stream.wait_stream(torch.cuda.current_stream())
@@ -35,15 +39,17 @@ def main():
     torch.cuda.current_stream().wait_stream(stream)
     graph=torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):out,grads,router=step()
-    for mode in range(3):
+    for mode in range(4):
         if mode==1:seg[:,256:]=1;hard[:,1]=False
-        if mode==2:hard.zero_()
+        if mode==2:iq.zero_();ik.zero_();hard.fill_(True)
+        if mode==3:hard.zero_()
+        counter.add_(1)
         graph.replay();torch.cuda.synchronize()
         assert all(torch.isfinite(x).all() for x in (out,*grads,*router))
-        if mode==2:assert all(torch.count_nonzero(x)==0 for x in (out,*grads,*router))
+        if mode==3:assert all(torch.count_nonzero(x)==0 for x in (out,*grads,*router))
     a.output.mkdir(parents=True,exist_ok=True);report=[]
-    for name in ('_select','_router_dq','_router_deq','_boundaries','_lut','_normalizers','_forward','_backward'):
-        fn=getattr(k,name)
+    for name in ('_select','_router_dq','_router_deq','_boundaries','_lut','_normalizers','_forward','_backward',*(['_sample','_histogram','_prefix_counts'] if a.sampled else [])):
+        fn=getattr(backend if name in ('_normalizers','_forward','_backward','_sample','_histogram','_prefix_counts') else k,name)
         for index,compiled in enumerate(fn.device_caches[0][0].values()):
             path=a.output/f'{name}_{index}.cubin';path.write_bytes(compiled.asm['cubin'])
             sass=subprocess.check_output([a.cuobjdump,'--dump-sass',str(path)],text=True)

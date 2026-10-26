@@ -15,6 +15,8 @@ class SamDecodeSession:
     def __init__(self, model, prefill, capacity, *, rebuild_interval=512, profile_scope=None, summary_backend='native'):
         if model.training or not model.eval_hard:
             raise ValueError('SAM decoding requires eval and all-hard routing')
+        if getattr(model.config, 'hard_query_topk', 1) != 1:
+            raise NotImplementedError('SAM decoding supports top-one queries only')
         if not 0 < capacity <= model.config.sequence_len:
             raise ValueError('invalid session capacity')
         if model.config.mxfp8_projections:

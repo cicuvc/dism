@@ -9,7 +9,7 @@ from nanochat.cuda_graph import PackedTrainingGraph
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 
 
-def model_pair(mxfp8, planner=False, layers=2, layout=None, mxfp8_ce=False, mixer_output='rmsnorm_silu', hard_query_topk=1):
+def model_pair(mxfp8, planner=False, layers=2, layout=None, mxfp8_ce=False, mixer_output='rmsnorm_silu', hard_query_topk=1, hard_query_sampled=False):
     torch.manual_seed(981)
     spec = ModelSpec('dism_gdn_hybrid', 1, dict(
         sequence_len=512, vocab_size=128, n_layer=layers, n_head=4,
@@ -18,6 +18,7 @@ def model_pair(mxfp8, planner=False, layers=2, layout=None, mxfp8_ce=False, mixe
         hard_prob_max=.95, mxfp8=mxfp8, mxfp8_projections=False,
         mxfp8_optimizer=mxfp8, mxfp8_ce=mxfp8_ce,
         mixer_output=mixer_output, hard_query_topk=hard_query_topk,
+        hard_query_sampled=hard_query_sampled,
         mixer_gate_scales=[.55]*layers if mixer_output in ('layernorm_sigmoid','rmsnorm_sigmoid') else None,
     ))
     a = build_model(spec).cuda().train()
@@ -29,9 +30,9 @@ def model_pair(mxfp8, planner=False, layers=2, layout=None, mxfp8_ce=False, mixe
 
 @pytest.mark.parametrize('planner', [False, True])
 @pytest.mark.parametrize('mxfp8,mxfp8_ce', [(False, False), (True, False), (True, True)])
-def test_packed_replay_matches_training(monkeypatch, mxfp8, mxfp8_ce, planner, mixer_output='rmsnorm_silu', hard_query_topk=1):
+def test_packed_replay_matches_training(monkeypatch, mxfp8, mxfp8_ce, planner, mixer_output='rmsnorm_silu', hard_query_topk=1, hard_query_sampled=False):
     monkeypatch.setenv('DISM_HARD_PLANNER', '0')
-    model, reference = model_pair(mxfp8, planner, mxfp8_ce=mxfp8_ce, mixer_output=mixer_output, hard_query_topk=hard_query_topk)
+    model, reference = model_pair(mxfp8, planner, mxfp8_ce=mxfp8_ce, mixer_output=mixer_output, hard_query_topk=hard_query_topk, hard_query_sampled=hard_query_sampled)
     ids = torch.randint(128, (2, 512), device='cuda')
     labels = torch.randint(128, (2, 512), device='cuda')
     initial = torch.tensor([0,512,1024], dtype=torch.int32, device='cuda')
@@ -89,9 +90,9 @@ def test_packed_replay_matches_training(monkeypatch, mxfp8, mxfp8_ce, planner, m
 
 @pytest.mark.parametrize('planner', [False, True])
 @pytest.mark.parametrize('mxfp8_ce', [False, True])
-def test_capture_preserves_resumed_state_and_existing_gradients(monkeypatch, planner, mxfp8_ce, mixer_output='rmsnorm_silu', hard_query_topk=1):
+def test_capture_preserves_resumed_state_and_existing_gradients(monkeypatch, planner, mxfp8_ce, mixer_output='rmsnorm_silu', hard_query_topk=1, hard_query_sampled=False):
     monkeypatch.setenv('DISM_HARD_PLANNER', '0')
-    model, restored = model_pair(True, planner, mxfp8_ce=mxfp8_ce, mixer_output=mixer_output, hard_query_topk=hard_query_topk)
+    model, restored = model_pair(True, planner, mxfp8_ce=mxfp8_ce, mixer_output=mixer_output, hard_query_topk=hard_query_topk, hard_query_sampled=hard_query_sampled)
     ids = torch.randint(128,(1,512),device='cuda')
     labels = torch.randint(128,(1,512),device='cuda')
     bounds = torch.tensor([0,256,512],device='cuda',dtype=torch.int32)
@@ -181,3 +182,13 @@ def test_top4_graph_replay(monkeypatch):
 
 def test_top4_capture_preserves_resumed_state(monkeypatch):
     test_capture_preserves_resumed_state_and_existing_gradients(monkeypatch, False, False, hard_query_topk=4)
+
+
+def test_sampled_graph_replay(monkeypatch):
+    test_packed_replay_matches_training(monkeypatch, True, False, False,
+        hard_query_topk=4,hard_query_sampled=True,mixer_output='layernorm_sigmoid')
+
+
+def test_sampled_capture_preserves_resumed_state(monkeypatch):
+    test_capture_preserves_resumed_state_and_existing_gradients(monkeypatch, False, False,
+        hard_query_topk=4,hard_query_sampled=True,mixer_output='layernorm_sigmoid')

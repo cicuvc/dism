@@ -8,12 +8,14 @@ from nanochat.models import ModelSpec, build_model
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 
 
-def make_model():
+def make_model(mode='native'):
     torch.manual_seed(51)
     config = dict(sequence_len=512, vocab_size=128, n_layer=4, n_head=2,
                   n_embd=64, intermediate_size=128, head_dim=32, value_dim=32,
                   readout_dim=16, qk_vocab_size=32,
                   post_norm=True, value_residual=True)
+    if mode != 'native':
+        config.update(hard_query_topk=4, hard_query_sampled=mode == 'sampled')
     model = build_model(ModelSpec('dism_gdn_hybrid', 1, config)).cuda()
     model.init_weights()
     ids = torch.randint(128, (2, 512), device='cuda')
@@ -23,8 +25,10 @@ def make_model():
 
 
 @pytest.mark.parametrize('training', [False, True])
-def test_probe_matches_all_hard_eval_and_preserves_state(training):
-    model, ids, cu = make_model()
+@pytest.mark.parametrize('mode', ['native', 'top4', 'sampled'])
+def test_probe_matches_all_hard_eval_and_preserves_state(training, mode):
+    model, ids, cu = make_model(mode)
+    model.rng_counter.fill_(37)
     model.eval()
     captures = []
     def capture(layer, args, kwargs, output):
@@ -58,6 +62,8 @@ def test_probe_matches_all_hard_eval_and_preserves_state(training):
             if index >= 2:
                 assert actual[2]['hard'].shape == (2, 2)
                 assert actual[2]['hard'].all()
+                assert actual[2]['sampling_counter'].item() == 37
+                assert actual[2]['sampling_seed'] == model.config.rng_seed + index * 104729
             if index > 0:
                 torch.testing.assert_close(actual[2]['v_first'], reference[2]['v_first'],
                                            rtol=0, atol=0)

@@ -213,6 +213,8 @@ def probe_qk_vocab_usage(model, input_ids, cu_seqlens, max_seqlen, chunk_size=40
                 direction = torch.ones((1, heads), dtype=torch.bool, device=device)
                 hidden = layer(hidden, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen,
                                hard=hard, direction=direction, use_cache=False,
+                               sampling_counter=model.rng_counter,
+                               sampling_seed=config.rng_seed + index * 104729,
                                v_first=v_first if value_residual else None,
                                vocab_temperature=model.vocab_temperature, conv_seq_idx=conv_seq_idx,
                                direction_true=True)

@@ -246,6 +246,8 @@ class DismAttention(nn.Module):
                                     graph_layout=kwargs.get('graph_layout'),
                                     graph_binding=kwargs.get('graph_binding'),
                                     gdn_chunk_indices=kwargs.get('gdn_chunk_indices'),
+                                    sampling_counter=kwargs.get('sampling_counter'),
+                                    sampling_seed=kwargs.get('sampling_seed'),
                                     direction_true=kwargs.get('direction_true', False), **options)
         if indices is not None:
             from fla.layers.utils import pad_input
@@ -256,7 +258,7 @@ class DismAttention(nn.Module):
                 hard_seed=None, generator=None, cu_seqlens=None, max_seqlen=None,
                 v_first=None, vocab_temperature=None, conv_seq_idx=None, direction_true=False,
                 share_branch_boundaries=False, tau_override=None, graph_layout=None, graph_binding=None,
-                gdn_chunk_indices=None):
+                gdn_chunk_indices=None, sampling_counter=None, sampling_seed=None):
         """Default: soft training, hard evaluation; explicit flags override sampling.
 
         direction: bool [B,H] (True selects k-to-qemb, the query-LSE path).
@@ -392,7 +394,9 @@ class DismAttention(nn.Module):
             if layout is not None:
                 compiled_layout = layout.table.flatten()
             output = vocabulary(q,k,sq,sk,dism_v,eq,ek,tau,direction=direction,hard=hard,
-                                segments=conv_seq_idx,boundaries=cu_seqlens,layout=compiled_layout,beta=beta)
+                                segments=conv_seq_idx,boundaries=cu_seqlens,layout=compiled_layout,beta=beta,
+                                sampled=getattr(self,'hard_query_sampled',False),
+                                counter=sampling_counter,seed=0 if sampling_seed is None else sampling_seed)
         elif sam_prefill is not None:
             if graph_binding is not None:
                 raise ValueError('SAM prefill cannot use a training graph binding')

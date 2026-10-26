@@ -6,6 +6,19 @@ from nanochat.models.dism.inference import SamDecodeSession
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA')
 
 
+@pytest.mark.parametrize('sampled', [False, True])
+@pytest.mark.parametrize('graph', [False, True])
+def test_session_rejects_topk(sampled, graph):
+    from types import SimpleNamespace
+    from nanochat.models.dism.inference import SamGraphDecodeSession
+    model = SimpleNamespace(training=False, eval_hard=True,
+        config=SimpleNamespace(hard_query_topk=4, hard_query_sampled=sampled),
+        get_device=lambda: torch.device('cuda', torch.cuda.current_device()))
+    session = SamGraphDecodeSession if graph else SamDecodeSession
+    with pytest.raises(NotImplementedError, match='top-one'):
+        session(model, None, 256)
+
+
 @pytest.mark.parametrize('length', [1, 3, 17, 256])
 def test_convolution_history(length):
     from nanochat.models.dism.conv import LinearShortConvSiLU

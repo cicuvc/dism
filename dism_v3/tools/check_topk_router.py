@@ -31,9 +31,13 @@ def main():
     print(json.dumps(reports,indent=2))
 
 
-def check_vocabulary():
+def check_vocabulary(sampled=False):
     """Packed all-hard integration, with an independent FP64 output/gradient."""
-    from check_topk_training import oracle
+    if sampled:
+        from check_sampled_training import oracle
+        from flash_dism.kernels import sampled_hard
+    else:
+        from check_topk_training import oracle
     from flash_dism.topk_training import vocabulary
     from flash_dism.kernels.interp_true import emb_fwd_true
     torch.manual_seed(63);torch.set_num_threads(2)
@@ -49,19 +53,29 @@ def check_vocabulary():
     seg=torch.zeros(1,n,device='cuda',dtype=torch.int32);seg[:,256:]=1
     bounds=torch.tensor([0,256,512],device='cuda',dtype=torch.int32)
     args=(q,key,sq,sk,v,eq,ek,tau)
-    out=vocabulary(*args,direction=direction,hard=hard,segments=seg,boundaries=bounds)
+    counter=torch.tensor(37,device='cuda',dtype=torch.int64)
+    out=vocabulary(*args,direction=direction,hard=hard,segments=seg,boundaries=bounds,
+                   sampled=sampled,counter=counter,seed=1729)
     g=torch.randn_like(out);actual=torch.autograd.grad(out,args,g)
     with torch.no_grad():
         *_,ik,iq=emb_fwd_true(q,key,eq.bfloat16(),ek.bfloat16(),1.,tau.detach())
         labels=lambda x:x.transpose(1,2).reshape(2,256,h).transpose(1,2).contiguous()
         iq,ik=labels(iq),labels(ik)
-        ids,_=kernels.select(q.reshape(2,256,h,d),eq,iq,hard,1.)
+        ids,pi=kernels.select(q.reshape(2,256,h,d),eq,iq,hard,1.)
+        if sampled:draw=sampled_hard.sample(pi,counter,1729)
     ref=[x.detach().double().requires_grad_() for x in (q,sq,sk,v,eq.bfloat16(),tau)]
     rq,rsq,rsk,rv,req,rt=ref
     z=torch.einsum('bnhd,hcd->bhnc',rq.reshape(2,256,h,d),req).gather(-1,ids.long())
-    want=oracle(rsq.reshape(2,256,h,r),rsk.reshape(2,256,h,r),rv.reshape(2,256,h,dv),
-                iq,ik,ids,z,rt,seg.reshape(2,256)).reshape_as(out)
-    grads=torch.autograd.grad(want,ref,g.double())
+    result=oracle(rsq.reshape(2,256,h,r),rsk.reshape(2,256,h,r),rv.reshape(2,256,h,dv),
+                  iq,ik,ids,z,rt,seg.reshape(2,256),*([draw] if sampled else []))
+    if sampled:
+        want,residual=result;want=want.reshape_as(out)
+        logpi=z.log_softmax(-1).gather(-1,draw.long()[...,None]).squeeze(-1)
+        reward=(residual*g.reshape_as(residual)).sum(-1).permute(0,2,1).detach()
+        loss=(want*g).sum()+(reward*(logpi-logpi.detach())).sum()
+        grads=torch.autograd.grad(loss,ref)
+    else:
+        want=result.reshape_as(out);grads=torch.autograd.grad(want,ref,g.double())
     assert actual[1].count_nonzero()==0 and actual[6].count_nonzero()==0
     report={}
     for name,x,y in zip(('out','q','sq','sk','v','q_vocab','tau'),
@@ -73,5 +87,7 @@ def check_vocabulary():
 
 
 if __name__=='__main__':
+    import argparse
+    parser=argparse.ArgumentParser();parser.add_argument('--sampled',action='store_true');args=parser.parse_args()
     main()
-    check_vocabulary()
+    check_vocabulary(args.sampled)

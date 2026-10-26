@@ -235,6 +235,7 @@ class DismLM(nn.Module):
         for layer in self.layers:
             if not getattr(layer.attn, 'is_pure_mixer', False):
                 layer.attn.hard_query_topk = config.hard_query_topk
+                layer.attn.hard_query_sampled = config.hard_query_sampled
         if config.mixer_output in ('layernorm_sigmoid', 'rmsnorm_sigmoid'):
             from .output_gate import install_layernorm_sigmoid
             install_layernorm_sigmoid(self, config.mixer_gate_scales)
@@ -560,6 +561,8 @@ class DismLM(nn.Module):
                     hard=hard,
                     direction=direction,
                     tau_override=tau,
+                    sampling_counter=counter if self.training else self.rng_counter,
+                    sampling_seed=self.config.rng_seed + i * 104729,
                     use_cache=False,
                     v_first=v_first,
                     vocab_temperature=self.vocab_temperature,

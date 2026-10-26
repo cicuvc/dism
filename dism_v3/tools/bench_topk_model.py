@@ -24,7 +24,13 @@ def main():
     parser.add_argument('--probability',type=float,default=.5)
     parser.add_argument('--packing',choices=['full','changing'],default='changing')
     parser.add_argument('--top1-planner',action='store_true')
+    parser.add_argument('--compare-sampled',action='store_true',help='Compare full top-four to sampled residual, both planner off')
+    parser.add_argument('--single-mode',choices=['top1','top4','sampled'],help='One resident model for externally ordered repetitions')
+    parser.add_argument('--rows',type=int,default=8)
+    parser.add_argument('--accum',type=int,default=8)
     args=parser.parse_args()
+    if args.compare_sampled and args.top1_planner:parser.error('sampled comparison does not use top-one/planner')
+    if args.rows<1 or args.accum<1:parser.error('rows and accum must be positive')
     root=Path(__file__).resolve().parents[1]/'build'
     if args.output.exists() or not args.output.resolve().is_relative_to(root):
         parser.error('output must be a fresh path under dism_v3/build')
@@ -33,7 +39,7 @@ def main():
     torch.manual_seed(921)
     spec=ModelSpec.from_dict(json.loads(Path(args.model_spec).read_text()))
     spec.config['hard_prob_fixed']=args.probability
-    rows,length,accum=8,spec.config['sequence_len'],8
+    rows,length,accum=args.rows,spec.config['sequence_len'],args.accum
     batches=[]
     for i in range(accum):
         ids=torch.randint(spec.config['vocab_size'],(rows,length),pin_memory=True)
@@ -57,9 +63,11 @@ def main():
         return cu
 
     runners={}
-    for mode in ('top1','top4'):
+    modes=(args.single_mode,) if args.single_mode else (('top4','sampled') if args.compare_sampled else ('top1','top4'))
+    for mode in modes:
         torch.manual_seed(1741)
-        selected=ModelSpec(spec.architecture,spec.architecture_version,{**spec.config,'hard_query_topk':int(mode[-1])})
+        selected=ModelSpec(spec.architecture,spec.architecture_version,
+                           {**spec.config,'hard_query_topk':1 if mode=='top1' else 4,'hard_query_sampled':mode=='sampled'})
         model=build_model(selected).cuda().train()
         model.init_weights()
         model.set_training_step(11444)
@@ -101,13 +109,18 @@ def main():
             losses[mode].append(loss)
             print(json.dumps(dict(round=index,mode=mode,seconds=elapsed,loss=loss)),flush=True)
     tokens=rows*length*accum
-    report=dict(model_spec=args.model_spec,probability=args.probability,packing=args.packing,top1_planner=args.top1_planner,steps_per_backend=args.rounds,tokens_per_step=tokens,
+    report=dict(model_spec=args.model_spec,probability=args.probability,packing=args.packing,rows=rows,accum=accum,top1_planner=args.top1_planner,steps_per_backend=args.rounds,tokens_per_step=tokens,
                 seconds=times,losses=losses,
                 mean_ms={k:statistics.mean(v)*1000 for k,v in times.items()},
                 median_ms={k:statistics.median(v)*1000 for k,v in times.items()},
-                tokens_per_second={k:tokens/statistics.mean(v) for k,v in times.items()},
-                top4_throughput_drop=1-statistics.mean(times['top1'])/statistics.mean(times['top4']),
-                paired_top4_time_ratios=[b/a for a,b in zip(times['top1'],times['top4'])])
+                tokens_per_second={k:tokens/statistics.mean(v) for k,v in times.items()})
+    if not args.single_mode:
+        first,second=runners
+        report.update(throughput_gain=statistics.mean(times[first])/statistics.mean(times[second])-1,
+                      paired_time_ratios=[b/a for a,b in zip(times[first],times[second])])
+    if not args.compare_sampled and not args.single_mode:
+        report.update(top4_throughput_drop=1-statistics.mean(times['top1'])/statistics.mean(times['top4']),
+                      paired_top4_time_ratios=report['paired_time_ratios'])
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps(report),flush=True)

@@ -43,8 +43,11 @@ class DismConfig:
     mixer_output: str = "rmsnorm_silu"
     mixer_gate_scales: list[float] | None = None
     hard_query_topk: int = 1
+    hard_query_sampled: bool = False
 
     def __post_init__(self):
+        if type(self.hard_query_sampled) is not bool or (self.hard_query_sampled and self.hard_query_topk != 4):
+            raise ValueError('hard_query_sampled requires bool and hard_query_topk=4')
         if type(self.hard_query_topk) is not int or self.hard_query_topk not in (1,4):
             raise ValueError('hard_query_topk must be 1 or 4')
         if self.hard_query_topk == 4 and self.qk_vocab_size < 4:
