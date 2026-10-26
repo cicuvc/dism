@@ -1,7 +1,8 @@
-"""Interleaved scratch-model top-one/top-four graph optimizer throughput.
+"""Interleaved scratch-model top-k graph optimizer throughput.
 
-No datasets or checkpoints are accessed. Optional top-one planner comparison
-includes planner draining. Both models use the same initialization and inputs.
+No datasets or checkpoints are accessed. Compare candidate counts, sampled
+readout, or planner off/on at the same K. Timings include planner draining.
+Both models use the same initialization and inputs.
 """
 import argparse
 import json
@@ -13,6 +14,7 @@ import torch
 from nanochat.models import ModelSpec, build_model, PretrainOptimizerConfig
 from nanochat.cuda_graph import PackedTrainingGraph
 from nanochat.document_loss import DocumentLossAccumulator
+from flash_dism.hard_training import take_route_log
 
 
 def main():
@@ -24,11 +26,17 @@ def main():
     parser.add_argument('--probability',type=float,default=.5)
     parser.add_argument('--packing',choices=['full','changing'],default='changing')
     parser.add_argument('--top1-planner',action='store_true')
+    parser.add_argument('--compare-planner',action='store_true',help='Compare planner off/on at the same K')
+    parser.add_argument('--topk',type=int,choices=(1,2,4),default=4)
+    parser.add_argument('--planner-workers',type=int,default=16)
+    parser.add_argument('--layer-layout',help='Explicit scratch-model layout override')
     parser.add_argument('--compare-sampled',action='store_true',help='Compare full top-four to sampled residual, both planner off')
     parser.add_argument('--single-mode',choices=['top1','top4','sampled'],help='One resident model for externally ordered repetitions')
     parser.add_argument('--rows',type=int,default=8)
     parser.add_argument('--accum',type=int,default=8)
     args=parser.parse_args()
+    if args.compare_planner and (args.compare_sampled or args.single_mode or args.top1_planner):
+        parser.error('--compare-planner is a separate paired comparison')
     if args.compare_sampled and args.top1_planner:parser.error('sampled comparison does not use top-one/planner')
     if args.rows<1 or args.accum<1:parser.error('rows and accum must be positive')
     root=Path(__file__).resolve().parents[1]/'build'
@@ -39,6 +47,7 @@ def main():
     torch.manual_seed(921)
     spec=ModelSpec.from_dict(json.loads(Path(args.model_spec).read_text()))
     spec.config['hard_prob_fixed']=args.probability
+    if args.layer_layout:spec.config['layer_layout']=args.layer_layout
     rows,length,accum=args.rows,spec.config['sequence_len'],args.accum
     batches=[]
     for i in range(accum):
@@ -63,17 +72,20 @@ def main():
         return cu
 
     runners={}
-    modes=(args.single_mode,) if args.single_mode else (('top4','sampled') if args.compare_sampled else ('top1','top4'))
+    modes=(('planner_off','planner_on') if args.compare_planner else
+           (args.single_mode,) if args.single_mode else (('top4','sampled') if args.compare_sampled else ('top1','top4')))
     for mode in modes:
         torch.manual_seed(1741)
         selected=ModelSpec(spec.architecture,spec.architecture_version,
-                           {**spec.config,'hard_query_topk':1 if mode=='top1' else 4,'hard_query_sampled':mode=='sampled'})
+                           {**spec.config,'hard_query_topk':args.topk if args.compare_planner else 1 if mode=='top1' else 4,'hard_query_sampled':mode=='sampled'})
         model=build_model(selected).cuda().train()
         model.init_weights()
         model.set_training_step(11444)
         opt=model.setup_pretraining_optimizer(PretrainOptimizerConfig(.0008,.0008,.0008,.0008,.01))
-        graph=PackedTrainingGraph(model,ids_gpu,labels_gpu,stage(batches[0]),microbatches=accum,planner=(mode=='top1' and args.top1_planner))
+        graph=PackedTrainingGraph(model,ids_gpu,labels_gpu,stage(batches[0]),microbatches=accum,planner=(mode=='planner_on' or (mode=='top1' and args.top1_planner)),
+                                  planner_workers=args.planner_workers)
         runners[mode]=(model,opt,graph)
+        print(json.dumps(dict(mode=mode,parameters=sum(p.numel() for p in model.parameters()),model_spec=selected.to_dict())),flush=True)
     print(json.dumps(dict(ready=True,reserved_mib=torch.cuda.memory_reserved()/2**20)),flush=True)
 
     def step(mode):
@@ -98,6 +110,10 @@ def main():
     torch.cuda.synchronize()
     times={mode:[] for mode in runners}
     losses={mode:[] for mode in runners}
+    routes={mode:[] for mode in runners}
+    reasons={mode:[] for mode in runners}
+    take_route_log()
+    torch.cuda.reset_peak_memory_stats()
     for index in range(args.rounds):
         order=list(runners) if index%2==0 else list(reversed(runners))
         for mode in order:
@@ -107,9 +123,23 @@ def main():
             elapsed=time.perf_counter()-start
             times[mode].append(elapsed)
             losses[mode].append(loss)
+            routes[mode].extend(take_route_log())
+            reasons[mode].append(runners[mode][2].last_planner_reasons)
             print(json.dumps(dict(round=index,mode=mode,seconds=elapsed,loss=loss)),flush=True)
     tokens=rows*length*accum
-    report=dict(model_spec=args.model_spec,probability=args.probability,packing=args.packing,rows=rows,accum=accum,top1_planner=args.top1_planner,steps_per_backend=args.rounds,tokens_per_step=tokens,
+    layer_event_fraction={}
+    for mode,decisions in routes.items():
+        count=sum(not getattr(layer.attn,'is_pure_mixer',False) for layer in runners[mode][0].layers)
+        groups=[decisions[index::count] for index in range(count)] if decisions else []
+        layer_event_fraction[mode]=[group.count('e')/len(group) for group in groups]
+    report=dict(model_spec=args.model_spec,effective_config=spec.config,
+                runner_specs={mode:model.model_spec.to_dict() for mode,(model,_,_) in runners.items()},
+                topk=args.topk if args.compare_planner else None,
+                compare_planner=args.compare_planner,planner_workers=args.planner_workers,
+                peak_allocated_mib=torch.cuda.max_memory_allocated()/2**20,
+                routes={k:dict(event=v.count('e'),quadratic=v.count('q')) for k,v in routes.items()},
+                layer_event_fraction=layer_event_fraction,
+                last_microbatch_reasons=reasons,probability=args.probability,packing=args.packing,rows=rows,accum=accum,top1_planner=args.top1_planner,steps_per_backend=args.rounds,tokens_per_step=tokens,
                 seconds=times,losses=losses,
                 mean_ms={k:statistics.mean(v)*1000 for k,v in times.items()},
                 median_ms={k:statistics.median(v)*1000 for k,v in times.items()},
@@ -118,7 +148,7 @@ def main():
         first,second=runners
         report.update(throughput_gain=statistics.mean(times[first])/statistics.mean(times[second])-1,
                       paired_time_ratios=[b/a for a,b in zip(times[first],times[second])])
-    if not args.compare_sampled and not args.single_mode:
+    if not args.compare_planner and not args.compare_sampled and not args.single_mode:
         report.update(top4_throughput_drop=1-statistics.mean(times['top1'])/statistics.mean(times['top4']),
                       paired_top4_time_ratios=report['paired_time_ratios'])
     args.output.parent.mkdir(parents=True,exist_ok=True)

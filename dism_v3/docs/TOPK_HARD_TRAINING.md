@@ -158,6 +158,71 @@ on fallback overhead and persistent register pressure. Candidate expansion and
 collapse already use the frozen route to skip unnecessary copying/reduction
 when the plan is late. Raw records: `build/topk_event_training/final_real2k`.
 
+### Full optimizer-step throughput (2026-10-27)
+
+Implementation commit `b1059e9`, RTX 5090, 123,473,088 parameters. Use the
+recent top-four training spec
+`nanochat/configs/sequence_true_123m_layernorm_sigmoid_top4_slimpajama_3b.json`:
+`ggggggdddddd`, LayerNorm + calibrated sigmoid gate, postnorm, 2K context,
+8 rows × 8 accumulation microbatches (131,072 tokens/optimizer step), MXFP8
+FFN/optimizer, BF16 CE/projections. K and fixed hard probability are explicit
+benchmark overrides; graph is enabled for both planner-off and planner-on.
+CPU planning uses 16 workers and Torch uses one CPU thread.
+
+`tools/bench_topk_model.py --compare-planner --topk {1,2,4}` initializes two
+scratch models identically and alternates measurement order. Each receives
+four warmup and ten measured optimizer steps. Timing includes input/metadata
+H2D, forward/backward, document-loss normalization, gradient clipping,
+optimizer, scalar checks and planner drain. Route-log collection is outside
+the timer. No checkpoint or dataset is accessed. Synthetic batches repeat;
+data loading, evaluation, checkpoint I/O and training instrumentation are
+excluded, so this is a full compute-step benchmark, not measured sustained
+corpus-training throughput or a trained-symbol-distribution benchmark.
+
+Changing packing cycles through 2K, 256+1792, 4×512 and 8×256 documents per
+original training row. Hard sampling still uses original rows, not documents.
+
+| Hard probability | K | Off step (ms) | On step (ms) | Off token/s | On token/s | Planner throughput gain |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| .5 | 1 | 1020.2 | 978.1 | 128,473 | 134,003 | +4.30% |
+| .5 | 2 | 1039.9 | 1057.8 | 126,044 | 123,909 | -1.69% |
+| .5 | 4 | 1062.0 | 1093.5 | 123,418 | 119,869 | -2.88% |
+| .95 | 1 | 1000.6 | 944.6 | 130,990 | 138,766 | +5.94% |
+| .95 | 2 | 1060.0 | 1061.4 | 123,654 | 123,491 | -0.13% |
+| .95 | 4 | 1094.4 | 1109.8 | 119,769 | 118,099 | -1.39% |
+
+All six planner-on cases selected event for 480/480 measured layer/microbatch
+decisions; no quadratic fallback was selected. K2 at .95 is effectively tied
+(1.4 ms mean difference versus roughly 3.6–3.8 ms within-run step standard
+deviation). K2/4 therefore have no demonstrated whole-step speedup on this
+packing distribution despite the isolated long-sequence backward speedup.
+The losses and gradient norms stayed finite. This does not isolate CPU planning,
+copy, drain, event-kernel or short-document overhead; attributing the regression
+to a particular component requires profiling. Readiness misses do not explain
+these measurements.
+
+For K4 with full 2K documents (`--packing full`), the additional paired runs
+were also 480/480 event decisions:
+
+| Hard probability | Off step (ms) | On step (ms) | Off token/s | On token/s | Planner throughput gain |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| .5 | 1182.6 | 1191.0 | 110,836 | 110,053 | -0.71% |
+| .95 | 1229.6 | 1204.5 | 106,594 | 108,818 | +2.09% |
+
+Full documents improve the paired K4 planner gain relative to changing packing,
+but even the .95 case gives only a modest 2.1% whole-step benefit. Document
+distribution matters; the isolated backward speedup must not be extrapolated
+to the whole training loop. These paired on/off comparisons are stronger than
+cross-process comparisons between different K values. No layout changes,
+kernel tuning or default planner enablement were made for this measurement.
+
+Reproduce with the spec above, `--compare-planner --topk K --probability P
+--rounds 10 --packing changing` and a fresh `--output` under `dism_v3/build`.
+Use only this worktree on `PYTHONPATH` and `DISM_HARD_PLANNER=0` (the graph
+constructor explicitly enables planning for the paired on model). Raw paired
+records are ignored `build/topk_event_training/step_old_k{1,2,4}_p{50,95}.json`;
+the two full-document records have the suffix `_full.json`.
+
 ## Definition and shared work
 
 Keep the native v3 soft path, K argmax and one committed Q argmax history. At
